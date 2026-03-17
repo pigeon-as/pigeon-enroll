@@ -54,14 +54,14 @@ func newOVH(logger *slog.Logger, raw json.RawMessage) (*OVH, error) {
 
 // Verify checks whether the client IP falls within any IP block owned
 // by the OVH account. IP blocks are cached for 5 minutes.
-func (o *OVH) Verify(_ context.Context, r *http.Request) error {
+func (o *OVH) Verify(ctx context.Context, r *http.Request) error {
 	ip := ClientIP(r)
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
 		return fmt.Errorf("invalid IP: %q", ip)
 	}
 
-	blocks, err := o.ipBlocks()
+	blocks, err := o.ipBlocks(ctx)
 	if err != nil {
 		return err
 	}
@@ -76,7 +76,7 @@ func (o *OVH) Verify(_ context.Context, r *http.Request) error {
 }
 
 // ipBlocks returns cached IP blocks, refreshing from the OVH API if expired.
-func (o *OVH) ipBlocks() ([]*net.IPNet, error) {
+func (o *OVH) ipBlocks(ctx context.Context) ([]*net.IPNet, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
@@ -85,7 +85,7 @@ func (o *OVH) ipBlocks() ([]*net.IPNet, error) {
 	}
 
 	var raw []string
-	if err := o.client.Get("/ip", &raw); err != nil {
+	if err := o.client.GetWithContext(ctx, "/ip", &raw); err != nil {
 		return nil, fmt.Errorf("ovh verifier: GET /ip: %w", err)
 	}
 

@@ -42,17 +42,21 @@ func Run(client *http.Client, url, token, scope, outputPath string) (*Response, 
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
-	var result Response
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
-		msg := result.Error
+		var errResp Response
+		if err := json.Unmarshal(data, &errResp); err == nil && errResp.Error != "" {
+			return nil, fmt.Errorf("claim failed (%d): %s", resp.StatusCode, errResp.Error)
+		}
+		msg := string(bytes.TrimSpace(data))
 		if msg == "" {
 			msg = resp.Status
 		}
 		return nil, fmt.Errorf("claim failed (%d): %s", resp.StatusCode, msg)
+	}
+
+	var result Response
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
 	output := map[string]map[string]string{
