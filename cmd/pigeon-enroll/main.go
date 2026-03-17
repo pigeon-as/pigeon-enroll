@@ -6,7 +6,7 @@
 //
 // Generate HMAC token (for autoscaler):
 //
-//	pigeon-enroll --generate-token --config=<path> [--generate-scope=worker]
+//	pigeon-enroll --generate-token --config=<path> [--scope=worker]
 //
 // Claim mode (worker):
 //
