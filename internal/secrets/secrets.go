@@ -39,7 +39,9 @@ func DeriveHMACKey(ikm []byte) ([]byte, error) {
 
 // Resolve loads persisted secrets from path, or derives them from ikm
 // via HKDF-SHA256 and persists atomically. If path is empty, derives fresh.
-func Resolve(specs []config.SecretSpec, path string, ikm []byte) (map[string]string, error) {
+// The persisted format is {"secrets":{...},"vars":{...}} to match the
+// API response and claim client output.
+func Resolve(specs []config.SecretSpec, vars map[string]string, path string, ikm []byte) (map[string]string, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
@@ -60,24 +62,30 @@ func Resolve(specs []config.SecretSpec, path string, ikm []byte) (map[string]str
 	if err != nil {
 		return nil, err
 	}
-	if err := persist(secrets, path); err != nil {
+	if err := persist(secrets, vars, path); err != nil {
 		return nil, err
 	}
 	return secrets, nil
 }
 
+// persistedFile is the on-disk format: {"secrets":{...},"vars":{...}}.
+type persistedFile struct {
+	Secrets map[string]string `json:"secrets"`
+	Vars    map[string]string `json:"vars"`
+}
+
 // load parses persisted secrets and checks all specs are present.
 func load(data []byte, specs []config.SecretSpec) (map[string]string, error) {
-	var secrets map[string]string
-	if err := json.Unmarshal(data, &secrets); err != nil {
+	var pf persistedFile
+	if err := json.Unmarshal(data, &pf); err != nil {
 		return nil, fmt.Errorf("parse secrets file: %w", err)
 	}
 	for _, s := range specs {
-		if _, ok := secrets[s.Name]; !ok {
+		if _, ok := pf.Secrets[s.Name]; !ok {
 			return nil, fmt.Errorf("secrets file missing key %q", s.Name)
 		}
 	}
-	return secrets, nil
+	return pf.Secrets, nil
 }
 
 // derive produces secrets from ikm via HKDF-SHA256.
@@ -109,11 +117,11 @@ func derive(specs []config.SecretSpec, ikm []byte) (map[string]string, error) {
 }
 
 // persist writes secrets atomically to path via temp file + rename.
-func persist(secrets map[string]string, path string) error {
+func persist(secrets map[string]string, vars map[string]string, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("create secrets directory: %w", err)
 	}
-	data, err := json.Marshal(secrets)
+	data, err := json.Marshal(persistedFile{Secrets: secrets, Vars: vars})
 	if err != nil {
 		return fmt.Errorf("marshal secrets: %w", err)
 	}

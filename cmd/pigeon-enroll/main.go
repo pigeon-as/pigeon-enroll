@@ -149,7 +149,7 @@ func runServer() int {
 	}
 	logger.Info("enrollment key", "path", cfg.KeyPath)
 
-	derived, err := secrets.Resolve(cfg.Secrets, cfg.SecretsPath, ikm)
+	derived, err := secrets.Resolve(cfg.Secrets, cfg.Vars, cfg.SecretsPath, ikm)
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1
@@ -227,7 +227,7 @@ func runVaultInit() int {
 	}
 
 	// Management token ID comes from derived secrets.
-	derived, err := secrets.Resolve(cfg.Secrets, cfg.SecretsPath, ikm)
+	derived, err := secrets.Resolve(cfg.Secrets, cfg.Vars, cfg.SecretsPath, ikm)
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1
