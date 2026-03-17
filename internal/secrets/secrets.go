@@ -25,7 +25,6 @@ func ValidateIKM(ikm []byte) error {
 }
 
 // DeriveHMACKey derives a separate 32-byte HMAC signing key from the IKM.
-// Cryptographic separation per NIST SP 800-108 §7.4.
 func DeriveHMACKey(ikm []byte) ([]byte, error) {
 	if err := ValidateIKM(ikm); err != nil {
 		return nil, fmt.Errorf("derive HMAC key: %w", err)
@@ -118,9 +117,23 @@ func persist(secrets map[string]string, path string) error {
 	if err != nil {
 		return fmt.Errorf("marshal secrets: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), ".secrets-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
 		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Chmod(tmp, 0600); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("chmod temp file: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
