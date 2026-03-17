@@ -17,7 +17,7 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 )
 
-// initResponse is the JSON returned by POST /v1/sys/init.
+// initResponse is the JSON returned by PUT /v1/sys/init.
 type initResponse struct {
 	RootToken          string   `json:"root_token"`
 	Keys               []string `json:"keys,omitempty"`
@@ -55,6 +55,13 @@ func Run(ctx context.Context, logger *slog.Logger, cfg *config.VaultConfig, secr
 		return err
 	}
 
+	// Keep root token in memory only; redact before writing to disk
+	// when it will be revoked, so it never touches the filesystem.
+	rootToken := initResp.RootToken
+	if cfg.Token.ID != "" && cfg.Token.RevokeRoot {
+		initResp.RootToken = "<revoked>"
+	}
+
 	respJSON, err := json.MarshalIndent(initResp, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal init response: %w", err)
@@ -70,23 +77,16 @@ func Run(ctx context.Context, logger *slog.Logger, cfg *config.VaultConfig, secr
 			return fmt.Errorf("vault.token.id %q not found in derived secrets", cfg.Token.ID)
 		}
 
-		if err := createManagementToken(ctx, client, cfg.Addr, initResp.RootToken, tokenID, cfg.Token.Policies); err != nil {
+		if err := createManagementToken(ctx, client, cfg.Addr, rootToken, tokenID, cfg.Token.Policies); err != nil {
 			return err
 		}
 		logger.Info("management token created", "policies", cfg.Token.Policies)
 
 		if cfg.Token.RevokeRoot {
-			if err := revokeToken(ctx, client, cfg.Addr, initResp.RootToken); err != nil {
+			if err := revokeToken(ctx, client, cfg.Addr, rootToken); err != nil {
 				return err
 			}
 			logger.Info("root token revoked")
-
-			initResp.RootToken = ""
-			if redacted, err := json.MarshalIndent(initResp, "", "  "); err == nil {
-				if err := writeAtomic(outputPath, redacted, 0600); err != nil {
-					logger.Warn("failed to redact root token from output file", "err", err)
-				}
-			}
 		}
 	}
 

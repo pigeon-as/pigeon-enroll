@@ -116,8 +116,8 @@ func TestRun_InitAndCreateToken(t *testing.T) {
 	if err := json.Unmarshal(data, &resp); err != nil {
 		t.Fatalf("parse output: %v", err)
 	}
-	if resp.RootToken != "" {
-		t.Errorf("expected redacted root token (empty), got %q", resp.RootToken)
+	if resp.RootToken != "<revoked>" {
+		t.Errorf("expected redacted root token '<revoked>', got %q", resp.RootToken)
 	}
 }
 
