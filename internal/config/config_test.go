@@ -52,9 +52,20 @@ func TestLoadTokenWindowInvalid(t *testing.T) {
 	}
 }
 
+func TestLoadTokenWindowTooSmall(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "token_window": "500ms"}`), 0644)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Error("expected error for sub-second token_window")
+	}
+}
+
 func TestValidateSecretsOrVars(t *testing.T) {
 	// Neither vars nor secrets → error.
-	err := validate(Config{})
+	err := validate(Config{TokenWindow: time.Minute})
 	if err == nil {
 		t.Error("expected error for empty vars and secrets")
 	}
@@ -76,7 +87,8 @@ func TestValidateSecretSpec(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := Config{
-				Secrets: []SecretSpec{tt.spec},
+				TokenWindow: time.Minute,
+				Secrets:     []SecretSpec{tt.spec},
 			}
 			err := validate(cfg)
 			if tt.ok && err != nil {
@@ -91,6 +103,7 @@ func TestValidateSecretSpec(t *testing.T) {
 
 func TestValidateDuplicateSecretName(t *testing.T) {
 	cfg := Config{
+		TokenWindow: time.Minute,
 		Secrets: []SecretSpec{
 			{Name: "k", Length: 32, Encoding: "base64"},
 			{Name: "k", Length: 16, Encoding: "hex"},
@@ -103,8 +116,9 @@ func TestValidateDuplicateSecretName(t *testing.T) {
 
 func TestValidateNameConflict(t *testing.T) {
 	cfg := Config{
-		Secrets: []SecretSpec{{Name: "k", Length: 32, Encoding: "base64"}},
-		Vars:    map[string]string{"k": "v"},
+		TokenWindow: time.Minute,
+		Secrets:     []SecretSpec{{Name: "k", Length: 32, Encoding: "base64"}},
+		Vars:        map[string]string{"k": "v"},
 	}
 	if err := validate(cfg); err == nil {
 		t.Error("expected error for name conflict")
@@ -113,7 +127,8 @@ func TestValidateNameConflict(t *testing.T) {
 
 func TestValidateVaultTokenRefersToSecret(t *testing.T) {
 	cfg := Config{
-		Secrets: []SecretSpec{{Name: "vault_token", Length: 32, Encoding: "hex"}},
+		TokenWindow: time.Minute,
+		Secrets:     []SecretSpec{{Name: "vault_token", Length: 32, Encoding: "hex"}},
 		Vault: &VaultConfig{
 			Token: VaultTokenConfig{ID: "vault_token"},
 		},
@@ -125,7 +140,8 @@ func TestValidateVaultTokenRefersToSecret(t *testing.T) {
 
 func TestValidateVaultTokenRefersToMissingSecret(t *testing.T) {
 	cfg := Config{
-		Secrets: []SecretSpec{{Name: "other", Length: 32, Encoding: "hex"}},
+		TokenWindow: time.Minute,
+		Secrets:     []SecretSpec{{Name: "other", Length: 32, Encoding: "hex"}},
 		Vault: &VaultConfig{
 			Token: VaultTokenConfig{ID: "nonexistent"},
 		},

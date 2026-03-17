@@ -113,6 +113,9 @@ func Load(path string) (Config, error) {
 }
 
 func validate(cfg Config) error {
+	if cfg.TokenWindow < time.Second {
+		return fmt.Errorf("token_window must be at least 1s")
+	}
 	if len(cfg.Vars) == 0 && len(cfg.Secrets) == 0 {
 		return fmt.Errorf("vars or secrets must not be empty")
 	}

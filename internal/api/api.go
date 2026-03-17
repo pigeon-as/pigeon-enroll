@@ -86,7 +86,9 @@ func (s *Server) withTrustedProxies(next http.Handler) http.Handler {
 						if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 							first, _, _ := strings.Cut(xff, ",")
 							if trimmed := strings.TrimSpace(first); trimmed != "" {
-								r.RemoteAddr = trimmed + ":0"
+								if clientIP := net.ParseIP(trimmed); clientIP != nil {
+									r.RemoteAddr = net.JoinHostPort(trimmed, "0")
+								}
 							}
 						}
 						break

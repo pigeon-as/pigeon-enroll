@@ -27,6 +27,9 @@ func ValidateIKM(ikm []byte) error {
 // DeriveHMACKey derives a separate 32-byte HMAC signing key from the IKM.
 // Cryptographic separation per NIST SP 800-108 §7.4.
 func DeriveHMACKey(ikm []byte) ([]byte, error) {
+	if err := ValidateIKM(ikm); err != nil {
+		return nil, fmt.Errorf("derive HMAC key: %w", err)
+	}
 	r := hkdf.New(sha256.New, ikm, nil, []byte("pigeon-enroll hmac-signing-key"))
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(r, key); err != nil {
