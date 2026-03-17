@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-var testKey = []byte("test-enrollment-key-32-bytes!!!!!")
+var testKey = []byte("test-enrollment-key-32-bytes!!!!")
 
 func TestGenerateDeterministic(t *testing.T) {
 	now := time.Date(2026, 3, 13, 12, 0, 0, 0, time.UTC)
