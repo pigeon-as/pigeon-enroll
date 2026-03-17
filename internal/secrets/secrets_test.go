@@ -26,7 +26,7 @@ func TestResolveDerives(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.json")
 
-	secrets, err := Resolve(testSpecs, path, testIKM)
+	secrets, err := Resolve(testSpecs, nil, path, testIKM)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -72,11 +72,11 @@ func TestResolveDeterministic(t *testing.T) {
 	dir1 := t.TempDir()
 	dir2 := t.TempDir()
 
-	s1, err := Resolve(testSpecs, filepath.Join(dir1, "s.json"), testIKM)
+	s1, err := Resolve(testSpecs, nil, filepath.Join(dir1, "s.json"), testIKM)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s2, err := Resolve(testSpecs, filepath.Join(dir2, "s.json"), testIKM)
+	s2, err := Resolve(testSpecs, nil, filepath.Join(dir2, "s.json"), testIKM)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,11 +93,11 @@ func TestResolveDifferentIKM(t *testing.T) {
 	ikm2 := make([]byte, 32)
 	ikm2[0] = 1 // one bit different
 
-	s1, err := Resolve(testSpecs, filepath.Join(dir1, "s.json"), testIKM)
+	s1, err := Resolve(testSpecs, nil, filepath.Join(dir1, "s.json"), testIKM)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s2, err := Resolve(testSpecs, filepath.Join(dir2, "s.json"), ikm2)
+	s2, err := Resolve(testSpecs, nil, filepath.Join(dir2, "s.json"), ikm2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,13 +112,13 @@ func TestResolveLoadsExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.json")
 
-	first, err := Resolve(testSpecs, path, testIKM)
+	first, err := Resolve(testSpecs, nil, path, testIKM)
 	if err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
 
 	// Second run loads from disk — values identical.
-	second, err := Resolve(testSpecs, path, testIKM)
+	second, err := Resolve(testSpecs, nil, path, testIKM)
 	if err != nil {
 		t.Fatalf("second resolve: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestResolveLoadsExisting(t *testing.T) {
 }
 
 func TestResolveEmptySpecs(t *testing.T) {
-	secrets, err := Resolve(nil, "", nil)
+	secrets, err := Resolve(nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("resolve nil specs: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestResolveEmptySpecs(t *testing.T) {
 
 func TestResolveEmptyPath(t *testing.T) {
 	// Empty path: derive fresh, no file written.
-	secrets, err := Resolve(testSpecs, "", testIKM)
+	secrets, err := Resolve(testSpecs, nil, "", testIKM)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -154,10 +154,10 @@ func TestResolveMissingKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.json")
 
-	data, _ := json.Marshal(map[string]string{"gossip_key": "abc"})
+	data, _ := json.Marshal(persistedFile{Secrets: map[string]string{"gossip_key": "abc"}})
 	os.WriteFile(path, data, 0600)
 
-	_, err := Resolve(testSpecs, path, testIKM)
+	_, err := Resolve(testSpecs, nil, path, testIKM)
 	if err == nil {
 		t.Fatal("expected error for missing key in secrets file")
 	}
@@ -167,7 +167,7 @@ func TestResolveCreatesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "deep", "secrets.json")
 
-	secrets, err := Resolve(testSpecs, path, testIKM)
+	secrets, err := Resolve(testSpecs, nil, path, testIKM)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
