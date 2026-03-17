@@ -266,15 +266,15 @@ func TestResolveSkipsRepersistWhenVarsUnchanged(t *testing.T) {
 	if _, err := Resolve(testSpecs, vars, path, testIKM); err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
-	info1, _ := os.Stat(path)
 
-	// Second resolve with same vars — file should not be rewritten.
-	if _, err := Resolve(testSpecs, vars, path, testIKM); err != nil {
-		t.Fatalf("second resolve: %v", err)
+	// Make the file read-only. If Resolve tries to rewrite it when vars are
+	// unchanged, it will fail due to permissions.
+	if err := os.Chmod(path, 0400); err != nil {
+		t.Fatalf("chmod read-only: %v", err)
 	}
-	info2, _ := os.Stat(path)
 
-	if !info1.ModTime().Equal(info2.ModTime()) {
-		t.Error("file was rewritten despite vars being unchanged")
+	// Second resolve with same vars — must succeed without rewriting.
+	if _, err := Resolve(testSpecs, vars, path, testIKM); err != nil {
+		t.Fatalf("second resolve (with unchanged vars) failed: %v", err)
 	}
 }
