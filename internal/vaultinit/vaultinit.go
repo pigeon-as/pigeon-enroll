@@ -38,6 +38,16 @@ func Run(ctx context.Context, logger *slog.Logger, cfg *config.VaultConfig, secr
 
 	initURL := cfg.Addr + "/v1/sys/init"
 
+	// Preflight: resolve management token ID before initializing Vault.
+	var tokenID string
+	if cfg.Token.ID != "" {
+		var ok bool
+		tokenID, ok = secrets[cfg.Token.ID]
+		if !ok {
+			return fmt.Errorf("vault.token.id %q not found in derived secrets", cfg.Token.ID)
+		}
+	}
+
 	logger.Info("waiting for Vault", "addr", cfg.Addr)
 	initialized, err := pollUntilReachable(ctx, logger, client, initURL)
 	if err != nil {
@@ -59,11 +69,6 @@ func Run(ctx context.Context, logger *slog.Logger, cfg *config.VaultConfig, secr
 	rootToken := initResp.RootToken
 
 	if cfg.Token.ID != "" {
-		tokenID, ok := secrets[cfg.Token.ID]
-		if !ok {
-			return fmt.Errorf("vault.token.id %q not found in derived secrets", cfg.Token.ID)
-		}
-
 		if err := createManagementToken(ctx, client, cfg.Addr, rootToken, tokenID, cfg.Token.Policies); err != nil {
 			return err
 		}
