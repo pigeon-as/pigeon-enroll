@@ -73,7 +73,7 @@ Returns `{"status": "ok"}`.
 
 ## Vault Init
 
-Initializes Vault and creates a management token with a known HKDF-derived ID. Both pigeon-enroll and Terraform independently derive the same token ID from the enrollment key.
+Initializes Vault and creates a management token with a known HKDF-derived ID, so other tools can independently derive the same token without coordination.
 
 1. Polls Vault until reachable
 2. Initializes (Shamir or auto-unseal depending on config)
