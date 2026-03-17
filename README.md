@@ -11,7 +11,7 @@ The enrollment key is static — all servers with the same key independently der
 pigeon-enroll --config=/etc/pigeon/enroll.json
 
 # Generate a claim token
-pigeon-enroll --generate-token --config=/etc/pigeon/enroll.json [--generate-scope=worker]
+pigeon-enroll --generate-token --config=/etc/pigeon/enroll.json [--scope=worker]
 
 # Claim (worker side)
 pigeon-enroll --claim --url https://enroll:8443/claim \

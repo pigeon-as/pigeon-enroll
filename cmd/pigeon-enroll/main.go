@@ -48,16 +48,15 @@ var (
 	doClaim       = flag.Bool("claim", false, "Claim secrets from an enrollment server")
 	doVaultInit   = flag.Bool("vault-init", false, "Initialize Vault and create management token")
 
+	// Shared optional flag.
+	scope = flag.String("scope", "", "Scope for token generation (--generate-token) or secret filtering (--claim)")
+
 	// Vault-init flags.
 	vaultInitOutput = flag.String("vault-output", "/encrypted/vault/init.json", "Path to write Vault init response (--vault-init)")
-
-	// Generate-token flags.
-	generateScope = flag.String("generate-scope", "", "Scope to bind the generated token to (--generate-token)")
 
 	// Claim flags.
 	claimURL      = flag.String("url", "", "Enrollment server URL (--claim)")
 	claimToken    = flag.String("token", "", "HMAC claim token (--claim)")
-	claimScope    = flag.String("scope", "", "Scope for secret filtering (--claim)")
 	claimOutput   = flag.String("output", "", "Path to write secrets JSON (--claim)")
 	claimInsecure = flag.Bool("insecure", false, "Skip TLS certificate verification (--claim)")
 )
@@ -138,7 +137,7 @@ func runGenerateToken() int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	fmt.Print(token.Generate(hmacKey, time.Now(), cfg.TokenWindow, *generateScope))
+	fmt.Print(token.Generate(hmacKey, time.Now(), cfg.TokenWindow, *scope))
 	return 0
 }
 
@@ -262,7 +261,7 @@ func runClaim() int {
 		}
 	}
 
-	resp, err := claim.Run(client, *claimURL, *claimToken, *claimScope, *claimOutput)
+	resp, err := claim.Run(client, *claimURL, *claimToken, *scope, *claimOutput)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "claim failed: %v\n", err)
 		return 1
