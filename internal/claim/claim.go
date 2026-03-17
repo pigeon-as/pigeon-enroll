@@ -59,16 +59,8 @@ func Run(client *http.Client, url, token, scope, outputPath string) (*Response, 
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	output := map[string]map[string]string{
-		"secrets": result.Secrets,
-		"vars":    result.Vars,
-	}
-	flat, err := json.Marshal(output)
-	if err != nil {
-		return nil, fmt.Errorf("marshal output: %w", err)
-	}
-
-	if err := writeAtomic(outputPath, flat); err != nil {
+	// Write the raw server response — already {"secrets":{...},"vars":{...}}.
+	if err := writeAtomic(outputPath, data); err != nil {
 		return nil, fmt.Errorf("write secrets: %w", err)
 	}
 

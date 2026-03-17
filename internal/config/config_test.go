@@ -176,3 +176,19 @@ func TestLoadVaultDefaults(t *testing.T) {
 		t.Errorf("vault.token.policies = %v, want [root]", cfg.Vault.Token.Policies)
 	}
 }
+
+func TestCheckKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "enrollment-key")
+
+	// Missing file should error.
+	if err := CheckKeyFile(keyPath); err == nil {
+		t.Fatal("expected error for missing key file")
+	}
+
+	// Create a key file — CheckKeyFile only verifies existence.
+	os.WriteFile(keyPath, []byte("0123456789abcdef0123456789abcdef"), 0600)
+	if err := CheckKeyFile(keyPath); err != nil {
+		t.Fatalf("valid key: %v", err)
+	}
+}

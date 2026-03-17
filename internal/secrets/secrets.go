@@ -53,7 +53,15 @@ func Resolve(specs []config.SecretSpec, vars map[string]string, path string, ikm
 
 	data, err := os.ReadFile(path)
 	if err == nil {
-		return load(data, specs)
+		loaded, loadErr := load(data, specs)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		// Re-persist to keep vars on disk in sync with config.
+		if err := persist(loaded, vars, path); err != nil {
+			return nil, err
+		}
+		return loaded, nil
 	}
 	if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read secrets: %w", err)
@@ -129,23 +137,17 @@ func persist(secrets map[string]string, vars map[string]string, path string) err
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
-	tmp := f.Name()
+	defer os.Remove(f.Name())
 	if _, err := f.Write(data); err != nil {
 		f.Close()
-		os.Remove(tmp)
 		return fmt.Errorf("write temp file: %w", err)
 	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("close temp file: %w", err)
-	}
-	if err := os.Chmod(tmp, 0600); err != nil {
-		os.Remove(tmp)
+	if err := f.Chmod(0600); err != nil {
+		f.Close()
 		return fmt.Errorf("chmod temp file: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("rename: %w", err)
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
 	}
-	return nil
+	return os.Rename(f.Name(), path)
 }
