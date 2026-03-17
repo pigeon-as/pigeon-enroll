@@ -76,26 +76,54 @@ func (s *Server) Handler() http.Handler {
 	return s.withTrustedProxies(s.mux)
 }
 
-// withTrustedProxies rewrites RemoteAddr from X-Forwarded-For for trusted proxies.
+// withTrustedProxies rewrites RemoteAddr from X-Forwarded-For when the
+// request originates from a trusted proxy. Follows the Vault pattern:
+// flat structure, rightmost XFF entry (unspoofable), original port preserved.
 func (s *Server) withTrustedProxies(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			if ip := net.ParseIP(host); ip != nil {
-				for _, n := range s.trustedNets {
-					if n.Contains(ip) {
-						if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-							first, _, _ := strings.Cut(xff, ",")
-							if trimmed := strings.TrimSpace(first); trimmed != "" {
-								if clientIP := net.ParseIP(trimmed); clientIP != nil {
-									r.RemoteAddr = net.JoinHostPort(trimmed, "0")
-								}
-							}
-						}
-						break
-					}
+		host, port, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		ip := net.ParseIP(host)
+		if ip == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		var trusted bool
+		for _, n := range s.trustedNets {
+			if n.Contains(ip) {
+				trusted = true
+				break
+			}
+		}
+		if !trusted {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Collect all X-Forwarded-For values into a flat list.
+		var addrs []string
+		for _, header := range r.Header.Values("X-Forwarded-For") {
+			for _, v := range strings.Split(header, ",") {
+				if trimmed := strings.TrimSpace(v); trimmed != "" {
+					addrs = append(addrs, trimmed)
 				}
 			}
 		}
+
+		if len(addrs) > 0 {
+			// Take the rightmost entry: the one appended by the trusted proxy,
+			// which cannot be spoofed by the client (Vault convention).
+			clientAddr := addrs[len(addrs)-1]
+			if net.ParseIP(clientAddr) != nil {
+				r.RemoteAddr = net.JoinHostPort(clientAddr, port)
+			}
+		}
+
 		next.ServeHTTP(w, r)
 	})
 }
