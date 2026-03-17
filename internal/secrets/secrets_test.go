@@ -267,14 +267,23 @@ func TestResolveSkipsRepersistWhenVarsUnchanged(t *testing.T) {
 		t.Fatalf("first resolve: %v", err)
 	}
 
-	// Make the file read-only. If Resolve tries to rewrite it when vars are
-	// unchanged, it will fail due to permissions.
-	if err := os.Chmod(path, 0400); err != nil {
-		t.Fatalf("chmod read-only: %v", err)
+	// Record inode before second resolve.
+	infoBefore, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat before: %v", err)
 	}
 
 	// Second resolve with same vars — must succeed without rewriting.
 	if _, err := Resolve(testSpecs, vars, path, testIKM); err != nil {
 		t.Fatalf("second resolve (with unchanged vars) failed: %v", err)
+	}
+
+	// persist does temp+rename, which changes inode. SameFile detects this.
+	infoAfter, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after: %v", err)
+	}
+	if !os.SameFile(infoBefore, infoAfter) {
+		t.Error("file was replaced despite vars being unchanged")
 	}
 }

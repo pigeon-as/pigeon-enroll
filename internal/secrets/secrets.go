@@ -46,6 +46,11 @@ func Resolve(specs []config.SecretSpec, vars map[string]string, path string, ikm
 		return nil, nil
 	}
 
+	// Normalize so persisted JSON uses {} instead of null.
+	if vars == nil {
+		vars = map[string]string{}
+	}
+
 	if path == "" {
 		// No persistence path — derive fresh.
 		return derive(specs, ikm)
