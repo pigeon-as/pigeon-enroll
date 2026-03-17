@@ -219,9 +219,10 @@ func pollUntilReachable(ctx context.Context, logger *slog.Logger, client *http.C
 			if decodeErr == nil {
 				return status.Initialized, nil
 			}
+			logger.Debug("Vault not ready, retrying", "backoff", backoff, "decodeErr", decodeErr)
+		} else {
+			logger.Debug("Vault not ready, retrying", "backoff", backoff, "err", err)
 		}
-
-		logger.Debug("Vault not ready, retrying", "backoff", backoff, "err", err)
 
 		select {
 		case <-ctx.Done():

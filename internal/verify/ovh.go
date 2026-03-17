@@ -93,7 +93,7 @@ func (o *OVH) ipBlocks() ([]*net.IPNet, error) {
 	for _, cidr := range raw {
 		_, n, err := net.ParseCIDR(cidr)
 		if err != nil {
-			o.logger.Warn("skipping unparseable OVH IP block", "block", cidr, "error", err)
+			o.logger.Warn("skipping unparseable OVH IP block", "block", cidr, "err", err)
 			continue
 		}
 		blocks = append(blocks, n)
