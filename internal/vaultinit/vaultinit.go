@@ -55,21 +55,8 @@ func Run(ctx context.Context, logger *slog.Logger, cfg *config.VaultConfig, secr
 		return err
 	}
 
-	// Keep root token in memory only; redact before writing to disk
-	// when it will be revoked, so it never touches the filesystem.
+	// Keep root token in memory; only redact after successful revocation.
 	rootToken := initResp.RootToken
-	if cfg.Token.ID != "" && cfg.Token.RevokeRoot {
-		initResp.RootToken = "<revoked>"
-	}
-
-	respJSON, err := json.MarshalIndent(initResp, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal init response: %w", err)
-	}
-	if err := writeAtomic(outputPath, respJSON, 0600); err != nil {
-		return fmt.Errorf("write %s: %w", outputPath, err)
-	}
-	logger.Info("Vault initialized", "output", outputPath)
 
 	if cfg.Token.ID != "" {
 		tokenID, ok := secrets[cfg.Token.ID]
@@ -87,8 +74,18 @@ func Run(ctx context.Context, logger *slog.Logger, cfg *config.VaultConfig, secr
 				return err
 			}
 			logger.Info("root token revoked")
+			initResp.RootToken = "<revoked>"
 		}
 	}
+
+	respJSON, err := json.MarshalIndent(initResp, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal init response: %w", err)
+	}
+	if err := writeAtomic(outputPath, respJSON, 0600); err != nil {
+		return fmt.Errorf("write %s: %w", outputPath, err)
+	}
+	logger.Info("Vault initialized", "output", outputPath)
 
 	return nil
 }
