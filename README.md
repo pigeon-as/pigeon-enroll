@@ -1,8 +1,8 @@
 # pigeon-enroll
 
-**Experimental** bootstrap enrollment server for pigeon infrastructure. Derives and distributes the minimum secrets needed before Vault is available. Not a secrets manager. Workers present a one-time HMAC token to receive bootstrap secrets.
+**Experimental** enrollment server and client that derives bootstrap secrets from a shared enrollment key (HKDF) and distributes them to clients via one-time, time-windowed HMAC tokens. Optional request verification and Vault initialization support.
 
-The enrollment key is static — all servers with the same key independently derive identical secrets via HKDF-SHA256. A separate HMAC signing key is derived from it for token operations.
+Not a secrets manager — covers the minimum secrets needed before Vault is available. The enrollment key is static; all servers with the same key independently derive identical secrets. A separate HMAC signing key is derived from it for token operations.
 
 ## Usage
 
