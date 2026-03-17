@@ -53,13 +53,15 @@ func Resolve(specs []config.SecretSpec, vars map[string]string, path string, ikm
 
 	data, err := os.ReadFile(path)
 	if err == nil {
-		loaded, loadErr := load(data, specs)
+		loaded, diskVars, loadErr := load(data, specs)
 		if loadErr != nil {
 			return nil, loadErr
 		}
-		// Re-persist to keep vars on disk in sync with config.
-		if err := persist(loaded, vars, path); err != nil {
-			return nil, err
+		// Re-persist only when vars have changed.
+		if !mapsEqual(diskVars, vars) {
+			if err := persist(loaded, vars, path); err != nil {
+				return nil, err
+			}
 		}
 		return loaded, nil
 	}
@@ -82,18 +84,31 @@ type persistedFile struct {
 	Vars    map[string]string `json:"vars"`
 }
 
-// load parses persisted secrets and checks all specs are present.
-func load(data []byte, specs []config.SecretSpec) (map[string]string, error) {
+// load parses persisted secrets and vars, and checks all specs are present.
+func load(data []byte, specs []config.SecretSpec) (map[string]string, map[string]string, error) {
 	var pf persistedFile
 	if err := json.Unmarshal(data, &pf); err != nil {
-		return nil, fmt.Errorf("parse secrets file: %w", err)
+		return nil, nil, fmt.Errorf("parse secrets file: %w", err)
 	}
 	for _, s := range specs {
 		if _, ok := pf.Secrets[s.Name]; !ok {
-			return nil, fmt.Errorf("secrets file missing key %q", s.Name)
+			return nil, nil, fmt.Errorf("secrets file missing key %q", s.Name)
 		}
 	}
-	return pf.Secrets, nil
+	return pf.Secrets, pf.Vars, nil
+}
+
+// mapsEqual reports whether two string maps have identical keys and values.
+func mapsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // derive produces secrets from ikm via HKDF-SHA256.
@@ -149,5 +164,8 @@ func persist(secrets map[string]string, vars map[string]string, path string) err
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
 	}
-	return os.Rename(f.Name(), path)
+	if err := os.Rename(f.Name(), path); err != nil {
+		return fmt.Errorf("rename temp file to %s: %w", path, err)
+	}
+	return nil
 }
