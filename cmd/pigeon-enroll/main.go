@@ -98,7 +98,7 @@ func loadConfig() (*slog.Logger, config.Config, []byte, []byte, error) {
 		return logger, config.Config{}, nil, nil, fmt.Errorf("load config: %w", err)
 	}
 
-	if err := api.CheckKeyFile(cfg.KeyPath); err != nil {
+	if err := config.CheckKeyFile(cfg.KeyPath); err != nil {
 		return logger, config.Config{}, nil, nil, err
 	}
 

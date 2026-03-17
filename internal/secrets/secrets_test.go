@@ -211,3 +211,79 @@ func TestDeriveHMACKey(t *testing.T) {
 		t.Error("different IKM should produce different HMAC key")
 	}
 }
+
+func TestResolveRepersistsOnVarsChange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+	oldVars := map[string]string{"dc": "eu-west"}
+
+	// First resolve: derive + persist with old vars.
+	first, err := Resolve(testSpecs, oldVars, path, testIKM)
+	if err != nil {
+		t.Fatalf("first resolve: %v", err)
+	}
+
+	// Read file to verify old vars are on disk.
+	data, _ := os.ReadFile(path)
+	var pf1 persistedFile
+	json.Unmarshal(data, &pf1)
+	if pf1.Vars["dc"] != "eu-west" {
+		t.Fatalf("initial vars: got %q, want %q", pf1.Vars["dc"], "eu-west")
+	}
+
+	// Second resolve with updated vars.
+	newVars := map[string]string{"dc": "us-east", "extra": "val"}
+	second, err := Resolve(testSpecs, newVars, path, testIKM)
+	if err != nil {
+		t.Fatalf("second resolve: %v", err)
+	}
+
+	// Secrets should be unchanged.
+	for k, v := range first {
+		if second[k] != v {
+			t.Errorf("secret %q changed: %q vs %q", k, v, second[k])
+		}
+	}
+
+	// Vars on disk should be updated.
+	data, _ = os.ReadFile(path)
+	var pf2 persistedFile
+	json.Unmarshal(data, &pf2)
+	if pf2.Vars["dc"] != "us-east" {
+		t.Errorf("vars dc: got %q, want %q", pf2.Vars["dc"], "us-east")
+	}
+	if pf2.Vars["extra"] != "val" {
+		t.Errorf("vars extra: got %q, want %q", pf2.Vars["extra"], "val")
+	}
+}
+
+func TestResolveSkipsRepersistWhenVarsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+	vars := map[string]string{"dc": "eu-west"}
+
+	// First resolve: derive + persist.
+	if _, err := Resolve(testSpecs, vars, path, testIKM); err != nil {
+		t.Fatalf("first resolve: %v", err)
+	}
+
+	// Record inode before second resolve.
+	infoBefore, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat before: %v", err)
+	}
+
+	// Second resolve with same vars — must succeed without rewriting.
+	if _, err := Resolve(testSpecs, vars, path, testIKM); err != nil {
+		t.Fatalf("second resolve (with unchanged vars) failed: %v", err)
+	}
+
+	// persist does temp+rename, which changes inode. SameFile detects this.
+	infoAfter, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after: %v", err)
+	}
+	if !os.SameFile(infoBefore, infoAfter) {
+		t.Error("file was replaced despite vars being unchanged")
+	}
+}

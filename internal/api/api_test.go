@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -216,22 +215,6 @@ func TestVerifierFatal(t *testing.T) {
 	// Fatal: claim should be blocked.
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (fatal verifier)", w.Code)
-	}
-}
-
-func TestCheckKeyFile(t *testing.T) {
-	dir := t.TempDir()
-	keyPath := filepath.Join(dir, "enrollment-key")
-
-	// Missing file should error.
-	if err := CheckKeyFile(keyPath); err == nil {
-		t.Fatal("expected error for missing key file")
-	}
-
-	// Create a key file — CheckKeyFile only verifies existence.
-	os.WriteFile(keyPath, []byte("0123456789abcdef0123456789abcdef"), 0600)
-	if err := CheckKeyFile(keyPath); err != nil {
-		t.Fatalf("valid key: %v", err)
 	}
 }
 

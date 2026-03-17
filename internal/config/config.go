@@ -155,3 +155,14 @@ func validate(cfg Config) error {
 
 	return nil
 }
+
+// CheckKeyFile verifies the enrollment key file exists.
+func CheckKeyFile(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("enrollment key not found at %s: %w (must be provisioned by Terraform)", path, err)
+		}
+		return fmt.Errorf("cannot access enrollment key at %s: %w", path, err)
+	}
+	return nil
+}

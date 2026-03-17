@@ -3,11 +3,9 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -203,14 +201,6 @@ func (s *Server) jsonError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
-}
-
-// CheckKeyFile verifies the enrollment key file exists.
-func CheckKeyFile(path string) error {
-	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("enrollment key not found at %s: %w (must be provisioned by Terraform)", path, err)
-	}
-	return nil
 }
 
 // ipRateLimiter tracks per-IP request rates.
