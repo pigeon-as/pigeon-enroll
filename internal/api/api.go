@@ -161,17 +161,17 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.nonces.Check(req.Token) {
-		s.logger.Warn("replayed token", "ip", ip)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "token already used"})
-		s.jsonError(w, "token already used", http.StatusForbidden)
-		return
-	}
-
 	if err := s.verifier.Verify(r.Context(), r); err != nil {
 		s.logger.Warn("verification failed", "ip", ip, "err", err)
 		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "verification failed"})
 		s.jsonError(w, "verification failed", http.StatusForbidden)
+		return
+	}
+
+	if !s.nonces.Check(req.Token) {
+		s.logger.Warn("replayed token", "ip", ip)
+		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "token already used"})
+		s.jsonError(w, "token already used", http.StatusForbidden)
 		return
 	}
 
