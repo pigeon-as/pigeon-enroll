@@ -1,16 +1,16 @@
 // pigeon-enroll is a secret enrollment server and claim client for pigeon infrastructure.
 //
-// Server mode (control-plane):
+// Usage:
 //
-//	pigeon-enroll --config=<path> [--log-level=info]
+//	pigeon-enroll <command> [options]
 //
-// Generate HMAC token (for autoscaler):
+// Commands:
 //
-//	pigeon-enroll --generate-token --config=<path> [--scope=worker]
-//
-// Claim mode (worker):
-//
-//	pigeon-enroll --claim --url=<url> --token=<hmac> --output=<path> [--scope=worker] [--insecure]
+//	server          Run the enrollment server
+//	generate-token  Generate an HMAC claim token
+//	claim           Claim secrets from an enrollment server
+//	run-actions     Run post-claim lifecycle actions
+//	version         Print version
 package main
 
 import (
@@ -27,73 +27,69 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeon-as/pigeon-enroll/internal/action"
 	"github.com/pigeon-as/pigeon-enroll/internal/api"
 	"github.com/pigeon-as/pigeon-enroll/internal/audit"
 	"github.com/pigeon-as/pigeon-enroll/internal/claim"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
-	"github.com/pigeon-as/pigeon-enroll/internal/vaultinit"
 	"github.com/pigeon-as/pigeon-enroll/internal/verify"
 )
 
-var (
-	// Shared flags.
-	configPath = flag.String("config", "", "Path to JSON config file (required for server and generate-token)")
-	logLevel   = flag.String("log-level", "info", "Log level (debug, info, warn, error)")
-	showVer    = flag.Bool("version", false, "Print version and exit")
-
-	// Mode flags (mutually exclusive).
-	generateToken = flag.Bool("generate-token", false, "Generate an HMAC token and print to stdout")
-	doClaim       = flag.Bool("claim", false, "Claim secrets from an enrollment server")
-	doVaultInit   = flag.Bool("vault-init", false, "Initialize Vault and create management token")
-
-	// Shared optional flag.
-	scope = flag.String("scope", "", "Scope for token generation (--generate-token) or secret filtering (--claim)")
-
-	// Vault-init flags.
-	vaultInitOutput = flag.String("vault-output", "/encrypted/vault/init.json", "Path to write Vault init response (--vault-init)")
-
-	// Claim flags.
-	claimURL      = flag.String("url", "", "Enrollment server URL (--claim)")
-	claimToken    = flag.String("token", "", "HMAC claim token (--claim)")
-	claimOutput   = flag.String("output", "", "Path to write secrets JSON (--claim)")
-	claimInsecure = flag.Bool("insecure", false, "Skip TLS certificate verification (--claim)")
+const (
+	version           = "0.1.0"
+	defaultConfigPath = "/etc/pigeon/enroll.json"
 )
 
 func main() {
-	flag.Parse()
-	os.Exit(run())
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	cmd := os.Args[1]
+	args := os.Args[2:]
+
+	switch cmd {
+	case "help", "-h", "--help":
+		printUsage()
+	case "server":
+		os.Exit(cmdServer(args))
+	case "generate-token":
+		os.Exit(cmdGenerateToken(args))
+	case "claim":
+		os.Exit(cmdClaim(args))
+	case "run-actions":
+		os.Exit(cmdRunActions(args))
+	case "version":
+		fmt.Printf("pigeon-enroll v%s\n", version)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", cmd)
+		printUsage()
+		os.Exit(1)
+	}
 }
 
-func run() int {
-	switch {
-	case *showVer:
-		fmt.Println("pigeon-enroll v0.1.0")
-		return 0
-	case *doClaim:
-		return runClaim()
-	case *generateToken:
-		return runGenerateToken()
-	case *doVaultInit:
-		return runVaultInit()
-	default:
-		return runServer()
-	}
+func printUsage() {
+	fmt.Fprintln(os.Stderr, `Usage: pigeon-enroll <command> [options]
+
+Commands:
+  server          Run the enrollment server
+  generate-token  Generate an HMAC claim token
+  claim           Claim secrets from an enrollment server
+  run-actions     Run post-claim lifecycle actions
+  version         Print version`)
 }
 
 // loadConfig loads the JSON config, reads the enrollment key, and derives
-// the HMAC signing key. Shared by --generate-token, server, and vault-init modes.
-func loadConfig() (*slog.Logger, config.Config, []byte, []byte, error) {
+// the HMAC signing key.
+func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byte, []byte, error) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: parseLevel(*logLevel),
+		Level: parseLevel(logLevel),
 	}))
 
-	if *configPath == "" {
-		return logger, config.Config{}, nil, nil, fmt.Errorf("--config is required")
-	}
-
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return logger, config.Config{}, nil, nil, fmt.Errorf("load config: %w", err)
 	}
@@ -131,18 +127,13 @@ func loadConfig() (*slog.Logger, config.Config, []byte, []byte, error) {
 	return logger, cfg, ikm, hmacKey, nil
 }
 
-func runGenerateToken() int {
-	_, cfg, _, hmacKey, err := loadConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
-	fmt.Print(token.Generate(hmacKey, time.Now(), cfg.TokenWindow, *scope))
-	return 0
-}
+func cmdServer(args []string) int {
+	flags := flag.NewFlagSet("server", flag.ExitOnError)
+	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
+	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
+	flags.Parse(args)
 
-func runServer() int {
-	logger, cfg, ikm, hmacKey, err := loadConfig()
+	logger, cfg, ikm, hmacKey, err := loadConfig(*configPath, *logLevel)
 	if err != nil {
 		logger.Error(err.Error())
 		return 1
@@ -214,19 +205,71 @@ func runServer() int {
 	return 0
 }
 
-func runVaultInit() int {
-	logger, cfg, ikm, _, err := loadConfig()
+func cmdGenerateToken(args []string) int {
+	flags := flag.NewFlagSet("generate-token", flag.ExitOnError)
+	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
+	scope := flags.String("scope", "", "Scope for token generation")
+	flags.Parse(args)
+
+	_, cfg, _, hmacKey, err := loadConfig(*configPath, "info")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	fmt.Print(token.Generate(hmacKey, time.Now(), cfg.TokenWindow, *scope))
+	return 0
+}
+
+func cmdClaim(args []string) int {
+	flags := flag.NewFlagSet("claim", flag.ExitOnError)
+	url := flags.String("url", "", "Enrollment server URL")
+	tok := flags.String("token", "", "HMAC claim token")
+	output := flags.String("output", "", "Path to write secrets JSON")
+	scope := flags.String("scope", "", "Scope for secret filtering")
+	insecure := flags.Bool("insecure", false, "Skip TLS certificate verification")
+	flags.Parse(args)
+
+	if *url == "" || *tok == "" || *output == "" {
+		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<url> -token=<hmac> -output=<path>")
+		return 1
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	if *insecure {
+		fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled — do not use in production")
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+
+	resp, err := claim.Run(client, *url, *tok, *scope, *output)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "claim failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stderr, "claimed %d secrets → %s\n", len(resp.Secrets), *output)
+	return 0
+}
+
+func cmdRunActions(args []string) int {
+	flags := flag.NewFlagSet("run-actions", flag.ExitOnError)
+	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
+	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
+	actionType := flags.String("type", "", "Run a specific action type (default: all)")
+	flags.Parse(args)
+
+	logger, cfg, ikm, _, err := loadConfig(*configPath, *logLevel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
 
-	if cfg.Vault == nil {
-		logger.Error("vault section not configured")
+	if len(cfg.Actions) == 0 {
+		logger.Error("no actions configured")
 		return 1
 	}
 
-	// Management token ID comes from derived secrets.
 	derived, err := secrets.Resolve(cfg.Secrets, cfg.Vars, cfg.SecretsPath, ikm)
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
@@ -239,35 +282,11 @@ func runVaultInit() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	if err := vaultinit.Run(ctx, logger, cfg.Vault, derived, *vaultInitOutput); err != nil {
-		logger.Error("vault init", "err", err)
+	if err := action.Run(ctx, logger, cfg.Actions, derived, *actionType); err != nil {
+		logger.Error("action failed", "err", err)
 		return 1
 	}
 
-	return 0
-}
-
-func runClaim() int {
-	if *claimURL == "" || *claimToken == "" || *claimOutput == "" {
-		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll --claim --url=<url> --token=<hmac> --output=<path>")
-		return 1
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	if *claimInsecure {
-		fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled — do not use in production")
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-	}
-
-	resp, err := claim.Run(client, *claimURL, *claimToken, *scope, *claimOutput)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "claim failed: %v\n", err)
-		return 1
-	}
-
-	fmt.Fprintf(os.Stderr, "claimed %d secrets → %s\n", len(resp.Secrets), *claimOutput)
 	return 0
 }
 

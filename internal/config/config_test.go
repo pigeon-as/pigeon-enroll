@@ -1,10 +1,13 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/pigeon-as/pigeon-enroll/internal/action"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -126,12 +129,13 @@ func TestValidateNameConflict(t *testing.T) {
 }
 
 func TestValidateVaultTokenRefersToSecret(t *testing.T) {
+	vaultCfg, _ := json.Marshal(map[string]interface{}{
+		"token": map[string]interface{}{"id": "vault_token"},
+	})
 	cfg := Config{
 		TokenWindow: time.Minute,
 		Secrets:     []SecretSpec{{Name: "vault_token", Length: 32, Encoding: "hex"}},
-		Vault: &VaultConfig{
-			Token: VaultTokenConfig{ID: "vault_token"},
-		},
+		Actions:     []action.Config{{Type: "vault-init", Config: vaultCfg}},
 	}
 	if err := validate(cfg); err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -139,41 +143,36 @@ func TestValidateVaultTokenRefersToSecret(t *testing.T) {
 }
 
 func TestValidateVaultTokenRefersToMissingSecret(t *testing.T) {
+	vaultCfg, _ := json.Marshal(map[string]interface{}{
+		"token": map[string]interface{}{"id": "nonexistent"},
+	})
 	cfg := Config{
 		TokenWindow: time.Minute,
 		Secrets:     []SecretSpec{{Name: "other", Length: 32, Encoding: "hex"}},
-		Vault: &VaultConfig{
-			Token: VaultTokenConfig{ID: "nonexistent"},
-		},
+		Actions:     []action.Config{{Type: "vault-init", Config: vaultCfg}},
 	}
 	if err := validate(cfg); err == nil {
 		t.Error("expected error for vault.token.id referencing missing secret")
 	}
 }
 
-func TestLoadVaultDefaults(t *testing.T) {
+func TestLoadActionConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	os.WriteFile(path, []byte(`{
 		"secrets": [{"name": "mgmt", "length": 32, "encoding": "hex"}],
-		"vault": {"token": {"id": "mgmt"}}
+		"actions": [{"type": "vault-init", "config": {"token": {"id": "mgmt"}}}]
 	}`), 0644)
 
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.Vault.Addr != "https://127.0.0.1:8200" {
-		t.Errorf("vault.addr = %q, want https://127.0.0.1:8200", cfg.Vault.Addr)
+	if len(cfg.Actions) != 1 {
+		t.Fatalf("actions = %d, want 1", len(cfg.Actions))
 	}
-	if cfg.Vault.SecretShares != 1 {
-		t.Errorf("vault.secret_shares = %d, want 1", cfg.Vault.SecretShares)
-	}
-	if cfg.Vault.SecretThreshold != 1 {
-		t.Errorf("vault.secret_threshold = %d, want 1", cfg.Vault.SecretThreshold)
-	}
-	if len(cfg.Vault.Token.Policies) != 1 || cfg.Vault.Token.Policies[0] != "root" {
-		t.Errorf("vault.token.policies = %v, want [root]", cfg.Vault.Token.Policies)
+	if cfg.Actions[0].Type != "vault-init" {
+		t.Errorf("action type = %q, want vault-init", cfg.Actions[0].Type)
 	}
 }
 

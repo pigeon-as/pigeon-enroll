@@ -1,4 +1,4 @@
-package vaultinit
+package action
 
 import (
 	"context"
@@ -10,11 +10,9 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
-
-	"github.com/pigeon-as/pigeon-enroll/internal/config"
 )
 
-func TestRun_AlreadyInitialized(t *testing.T) {
+func TestVaultInit_AlreadyInitialized(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/sys/init" && r.Method == http.MethodGet {
 			json.NewEncoder(w).Encode(map[string]bool{"initialized": true})
@@ -24,19 +22,24 @@ func TestRun_AlreadyInitialized(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := &config.VaultConfig{
+	cfgJSON, _ := json.Marshal(vaultInitConfig{
 		Addr:              srv.URL,
 		RecoveryShares:    1,
 		RecoveryThreshold: 1,
+		Output:            filepath.Join(t.TempDir(), "init.json"),
+	})
+
+	a, err := newVaultInit(cfgJSON)
+	if err != nil {
+		t.Fatalf("newVaultInit: %v", err)
 	}
 
-	err := Run(context.Background(), slog.Default(), cfg, nil, filepath.Join(t.TempDir(), "init.json"))
-	if err != nil {
+	if err := a.Run(context.Background(), slog.Default(), nil); err != nil {
 		t.Fatalf("expected nil error for already-initialized Vault, got: %v", err)
 	}
 }
 
-func TestRun_InitAndCreateToken(t *testing.T) {
+func TestVaultInit_InitAndCreateToken(t *testing.T) {
 	var tokenCreated atomic.Bool
 	var rootRevoked atomic.Bool
 
@@ -78,25 +81,30 @@ func TestRun_InitAndCreateToken(t *testing.T) {
 
 	outputPath := filepath.Join(t.TempDir(), "init.json")
 
-	cfg := &config.VaultConfig{
+	cfgJSON, _ := json.Marshal(vaultInitConfig{
 		Addr:              srv.URL,
 		SecretShares:      1,
 		SecretThreshold:   1,
 		RecoveryShares:    1,
 		RecoveryThreshold: 1,
-		Token: config.VaultTokenConfig{
+		Output:            outputPath,
+		Token: vaultTokenConfig{
 			ID:         "vault_management_token",
 			Policies:   []string{"root"},
 			RevokeRoot: true,
 		},
+	})
+
+	a, err := newVaultInit(cfgJSON)
+	if err != nil {
+		t.Fatalf("newVaultInit: %v", err)
 	}
 
 	secrets := map[string]string{
 		"vault_management_token": "my-management-token",
 	}
 
-	err := Run(context.Background(), slog.Default(), cfg, secrets, outputPath)
-	if err != nil {
+	if err := a.Run(context.Background(), slog.Default(), secrets); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -107,7 +115,6 @@ func TestRun_InitAndCreateToken(t *testing.T) {
 		t.Error("root token was not revoked")
 	}
 
-	// Verify init response was written.
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
 		t.Fatalf("read output: %v", err)
@@ -121,7 +128,7 @@ func TestRun_InitAndCreateToken(t *testing.T) {
 	}
 }
 
-func TestRun_InitWithoutToken(t *testing.T) {
+func TestVaultInit_InitWithoutToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v1/sys/init" && r.Method == http.MethodGet:
@@ -141,19 +148,22 @@ func TestRun_InitWithoutToken(t *testing.T) {
 
 	outputPath := filepath.Join(t.TempDir(), "init.json")
 
-	cfg := &config.VaultConfig{
+	cfgJSON, _ := json.Marshal(vaultInitConfig{
 		Addr:            srv.URL,
 		SecretShares:    1,
 		SecretThreshold: 1,
-		// No Token.ID — skip management token creation.
+		Output:          outputPath,
+	})
+
+	a, err := newVaultInit(cfgJSON)
+	if err != nil {
+		t.Fatalf("newVaultInit: %v", err)
 	}
 
-	err := Run(context.Background(), slog.Default(), cfg, nil, outputPath)
-	if err != nil {
+	if err := a.Run(context.Background(), slog.Default(), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify output file exists with correct content.
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
 		t.Fatalf("read output: %v", err)
@@ -167,7 +177,7 @@ func TestRun_InitWithoutToken(t *testing.T) {
 	}
 }
 
-func TestRun_MissingSecretForTokenID(t *testing.T) {
+func TestVaultInit_MissingSecretForTokenID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v1/sys/init" && r.Method == http.MethodGet:
@@ -183,17 +193,51 @@ func TestRun_MissingSecretForTokenID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := &config.VaultConfig{
+	cfgJSON, _ := json.Marshal(vaultInitConfig{
 		Addr:            srv.URL,
 		SecretShares:    1,
 		SecretThreshold: 1,
-		Token: config.VaultTokenConfig{
-			ID: "nonexistent_secret",
-		},
+		Output:          filepath.Join(t.TempDir(), "init.json"),
+		Token:           vaultTokenConfig{ID: "nonexistent_secret"},
+	})
+
+	a, err := newVaultInit(cfgJSON)
+	if err != nil {
+		t.Fatalf("newVaultInit: %v", err)
 	}
 
-	err := Run(context.Background(), slog.Default(), cfg, map[string]string{}, filepath.Join(t.TempDir(), "init.json"))
+	err = a.Run(context.Background(), slog.Default(), map[string]string{})
 	if err == nil {
 		t.Fatal("expected error for missing secret, got nil")
+	}
+}
+
+func TestRun_UnknownActionType(t *testing.T) {
+	cfgs := []Config{{Type: "nonexistent", Config: json.RawMessage(`{}`)}}
+	err := Run(context.Background(), slog.Default(), cfgs, nil, "")
+	if err == nil {
+		t.Fatal("expected error for unknown action type")
+	}
+}
+
+func TestRun_ActionNotFound(t *testing.T) {
+	err := Run(context.Background(), slog.Default(), nil, nil, "vault-init")
+	if err == nil {
+		t.Fatal("expected error when action type not in config")
+	}
+}
+
+func TestSecretNames_VaultInit(t *testing.T) {
+	cfgJSON, _ := json.Marshal(vaultInitConfig{
+		Token: vaultTokenConfig{ID: "my_token"},
+	})
+
+	a, err := New(Config{Type: "vault-init", Config: cfgJSON})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	names := a.SecretNames()
+	if len(names) != 1 || names[0] != "my_token" {
+		t.Errorf("SecretNames = %v, want [my_token]", names)
 	}
 }
