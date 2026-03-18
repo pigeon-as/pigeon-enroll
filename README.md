@@ -10,21 +10,21 @@
 
 ```bash
 # Server
-pigeon-enroll --config=/etc/pigeon/enroll.json
+pigeon-enroll server -config=/etc/pigeon/enroll.json
 
 # Generate a claim token
-pigeon-enroll --generate-token --config=/etc/pigeon/enroll.json [--scope=worker]
+pigeon-enroll generate-token -config=/etc/pigeon/enroll.json [-scope=worker]
 
 # Claim (worker side)
-pigeon-enroll --claim --url https://enroll:8443/claim \
-  --token <hmac> --scope worker \
-  --output /encrypted/pigeon/secrets.json
+pigeon-enroll claim -url https://enroll:8443/claim \
+  -token <hmac> -scope worker \
+  -output /encrypted/pigeon/secrets.json
 
 # Run all actions
-pigeon-enroll --run-actions --config=/etc/pigeon/enroll.json
+pigeon-enroll run-actions -config=/etc/pigeon/enroll.json
 
 # Run a specific action
-pigeon-enroll --run-actions=vault-init --config=/etc/pigeon/enroll.json
+pigeon-enroll run-actions -config=/etc/pigeon/enroll.json -type=vault-init
 ```
 
 ## Config
@@ -93,7 +93,7 @@ Returns `{"status": "ok"}`.
 
 ## Actions
 
-Pluggable post-claim lifecycle actions. Run via `--run-actions` (all) or `--run-actions=<type>` (specific).
+Pluggable post-claim lifecycle actions. Run via `run-actions` (all) or `run-actions -type=<type>` (specific).
 
 ### vault-init
 
