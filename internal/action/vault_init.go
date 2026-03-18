@@ -1,5 +1,4 @@
-// Package vaultinit handles one-time Vault initialization.
-package vaultinit
+package action
 
 import (
 	"bytes"
@@ -13,9 +12,58 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/pigeon-as/pigeon-enroll/internal/config"
 )
+
+// vaultInitConfig holds vault-init action configuration.
+type vaultInitConfig struct {
+	Addr              string           `json:"addr"`
+	TLSSkipVerify     bool             `json:"tls_skip_verify"`
+	SecretShares      int              `json:"secret_shares"`
+	SecretThreshold   int              `json:"secret_threshold"`
+	RecoveryShares    int              `json:"recovery_shares"`
+	RecoveryThreshold int              `json:"recovery_threshold"`
+	Output            string           `json:"output"`
+	Token             vaultTokenConfig `json:"token"`
+}
+
+// vaultTokenConfig holds the management token configuration.
+type vaultTokenConfig struct {
+	// ID references a secret name. The derived secret value becomes the
+	// custom token ID passed to vault token create.
+	ID string `json:"id"`
+	// Policies to attach to the management token.
+	Policies []string `json:"policies"`
+	// RevokeRoot revokes the initial root token after the management token is created.
+	RevokeRoot bool `json:"revoke_root"`
+}
+
+type vaultInit struct {
+	cfg vaultInitConfig
+}
+
+func newVaultInit(raw json.RawMessage) (*vaultInit, error) {
+	var cfg vaultInitConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("parse vault-init config: %w", err)
+	}
+	// Defaults.
+	if cfg.Addr == "" {
+		cfg.Addr = "https://127.0.0.1:8200"
+	}
+	if cfg.SecretShares == 0 {
+		cfg.SecretShares = 1
+	}
+	if cfg.SecretThreshold == 0 {
+		cfg.SecretThreshold = 1
+	}
+	if cfg.Output == "" {
+		cfg.Output = "/encrypted/vault/init.json"
+	}
+	if len(cfg.Token.Policies) == 0 && cfg.Token.ID != "" {
+		cfg.Token.Policies = []string{"root"}
+	}
+	return &vaultInit{cfg: cfg}, nil
+}
 
 // initResponse is the JSON returned by PUT /v1/sys/init.
 type initResponse struct {
@@ -26,29 +74,27 @@ type initResponse struct {
 	RecoveryKeysBase64 []string `json:"recovery_keys_base64,omitempty"`
 }
 
-// Run initializes Vault, creates a management token, and optionally
-// revokes the root token. Idempotent — skips if already initialized.
-func Run(ctx context.Context, logger *slog.Logger, cfg *config.VaultConfig, secrets map[string]string, outputPath string) error {
+func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[string]string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
-	if cfg.TLSSkipVerify {
+	if v.cfg.TLSSkipVerify {
 		client.Transport = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
 	}
 
-	initURL := cfg.Addr + "/v1/sys/init"
+	initURL := v.cfg.Addr + "/v1/sys/init"
 
 	// Preflight: resolve management token ID before initializing Vault.
 	var tokenID string
-	if cfg.Token.ID != "" {
+	if v.cfg.Token.ID != "" {
 		var ok bool
-		tokenID, ok = secrets[cfg.Token.ID]
+		tokenID, ok = secrets[v.cfg.Token.ID]
 		if !ok {
-			return fmt.Errorf("vault.token.id %q not found in derived secrets", cfg.Token.ID)
+			return fmt.Errorf("vault-init: token.id %q not found in derived secrets", v.cfg.Token.ID)
 		}
 	}
 
-	logger.Info("waiting for Vault", "addr", cfg.Addr)
+	logger.Info("waiting for Vault", "addr", v.cfg.Addr)
 	initialized, err := pollUntilReachable(ctx, logger, client, initURL)
 	if err != nil {
 		return err
@@ -60,22 +106,21 @@ func Run(ctx context.Context, logger *slog.Logger, cfg *config.VaultConfig, secr
 	}
 
 	logger.Info("initializing Vault")
-	initResp, err := initVault(ctx, client, initURL, cfg)
+	initResp, err := initVault(ctx, client, initURL, &v.cfg)
 	if err != nil {
 		return err
 	}
 
-	// Keep root token in memory; only redact after successful revocation.
 	rootToken := initResp.RootToken
 
-	if cfg.Token.ID != "" {
-		if err := createManagementToken(ctx, client, cfg.Addr, rootToken, tokenID, cfg.Token.Policies); err != nil {
+	if v.cfg.Token.ID != "" {
+		if err := createManagementToken(ctx, client, v.cfg.Addr, rootToken, tokenID, v.cfg.Token.Policies); err != nil {
 			return err
 		}
-		logger.Info("management token created", "policies", cfg.Token.Policies)
+		logger.Info("management token created", "policies", v.cfg.Token.Policies)
 
-		if cfg.Token.RevokeRoot {
-			if err := revokeToken(ctx, client, cfg.Addr, rootToken); err != nil {
+		if v.cfg.Token.RevokeRoot {
+			if err := revokeToken(ctx, client, v.cfg.Addr, rootToken); err != nil {
 				return err
 			}
 			logger.Info("root token revoked")
@@ -87,15 +132,15 @@ func Run(ctx context.Context, logger *slog.Logger, cfg *config.VaultConfig, secr
 	if err != nil {
 		return fmt.Errorf("marshal init response: %w", err)
 	}
-	if err := writeAtomic(outputPath, respJSON, 0600); err != nil {
-		return fmt.Errorf("write %s: %w", outputPath, err)
+	if err := writeAtomic(v.cfg.Output, respJSON, 0600); err != nil {
+		return fmt.Errorf("write %s: %w", v.cfg.Output, err)
 	}
-	logger.Info("Vault initialized", "output", outputPath)
+	logger.Info("Vault initialized", "output", v.cfg.Output)
 
 	return nil
 }
 
-func initVault(ctx context.Context, client *http.Client, initURL string, cfg *config.VaultConfig) (*initResponse, error) {
+func initVault(ctx context.Context, client *http.Client, initURL string, cfg *vaultInitConfig) (*initResponse, error) {
 	initReq := map[string]int{
 		"secret_shares":    cfg.SecretShares,
 		"secret_threshold": cfg.SecretThreshold,
@@ -141,7 +186,6 @@ func initVault(ctx context.Context, client *http.Client, initURL string, cfg *co
 }
 
 // createManagementToken creates a token with a known ID using the root token.
-// Uses POST /v1/auth/token/create with the id field.
 func createManagementToken(ctx context.Context, client *http.Client, vaultAddr, rootToken, tokenID string, policies []string) error {
 	payload := map[string]interface{}{
 		"id":           tokenID,
@@ -221,7 +265,6 @@ func pollUntilReachable(ctx context.Context, logger *slog.Logger, client *http.C
 			if decodeErr == nil {
 				return status.Initialized, nil
 			}
-			logger.Debug("Vault not ready, retrying", "backoff", backoff, "decodeErr", decodeErr)
 		} else {
 			logger.Debug("Vault not ready, retrying", "backoff", backoff, "err", err)
 		}

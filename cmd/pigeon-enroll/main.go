@@ -27,13 +27,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeon-as/pigeon-enroll/internal/action"
 	"github.com/pigeon-as/pigeon-enroll/internal/api"
 	"github.com/pigeon-as/pigeon-enroll/internal/audit"
 	"github.com/pigeon-as/pigeon-enroll/internal/claim"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
-	"github.com/pigeon-as/pigeon-enroll/internal/vaultinit"
 	"github.com/pigeon-as/pigeon-enroll/internal/verify"
 )
 
@@ -46,13 +46,11 @@ var (
 	// Mode flags (mutually exclusive).
 	generateToken = flag.Bool("generate-token", false, "Generate an HMAC token and print to stdout")
 	doClaim       = flag.Bool("claim", false, "Claim secrets from an enrollment server")
-	doVaultInit   = flag.Bool("vault-init", false, "Initialize Vault and create management token")
+	runActions    = flag.String("run-actions", "", "Run actions from config (all if empty, or specify type)")
+	runActionsSet bool
 
 	// Shared optional flag.
 	scope = flag.String("scope", "", "Scope for token generation (--generate-token) or secret filtering (--claim)")
-
-	// Vault-init flags.
-	vaultInitOutput = flag.String("vault-output", "/encrypted/vault/init.json", "Path to write Vault init response (--vault-init)")
 
 	// Claim flags.
 	claimURL      = flag.String("url", "", "Enrollment server URL (--claim)")
@@ -63,6 +61,13 @@ var (
 
 func main() {
 	flag.Parse()
+	// Detect whether --run-actions was explicitly set (distinguishes
+	// "--run-actions" (all) from not provided at all).
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "run-actions" {
+			runActionsSet = true
+		}
+	})
 	os.Exit(run())
 }
 
@@ -75,8 +80,8 @@ func run() int {
 		return runClaim()
 	case *generateToken:
 		return runGenerateToken()
-	case *doVaultInit:
-		return runVaultInit()
+	case runActionsSet:
+		return doRunActions()
 	default:
 		return runServer()
 	}
@@ -214,19 +219,18 @@ func runServer() int {
 	return 0
 }
 
-func runVaultInit() int {
+func doRunActions() int {
 	logger, cfg, ikm, _, err := loadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
 
-	if cfg.Vault == nil {
-		logger.Error("vault section not configured")
+	if len(cfg.Actions) == 0 {
+		logger.Error("no actions configured")
 		return 1
 	}
 
-	// Management token ID comes from derived secrets.
 	derived, err := secrets.Resolve(cfg.Secrets, cfg.Vars, cfg.SecretsPath, ikm)
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
@@ -239,8 +243,8 @@ func runVaultInit() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	if err := vaultinit.Run(ctx, logger, cfg.Vault, derived, *vaultInitOutput); err != nil {
-		logger.Error("vault init", "err", err)
+	if err := action.Run(ctx, logger, cfg.Actions, derived, *runActions); err != nil {
+		logger.Error("action failed", "err", err)
 		return 1
 	}
 
