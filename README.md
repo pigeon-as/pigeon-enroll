@@ -9,11 +9,11 @@
 ## Usage
 
 ```bash
-# Server
-pigeon-enroll server -config=/etc/pigeon/enroll.json
+# Server (reads /etc/pigeon/enroll.json by default)
+pigeon-enroll server
 
 # Generate a claim token
-pigeon-enroll generate-token -config=/etc/pigeon/enroll.json [-scope=worker]
+pigeon-enroll generate-token [-scope=worker]
 
 # Claim (worker side)
 pigeon-enroll claim -url https://enroll:8443/claim \
@@ -21,10 +21,10 @@ pigeon-enroll claim -url https://enroll:8443/claim \
   -output /encrypted/pigeon/secrets.json
 
 # Run all actions
-pigeon-enroll run-actions -config=/etc/pigeon/enroll.json
+pigeon-enroll run-actions
 
 # Run a specific action
-pigeon-enroll run-actions -config=/etc/pigeon/enroll.json -type=vault-init
+pigeon-enroll run-actions -type=vault-init
 ```
 
 ## Config

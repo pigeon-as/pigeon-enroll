@@ -37,7 +37,10 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/verify"
 )
 
-const version = "0.1.0"
+const (
+	version           = "0.1.0"
+	defaultConfigPath = "/etc/pigeon/enroll.json"
+)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -84,10 +87,6 @@ func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byt
 		Level: parseLevel(logLevel),
 	}))
 
-	if configPath == "" {
-		return logger, config.Config{}, nil, nil, fmt.Errorf("-config is required")
-	}
-
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return logger, config.Config{}, nil, nil, fmt.Errorf("load config: %w", err)
@@ -128,7 +127,7 @@ func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byt
 
 func cmdServer(args []string) int {
 	flags := flag.NewFlagSet("server", flag.ExitOnError)
-	configPath := flags.String("config", "", "Path to JSON config file")
+	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
 	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
 	flags.Parse(args)
 
@@ -206,7 +205,7 @@ func cmdServer(args []string) int {
 
 func cmdGenerateToken(args []string) int {
 	flags := flag.NewFlagSet("generate-token", flag.ExitOnError)
-	configPath := flags.String("config", "", "Path to JSON config file")
+	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
 	scope := flags.String("scope", "", "Scope for token generation")
 	flags.Parse(args)
 
@@ -253,7 +252,7 @@ func cmdClaim(args []string) int {
 
 func cmdRunActions(args []string) int {
 	flags := flag.NewFlagSet("run-actions", flag.ExitOnError)
-	configPath := flags.String("config", "", "Path to JSON config file")
+	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
 	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
 	actionType := flags.String("type", "", "Run a specific action type (default: all)")
 	flags.Parse(args)
