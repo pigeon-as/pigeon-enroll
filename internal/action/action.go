@@ -22,6 +22,10 @@ type Config struct {
 
 // New creates an Action from config.
 func New(cfg Config) (Action, error) {
+	if len(cfg.Config) == 0 {
+		cfg.Config = json.RawMessage("{}")
+	}
+
 	switch cfg.Type {
 	case "vault-init":
 		return newVaultInit(cfg.Config)
