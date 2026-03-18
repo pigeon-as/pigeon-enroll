@@ -11,6 +11,7 @@ import (
 // Action performs a lifecycle operation using derived secrets.
 type Action interface {
 	Run(ctx context.Context, logger *slog.Logger, secrets map[string]string) error
+	SecretNames() []string
 }
 
 // Config holds action configuration from the enrollment config file.
@@ -66,15 +67,12 @@ func runOne(ctx context.Context, logger *slog.Logger, cfg Config, secrets map[st
 func SecretNames(cfgs []Config) (map[string]bool, error) {
 	names := make(map[string]bool)
 	for _, cfg := range cfgs {
-		switch cfg.Type {
-		case "vault-init":
-			var vc vaultInitConfig
-			if err := json.Unmarshal(cfg.Config, &vc); err != nil {
-				return nil, fmt.Errorf("parse vault-init config: %w", err)
-			}
-			if vc.Token.ID != "" {
-				names[vc.Token.ID] = true
-			}
+		a, err := New(cfg)
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range a.SecretNames() {
+			names[name] = true
 		}
 	}
 	return names, nil

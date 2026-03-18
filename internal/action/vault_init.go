@@ -41,6 +41,13 @@ type vaultInit struct {
 	cfg vaultInitConfig
 }
 
+func (v *vaultInit) SecretNames() []string {
+	if v.cfg.Token.ID != "" {
+		return []string{v.cfg.Token.ID}
+	}
+	return nil
+}
+
 func newVaultInit(raw json.RawMessage) (*vaultInit, error) {
 	var cfg vaultInitConfig
 	if err := json.Unmarshal(raw, &cfg); err != nil {
