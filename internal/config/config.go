@@ -107,13 +107,15 @@ func validate(cfg Config) error {
 	}
 
 	// Validate that action configs reference known secrets.
-	actionSecrets, err := action.SecretNames(cfg.Actions)
-	if err != nil {
-		return err
-	}
-	for name := range actionSecrets {
-		if !seen[name] {
-			return fmt.Errorf("action references secret %q which is not defined", name)
+	for _, acfg := range cfg.Actions {
+		a, err := action.New(acfg)
+		if err != nil {
+			return err
+		}
+		for _, name := range a.SecretNames() {
+			if !seen[name] {
+				return fmt.Errorf("action %q references secret %q which is not defined", acfg.Type, name)
+			}
 		}
 	}
 

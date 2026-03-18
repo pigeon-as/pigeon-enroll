@@ -61,19 +61,3 @@ func runOne(ctx context.Context, logger *slog.Logger, cfg Config, secrets map[st
 	}
 	return nil
 }
-
-// SecretNames returns the set of secret names referenced by action configs.
-// Used by config validation to check that referenced secrets exist.
-func SecretNames(cfgs []Config) (map[string]bool, error) {
-	names := make(map[string]bool)
-	for _, cfg := range cfgs {
-		a, err := New(cfg)
-		if err != nil {
-			return nil, err
-		}
-		for _, name := range a.SecretNames() {
-			names[name] = true
-		}
-	}
-	return names, nil
-}

@@ -231,13 +231,13 @@ func TestSecretNames_VaultInit(t *testing.T) {
 	cfgJSON, _ := json.Marshal(vaultInitConfig{
 		Token: vaultTokenConfig{ID: "my_token"},
 	})
-	cfgs := []Config{{Type: "vault-init", Config: cfgJSON}}
 
-	names, err := SecretNames(cfgs)
+	a, err := New(Config{Type: "vault-init", Config: cfgJSON})
 	if err != nil {
-		t.Fatalf("SecretNames: %v", err)
+		t.Fatalf("New: %v", err)
 	}
-	if !names["my_token"] {
-		t.Error("expected my_token in secret names")
+	names := a.SecretNames()
+	if len(names) != 1 || names[0] != "my_token" {
+		t.Errorf("SecretNames = %v, want [my_token]", names)
 	}
 }
