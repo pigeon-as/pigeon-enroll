@@ -1,10 +1,10 @@
 # pigeon-enroll
 
-**Experimental** bootstrap enrollment server and client that derives bootstrap secrets from a shared enrollment key (HKDF) and distributes them to clients via one-time, time-windowed HMAC tokens. Optional request verification and Vault initialization support.
+**Experimental** bootstrap enrollment server and client that derives bootstrap secrets from a shared enrollment key (HKDF) and distributes them to clients via one-time, time-windowed HMAC tokens. Pluggable request verification and post-claim actions.
 
-Not a secrets manager — covers the minimum secrets needed before Vault is available. The enrollment key is static; all servers with the same key independently derive identical secrets. A separate HMAC signing key is derived from it for token operations.
+**Not a secrets manager:** covers the minimum secrets needed before Vault is available. The enrollment key is static; all servers with the same key independently derive identical secrets. A separate HMAC signing key is derived from it for token operations.
 
-> **Stage-0 bootstrap:** pigeon-enroll is a dumb pipe (token in, secrets out), pigeon-template is a dumb renderer (data in, config files out). Neither knows about the other. Neither forces a workflow.
+**Stage-0 bootstrap:** [pigeon-enroll](https://github.com/pigeon-as/pigeon-enroll) is a dumb pipe (token in, secrets out), [pigeon-template](https://github.com/pigeon-as/pigeon-template) is a dumb renderer (data in, config files out). Neither knows about the other. Neither forces a workflow.
 
 ## Usage
 
