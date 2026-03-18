@@ -52,6 +52,8 @@ func main() {
 	args := os.Args[2:]
 
 	switch cmd {
+	case "help", "-h", "--help":
+		printUsage()
 	case "server":
 		os.Exit(cmdServer(args))
 	case "generate-token":

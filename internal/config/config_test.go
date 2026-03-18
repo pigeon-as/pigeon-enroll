@@ -156,7 +156,7 @@ func TestValidateVaultTokenRefersToMissingSecret(t *testing.T) {
 	}
 }
 
-func TestLoadVaultDefaults(t *testing.T) {
+func TestLoadActionConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	os.WriteFile(path, []byte(`{
