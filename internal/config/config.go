@@ -108,7 +108,10 @@ func validate(cfg Config) error {
 
 	// Validate action configs: no duplicate types, reference known secrets.
 	actionTypes := make(map[string]bool, len(cfg.Actions))
-	for _, acfg := range cfg.Actions {
+	for i, acfg := range cfg.Actions {
+		if acfg.Type == "" {
+			return fmt.Errorf("actions[%d]: type is required", i)
+		}
 		if actionTypes[acfg.Type] {
 			return fmt.Errorf("duplicate action type %q", acfg.Type)
 		}
