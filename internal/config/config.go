@@ -110,7 +110,7 @@ func validate(cfg Config) error {
 	for _, acfg := range cfg.Actions {
 		a, err := action.New(acfg)
 		if err != nil {
-			return err
+			return fmt.Errorf("action %q: %w", acfg.Type, err)
 		}
 		for _, name := range a.SecretNames() {
 			if !seen[name] {

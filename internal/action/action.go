@@ -30,7 +30,7 @@ func New(cfg Config) (Action, error) {
 	case "vault-init":
 		return newVaultInit(cfg.Config)
 	default:
-		return nil, fmt.Errorf("unknown action type: %q", cfg.Type)
+		return nil, fmt.Errorf("unknown action type")
 	}
 }
 
