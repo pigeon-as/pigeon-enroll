@@ -1,6 +1,6 @@
 module github.com/pigeon-as/pigeon-enroll
 
-go 1.25.3
+go 1.26
 
 require (
 	github.com/ovh/go-ovh v1.6.0
@@ -10,8 +10,7 @@ require (
 
 require (
 	github.com/google/go-cmp v0.6.0 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/stretchr/testify v1.10.0 // indirect
 	golang.org/x/oauth2 v0.27.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
