@@ -97,7 +97,7 @@ Pluggable post-claim lifecycle actions. Run via `run-actions` (all) or `run-acti
 
 ### vault-init
 
-Initializes Vault and creates a management token with a known HKDF-derived ID, so other tools can independently derive the same token without coordination.
+Initializes Vault and creates a management token with a known HKDF-derived ID, so other tools can independently derive the same token without coordination. Fails if Vault is already initialized.
 
 1. Polls Vault until reachable
 2. Initializes (Shamir or auto-unseal depending on config)
