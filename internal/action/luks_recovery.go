@@ -76,7 +76,7 @@ func (l *luksRecovery) Run(ctx context.Context, logger *slog.Logger, secrets map
 //
 //	0 <sectors> crypt <cipher> <key_hex> <iv_offset> <device> <offset>
 func extractVolumeKey(ctx context.Context, mappedName string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "dmsetup", "table", "--showkeys", mappedName)
+	cmd := exec.CommandContext(ctx, "dmsetup", "table", "--showkeys", "--", mappedName)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("dmsetup table --showkeys %s: %w\n%s", mappedName, err, out)
@@ -125,6 +125,7 @@ func addRecoveryKey(ctx context.Context, device string, slot int, volumeKey []by
 		"--volume-key-file", vkPath,
 		"--key-slot", strconv.Itoa(slot),
 		"--batch-mode",
+		"--",
 		device,
 	)
 	// cryptsetup reads the new passphrase from stdin.
