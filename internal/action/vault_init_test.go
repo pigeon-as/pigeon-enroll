@@ -34,8 +34,8 @@ func TestVaultInit_AlreadyInitialized(t *testing.T) {
 		t.Fatalf("newVaultInit: %v", err)
 	}
 
-	if err := a.Run(context.Background(), slog.Default(), nil); err != nil {
-		t.Fatalf("expected nil error for already-initialized Vault, got: %v", err)
+	if err := a.Run(context.Background(), slog.Default(), nil); err == nil {
+		t.Fatal("expected error for already-initialized Vault, got nil")
 	}
 }
 

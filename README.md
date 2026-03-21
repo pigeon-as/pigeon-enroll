@@ -97,7 +97,7 @@ Pluggable post-claim lifecycle actions. Run via `run-actions` (all) or `run-acti
 
 ### vault-init
 
-Initializes Vault and creates a management token with a known HKDF-derived ID, so other tools can independently derive the same token without coordination.
+Initializes Vault and creates a management token with a known HKDF-derived ID, so other tools can independently derive the same token without coordination. Fails if Vault is already initialized.
 
 1. Polls Vault until reachable
 2. Initializes (Shamir or auto-unseal depending on config)
@@ -122,6 +122,22 @@ Initializes Vault and creates a management token with a known HKDF-derived ID, s
 ```
 
 For auto-unseal, also set `recovery_shares` and `recovery_threshold`.
+
+### luks-recovery
+
+Adds a recovery passphrase to a LUKS2 keyslot for disaster recovery. Uses the volume key from an already unlocked dm-crypt device to authenticate. Fails if the keyslot is already occupied.
+
+```json
+{
+  "type": "luks-recovery",
+  "config": {
+    "device": "/dev/md1",
+    "mapped_name": "encrypted",
+    "key_slot": 1,
+    "secret": "luks_recovery"
+  }
+}
+```
 
 ## Verifiers
 

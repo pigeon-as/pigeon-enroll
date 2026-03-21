@@ -29,6 +29,8 @@ func New(cfg Config) (Action, error) {
 	switch cfg.Type {
 	case "vault-init":
 		return newVaultInit(cfg.Config)
+	case "luks-recovery":
+		return newLuksRecovery(cfg.Config)
 	default:
 		return nil, fmt.Errorf("unknown action type")
 	}
