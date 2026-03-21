@@ -18,7 +18,7 @@ type luksRecoveryConfig struct {
 	Device string `json:"device"`
 	// MappedName is the dm-crypt mapped device name (default: "encrypted").
 	MappedName string `json:"mapped_name"`
-	// KeySlot is the LUKS2 keyslot to add the recovery key to (default: 1).
+	// KeySlot is the LUKS2 keyslot to add the recovery key to (required, must be >= 1).
 	KeySlot int `json:"key_slot"`
 	// Secret references a derived secret name whose value becomes the recovery passphrase.
 	Secret string `json:"secret"`
@@ -42,11 +42,8 @@ func newLuksRecovery(raw json.RawMessage) (*luksRecovery, error) {
 	if cfg.MappedName == "" {
 		cfg.MappedName = "encrypted"
 	}
-	if cfg.KeySlot == 0 {
-		cfg.KeySlot = 1
-	}
-	if cfg.KeySlot < 0 {
-		return nil, fmt.Errorf("luks-recovery: key_slot must be >= 1")
+	if cfg.KeySlot < 1 {
+		return nil, fmt.Errorf("luks-recovery: key_slot is required and must be >= 1")
 	}
 	return &luksRecovery{cfg: cfg}, nil
 }

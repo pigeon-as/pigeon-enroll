@@ -9,8 +9,9 @@ import (
 
 func TestLuksRecovery_SecretNames(t *testing.T) {
 	cfgJSON, _ := json.Marshal(luksRecoveryConfig{
-		Device: "/dev/md1",
-		Secret: "luks_recovery",
+		Device:  "/dev/md1",
+		Secret:  "luks_recovery",
+		KeySlot: 1,
 	})
 
 	a, err := New(Config{Type: "luks-recovery", Config: cfgJSON})
@@ -23,21 +24,15 @@ func TestLuksRecovery_SecretNames(t *testing.T) {
 	}
 }
 
-func TestLuksRecovery_DefaultKeySlot(t *testing.T) {
+func TestLuksRecovery_MissingKeySlot(t *testing.T) {
 	cfgJSON, _ := json.Marshal(luksRecoveryConfig{
 		Device: "/dev/md1",
 		Secret: "luks_recovery",
 	})
 
-	a, err := newLuksRecovery(cfgJSON)
-	if err != nil {
-		t.Fatalf("newLuksRecovery: %v", err)
-	}
-	if a.cfg.KeySlot != 1 {
-		t.Errorf("KeySlot = %d, want 1", a.cfg.KeySlot)
-	}
-	if a.cfg.MappedName != "encrypted" {
-		t.Errorf("MappedName = %q, want %q", a.cfg.MappedName, "encrypted")
+	_, err := newLuksRecovery(cfgJSON)
+	if err == nil {
+		t.Fatal("expected error for missing key_slot, got nil")
 	}
 }
 
@@ -85,8 +80,9 @@ func TestLuksRecovery_MissingSecret(t *testing.T) {
 
 func TestLuksRecovery_MissingSecretInDerived(t *testing.T) {
 	cfgJSON, _ := json.Marshal(luksRecoveryConfig{
-		Device: "/dev/md1",
-		Secret: "luks_recovery",
+		Device:  "/dev/md1",
+		Secret:  "luks_recovery",
+		KeySlot: 1,
 	})
 
 	a, err := newLuksRecovery(cfgJSON)
