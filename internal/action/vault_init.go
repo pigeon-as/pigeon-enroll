@@ -108,7 +108,7 @@ func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[st
 	}
 
 	if initialized {
-		return fmt.Errorf("Vault is already initialized")
+		return fmt.Errorf("vault-init: already initialized (addr=%s)", v.cfg.Addr)
 	}
 
 	logger.Info("initializing Vault")

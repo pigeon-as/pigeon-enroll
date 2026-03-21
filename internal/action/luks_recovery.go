@@ -45,6 +45,9 @@ func newLuksRecovery(raw json.RawMessage) (*luksRecovery, error) {
 	if cfg.KeySlot == 0 {
 		cfg.KeySlot = 1
 	}
+	if cfg.KeySlot < 0 {
+		return nil, fmt.Errorf("luks-recovery: key_slot must be >= 1")
+	}
 	return &luksRecovery{cfg: cfg}, nil
 }
 
@@ -84,7 +87,7 @@ func extractVolumeKey(ctx context.Context, mappedName string) ([]byte, error) {
 
 	fields := strings.Fields(strings.TrimSpace(string(out)))
 	if len(fields) < 5 || fields[2] != "crypt" {
-		return nil, fmt.Errorf("unexpected dmsetup output for %s: %s", mappedName, out)
+		return nil, fmt.Errorf("unexpected dmsetup output for %s: expected crypt target, got %d fields", mappedName, len(fields))
 	}
 
 	keyHex := fields[4]
