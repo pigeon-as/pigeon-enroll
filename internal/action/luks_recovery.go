@@ -77,9 +77,9 @@ func (l *luksRecovery) Run(ctx context.Context, logger *slog.Logger, secrets map
 //	0 <sectors> crypt <cipher> <key_hex> <iv_offset> <device> <offset>
 func extractVolumeKey(ctx context.Context, mappedName string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "dmsetup", "table", "--showkeys", mappedName)
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("dmsetup table --showkeys %s: %w", mappedName, err)
+		return nil, fmt.Errorf("dmsetup table --showkeys %s: %w\n%s", mappedName, err, out)
 	}
 
 	fields := strings.Fields(strings.TrimSpace(string(out)))
@@ -99,27 +99,27 @@ func extractVolumeKey(ctx context.Context, mappedName string) ([]byte, error) {
 // Authenticates using the raw volume key (extracted from the open dm-crypt device)
 // and sets the new passphrase in the target keyslot.
 func addRecoveryKey(ctx context.Context, device string, slot int, volumeKey []byte, passphrase string) error {
-	// Write volume key to a temp file for --volume-key-file.
-	tmpDir := os.TempDir()
-	vkFile, err := os.CreateTemp(tmpDir, ".luks-vk-*")
+	// Write volume key to a temp file, then unlink it immediately so the key
+	// never exists as a named file on disk. Reference via /proc/self/fd.
+	vkFile, err := os.CreateTemp("", ".luks-vk-*")
 	if err != nil {
 		return fmt.Errorf("create temp volume key file: %w", err)
 	}
-	vkPath := vkFile.Name()
-	defer os.Remove(vkPath)
+	defer vkFile.Close()
 
-	if err := vkFile.Chmod(0600); err != nil {
-		vkFile.Close()
-		return fmt.Errorf("chmod volume key file: %w", err)
+	// Remove directory entry immediately — file stays open via fd.
+	if err := os.Remove(vkFile.Name()); err != nil {
+		return fmt.Errorf("unlink volume key file: %w", err)
 	}
+
 	if _, err := vkFile.Write(volumeKey); err != nil {
-		vkFile.Close()
 		return fmt.Errorf("write volume key: %w", err)
 	}
-	if err := vkFile.Close(); err != nil {
-		return fmt.Errorf("close volume key file: %w", err)
+	if _, err := vkFile.Seek(0, 0); err != nil {
+		return fmt.Errorf("rewind volume key file: %w", err)
 	}
 
+	vkPath := fmt.Sprintf("/proc/self/fd/%d", vkFile.Fd())
 	cmd := exec.CommandContext(ctx,
 		"cryptsetup", "luksAddKey",
 		"--volume-key-file", vkPath,
