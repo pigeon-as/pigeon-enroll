@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
 	"strings"
 	"time"
 
@@ -96,14 +95,6 @@ func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byt
 
 	if err := config.CheckKeyFile(cfg.KeyPath); err != nil {
 		return logger, config.Config{}, nil, nil, err
-	}
-
-	if runtime.GOOS != "windows" {
-		if info, err := os.Stat(cfg.KeyPath); err == nil && info.Mode().Perm()&0077 != 0 {
-			return logger, config.Config{}, nil, nil, fmt.Errorf(
-				"enrollment key file %s has loose permissions %04o — must be 0600",
-				cfg.KeyPath, info.Mode().Perm())
-		}
 	}
 
 	enrollmentKeyHex, err := os.ReadFile(cfg.KeyPath)
