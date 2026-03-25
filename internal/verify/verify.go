@@ -77,12 +77,12 @@ func (c *Chain) Verify(ctx context.Context, r *http.Request) error {
 	return nil
 }
 
-// isFatal returns the fatal flag. OVH defaults to fatal=true; others to false.
+// isFatal returns the fatal flag, defaulting to true.
 func isFatal(cfg Config) bool {
 	if cfg.Fatal != nil {
 		return *cfg.Fatal
 	}
-	return cfg.Type == "ovh"
+	return true
 }
 
 // Noop always allows claims.

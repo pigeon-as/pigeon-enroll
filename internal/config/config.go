@@ -25,8 +25,6 @@ type SecretSpec struct {
 type Config struct {
 	Listen         string            `json:"listen"`
 	KeyPath        string            `json:"key_path"`
-	TLSCert        string            `json:"tls_cert"`
-	TLSKey         string            `json:"tls_key"`
 	TokenWindow    time.Duration     `json:"-"`
 	TokenWindowRaw string            `json:"token_window"`
 	AuditPath      string            `json:"audit_path"`

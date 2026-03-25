@@ -8,6 +8,7 @@
 //
 //	server          Run the enrollment server
 //	generate-token  Generate an HMAC claim token
+//	generate-cert   Generate a client TLS certificate bundle
 //	claim           Claim secrets from an enrollment server
 //	run-actions     Run post-claim lifecycle actions
 //	version         Print version
@@ -16,6 +17,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -31,6 +33,7 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/audit"
 	"github.com/pigeon-as/pigeon-enroll/internal/claim"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
+	"github.com/pigeon-as/pigeon-enroll/internal/pki"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
 	"github.com/pigeon-as/pigeon-enroll/internal/verify"
@@ -57,6 +60,8 @@ func main() {
 		os.Exit(cmdServer(args))
 	case "generate-token":
 		os.Exit(cmdGenerateToken(args))
+	case "generate-cert":
+		os.Exit(cmdGenerateCert(args))
 	case "claim":
 		os.Exit(cmdClaim(args))
 	case "run-actions":
@@ -76,6 +81,7 @@ func printUsage() {
 Commands:
   server          Run the enrollment server
   generate-token  Generate an HMAC claim token
+  generate-cert   Generate a client TLS certificate bundle (PEM)
   claim           Claim secrets from an enrollment server
   run-actions     Run post-claim lifecycle actions
   version         Print version`)
@@ -179,21 +185,37 @@ func cmdServer(args []string) int {
 		httpServer.Shutdown(shutCtx)
 	}()
 
-	if cfg.TLSCert != "" && cfg.TLSKey != "" {
-		httpServer.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-		logger.Info("listening (TLS)", "addr", cfg.Listen)
-		if err := httpServer.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey); err != http.ErrServerClosed {
+	if !*skipTLS {
+		// Auto-TLS with mTLS: derive CA + server cert from enrollment key.
+		ca, err := pki.DeriveCA(ikm)
+		if err != nil {
+			logger.Error("derive CA", "err", err)
+			return 1
+		}
+		serverCertPEM, serverKeyPEM, err := pki.GenerateServerCert(ca, []string{"pigeon-enroll"})
+		if err != nil {
+			logger.Error("generate server cert", "err", err)
+			return 1
+		}
+		serverCert, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)
+		if err != nil {
+			logger.Error("load server cert", "err", err)
+			return 1
+		}
+		caPool := x509.NewCertPool()
+		caPool.AddCert(ca.Cert)
+		httpServer.TLSConfig = &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{serverCert},
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			ClientCAs:    caPool,
+		}
+		logger.Info("listening (mTLS)", "addr", cfg.Listen)
+		if err := httpServer.ListenAndServeTLS("", ""); err != http.ErrServerClosed {
 			logger.Error("listen", "err", err)
 			return 1
 		}
-	} else if cfg.TLSCert != "" || cfg.TLSKey != "" {
-		logger.Error("both tls_cert and tls_key must be set (only one provided)")
-		return 1
 	} else {
-		if !*skipTLS {
-			logger.Error("TLS not configured — use -skip-tls to allow plain HTTP")
-			return 1
-		}
 		logger.Warn("listening without TLS (-skip-tls)", "addr", cfg.Listen)
 		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 			logger.Error("listen", "err", err)
@@ -219,12 +241,49 @@ func cmdGenerateToken(args []string) int {
 	return 0
 }
 
+func cmdGenerateCert(args []string) int {
+	flags := flag.NewFlagSet("generate-cert", flag.ExitOnError)
+	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
+	output := flags.String("output", "", "Write PEM bundle to file (0600) instead of stdout")
+	flags.Parse(args)
+
+	_, _, ikm, _, err := loadConfig(*configPath, "error")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	ca, err := pki.DeriveCA(ikm)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "derive CA: %v\n", err)
+		return 1
+	}
+
+	bundle, err := pki.GenerateClientCert(ca)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "generate client cert: %v\n", err)
+		return 1
+	}
+
+	if *output != "" {
+		if err := os.WriteFile(*output, bundle, 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "write: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	os.Stdout.Write(bundle)
+	return 0
+}
+
 func cmdClaim(args []string) int {
 	flags := flag.NewFlagSet("claim", flag.ExitOnError)
 	url := flags.String("url", "", "Enrollment server URL")
 	tok := flags.String("token", "", "HMAC claim token")
 	output := flags.String("output", "", "Path to write secrets JSON")
 	scope := flags.String("scope", "", "Scope for secret filtering")
+	tlsBundle := flags.String("tls", "", "Path to client TLS certificate bundle (PEM)")
 	insecure := flags.Bool("insecure", false, "Skip TLS certificate verification")
 	flags.Parse(args)
 
@@ -234,7 +293,29 @@ func cmdClaim(args []string) int {
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	if *insecure {
+	if *tlsBundle != "" {
+		bundlePEM, err := os.ReadFile(*tlsBundle)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "read TLS bundle: %v\n", err)
+			return 1
+		}
+		key, cert, caPool, err := pki.LoadClientBundle(bundlePEM)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load TLS bundle: %v\n", err)
+			return 1
+		}
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				Certificates: []tls.Certificate{{
+					Certificate: [][]byte{cert.Raw},
+					PrivateKey:  key,
+				}},
+				RootCAs:    caPool,
+				ServerName: "pigeon-enroll",
+			},
+		}
+	} else if *insecure {
 		fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled — do not use in production")
 		client.Transport = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
