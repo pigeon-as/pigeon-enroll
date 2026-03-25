@@ -100,9 +100,9 @@ func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byt
 
 	if runtime.GOOS != "windows" {
 		if info, err := os.Stat(cfg.KeyPath); err == nil && info.Mode().Perm()&0077 != 0 {
-			logger.Warn("enrollment key file has loose permissions — should be 0600",
-				"path", cfg.KeyPath,
-				"mode", fmt.Sprintf("%04o", info.Mode().Perm()))
+			return logger, config.Config{}, nil, nil, fmt.Errorf(
+				"enrollment key file %s has loose permissions %04o — must be 0600",
+				cfg.KeyPath, info.Mode().Perm())
 		}
 	}
 
@@ -131,6 +131,7 @@ func cmdServer(args []string) int {
 	flags := flag.NewFlagSet("server", flag.ExitOnError)
 	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
 	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
+	insecure := flags.Bool("insecure", false, "Allow plain HTTP (no TLS)")
 	flags.Parse(args)
 
 	logger, cfg, ikm, hmacKey, err := loadConfig(*configPath, *logLevel)
@@ -195,7 +196,11 @@ func cmdServer(args []string) int {
 			return 1
 		}
 	} else {
-		logger.Info("listening (plain HTTP)", "addr", cfg.Listen)
+		if !*insecure {
+			logger.Error("TLS not configured — use -insecure to allow plain HTTP")
+			return 1
+		}
+		logger.Warn("listening without TLS (-insecure)", "addr", cfg.Listen)
 		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 			logger.Error("listen", "err", err)
 			return 1
