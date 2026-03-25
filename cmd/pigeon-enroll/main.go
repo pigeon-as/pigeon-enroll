@@ -187,31 +187,22 @@ func cmdServer(args []string) int {
 	}()
 
 	if !*skipTLS {
-		// Auto-TLS with mTLS: derive CA + server cert from enrollment key.
+		// Auto-TLS with mTLS: derive CA, rotate server cert automatically.
 		ca, err := pki.DeriveCA(ikm)
 		if err != nil {
 			logger.Error("derive CA", "err", err)
 			return 1
 		}
-		serverCertPEM, serverKeyPEM, err := pki.GenerateServerCert(ca, []string{"pigeon-enroll"})
-		if err != nil {
-			logger.Error("generate server cert", "err", err)
-			return 1
-		}
-		serverCert, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)
-		if err != nil {
-			logger.Error("load server cert", "err", err)
-			return 1
-		}
 		caPool := x509.NewCertPool()
 		caPool.AddCert(ca.Cert)
+		rotator := pki.NewCertRotator(ca, []string{"pigeon-enroll"}, cfg.ServerCertTTL)
 		httpServer.TLSConfig = &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{serverCert},
-			ClientAuth:   tls.RequireAndVerifyClientCert,
-			ClientCAs:    caPool,
+			MinVersion:     tls.VersionTLS12,
+			GetCertificate: rotator.GetCertificate,
+			ClientAuth:     tls.RequireAndVerifyClientCert,
+			ClientCAs:      caPool,
 		}
-		logger.Info("listening (mTLS)", "addr", cfg.Listen)
+		logger.Info("listening (mTLS)", "addr", cfg.Listen, "server_cert_ttl", cfg.ServerCertTTL)
 		if err := httpServer.ListenAndServeTLS("", ""); err != http.ErrServerClosed {
 			logger.Error("listen", "err", err)
 			return 1
@@ -249,7 +240,7 @@ func cmdGenerateCert(args []string) int {
 	encodeBase64 := flags.Bool("base64", false, "Base64-encode the output (for embedding in env vars)")
 	flags.Parse(args)
 
-	_, _, ikm, _, err := loadConfig(*configPath, "error")
+	_, cfg, ikm, _, err := loadConfig(*configPath, "error")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -261,7 +252,7 @@ func cmdGenerateCert(args []string) int {
 		return 1
 	}
 
-	bundle, err := pki.GenerateClientCert(ca)
+	bundle, err := pki.GenerateClientCert(ca, cfg.ClientCertTTL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "generate client cert: %v\n", err)
 		return 1

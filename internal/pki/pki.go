@@ -15,6 +15,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -22,6 +23,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/hkdf"
@@ -56,12 +58,12 @@ func DeriveCA(ikm []byte) (*CA, error) {
 
 	now := time.Now()
 	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "pigeon-enroll CA"},
-		NotBefore:    now.Add(-5 * time.Minute), // clock skew tolerance
-		NotAfter:     now.Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		IsCA:         true,
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "pigeon-enroll CA"},
+		NotBefore:             now.Add(-5 * time.Minute), // clock skew tolerance
+		NotAfter:              now.Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		IsCA:                  true,
 		BasicConstraintsValid: true,
 		MaxPathLen:            0,
 		MaxPathLenZero:        true,
@@ -83,16 +85,16 @@ func DeriveCA(ikm []byte) (*CA, error) {
 }
 
 // GenerateServerCert creates a P-256 server certificate signed by the CA.
-// The certificate is valid for 30 days and includes the provided IPs/hostnames.
-func GenerateServerCert(ca *CA, hosts []string) (certPEM, keyPEM []byte, err error) {
-	return generateLeaf(ca, hosts, x509.ExtKeyUsageServerAuth, 30*24*time.Hour)
+// The certificate includes the provided IPs/hostnames as SANs.
+func GenerateServerCert(ca *CA, hosts []string, ttl time.Duration) (certPEM, keyPEM []byte, err error) {
+	return generateLeaf(ca, hosts, x509.ExtKeyUsageServerAuth, ttl)
 }
 
 // GenerateClientCert creates a P-256 client certificate bundle (cert + key + CA cert)
-// signed by the CA. The certificate is valid for 1 hour.
+// signed by the CA.
 // Returns the PEM bundle as a single byte slice.
-func GenerateClientCert(ca *CA) ([]byte, error) {
-	certPEM, keyPEM, err := generateLeaf(ca, nil, x509.ExtKeyUsageClientAuth, 1*time.Hour)
+func GenerateClientCert(ca *CA, ttl time.Duration) ([]byte, error) {
+	certPEM, keyPEM, err := generateLeaf(ca, nil, x509.ExtKeyUsageClientAuth, ttl)
 	if err != nil {
 		return nil, err
 	}
@@ -199,4 +201,43 @@ func mustParseCert(der []byte) *x509.Certificate {
 		panic("pki: invalid CA certificate in bundle: " + err.Error())
 	}
 	return cert
+}
+
+// CertRotator lazily generates and caches a server TLS certificate,
+// regenerating it at 50% of its lifetime. Implements tls.Config.GetCertificate.
+type CertRotator struct {
+	ca    *CA
+	hosts []string
+	ttl   time.Duration
+
+	mu      sync.Mutex
+	cached  *tls.Certificate
+	expires time.Time
+}
+
+// NewCertRotator returns a rotator that issues server certs with the given TTL.
+func NewCertRotator(ca *CA, hosts []string, ttl time.Duration) *CertRotator {
+	return &CertRotator{ca: ca, hosts: hosts, ttl: ttl}
+}
+
+// GetCertificate returns a cached server cert, regenerating when past 50% lifetime.
+func (r *CertRotator) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.cached != nil && time.Now().Before(r.expires) {
+		return r.cached, nil
+	}
+
+	certPEM, keyPEM, err := GenerateServerCert(r.ca, r.hosts, r.ttl)
+	if err != nil {
+		return nil, err
+	}
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	r.cached = &tlsCert
+	r.expires = time.Now().Add(r.ttl / 2) // renew at 50% lifetime
+	return r.cached, nil
 }

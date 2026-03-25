@@ -68,7 +68,7 @@ func TestLoadTokenWindowTooSmall(t *testing.T) {
 
 func TestValidateSecretsOrVars(t *testing.T) {
 	// Neither vars nor secrets → error.
-	err := validate(Config{TokenWindow: time.Minute})
+	err := validate(Config{TokenWindow: time.Minute, ClientCertTTL: time.Hour, ServerCertTTL: time.Hour})
 	if err == nil {
 		t.Error("expected error for empty vars and secrets")
 	}
@@ -90,8 +90,10 @@ func TestValidateSecretSpec(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := Config{
-				TokenWindow: time.Minute,
-				Secrets:     []SecretSpec{tt.spec},
+				TokenWindow:   time.Minute,
+				ClientCertTTL: time.Hour,
+				ServerCertTTL: time.Hour,
+				Secrets:       []SecretSpec{tt.spec},
 			}
 			err := validate(cfg)
 			if tt.ok && err != nil {
@@ -106,7 +108,9 @@ func TestValidateSecretSpec(t *testing.T) {
 
 func TestValidateDuplicateSecretName(t *testing.T) {
 	cfg := Config{
-		TokenWindow: time.Minute,
+		TokenWindow:   time.Minute,
+		ClientCertTTL: time.Hour,
+		ServerCertTTL: time.Hour,
 		Secrets: []SecretSpec{
 			{Name: "k", Length: 32, Encoding: "base64"},
 			{Name: "k", Length: 16, Encoding: "hex"},
@@ -119,9 +123,11 @@ func TestValidateDuplicateSecretName(t *testing.T) {
 
 func TestValidateNameConflict(t *testing.T) {
 	cfg := Config{
-		TokenWindow: time.Minute,
-		Secrets:     []SecretSpec{{Name: "k", Length: 32, Encoding: "base64"}},
-		Vars:        map[string]string{"k": "v"},
+		TokenWindow:   time.Minute,
+		ClientCertTTL: time.Hour,
+		ServerCertTTL: time.Hour,
+		Secrets:       []SecretSpec{{Name: "k", Length: 32, Encoding: "base64"}},
+		Vars:          map[string]string{"k": "v"},
 	}
 	if err := validate(cfg); err == nil {
 		t.Error("expected error for name conflict")
@@ -133,9 +139,11 @@ func TestValidateVaultTokenRefersToSecret(t *testing.T) {
 		"token": map[string]interface{}{"id": "vault_token"},
 	})
 	cfg := Config{
-		TokenWindow: time.Minute,
-		Secrets:     []SecretSpec{{Name: "vault_token", Length: 32, Encoding: "hex"}},
-		Actions:     []action.Config{{Type: "vault-init", Config: vaultCfg}},
+		TokenWindow:   time.Minute,
+		ClientCertTTL: time.Hour,
+		ServerCertTTL: time.Hour,
+		Secrets:       []SecretSpec{{Name: "vault_token", Length: 32, Encoding: "hex"}},
+		Actions:       []action.Config{{Type: "vault-init", Config: vaultCfg}},
 	}
 	if err := validate(cfg); err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -147,9 +155,11 @@ func TestValidateVaultTokenRefersToMissingSecret(t *testing.T) {
 		"token": map[string]interface{}{"id": "nonexistent"},
 	})
 	cfg := Config{
-		TokenWindow: time.Minute,
-		Secrets:     []SecretSpec{{Name: "other", Length: 32, Encoding: "hex"}},
-		Actions:     []action.Config{{Type: "vault-init", Config: vaultCfg}},
+		TokenWindow:   time.Minute,
+		ClientCertTTL: time.Hour,
+		ServerCertTTL: time.Hour,
+		Secrets:       []SecretSpec{{Name: "other", Length: 32, Encoding: "hex"}},
+		Actions:       []action.Config{{Type: "vault-init", Config: vaultCfg}},
 	}
 	if err := validate(cfg); err == nil {
 		t.Error("expected error for vault.token.id referencing missing secret")

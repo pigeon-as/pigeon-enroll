@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"net"
 	"testing"
+	"time"
 )
 
 // testIKM is a fixed 32-byte key for tests.
@@ -72,7 +73,7 @@ func TestGenerateServerCert(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	certPEM, keyPEM, err := GenerateServerCert(ca, []string{"127.0.0.1", "enroll.internal"})
+	certPEM, keyPEM, err := GenerateServerCert(ca, []string{"127.0.0.1", "enroll.internal"}, 30*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +113,7 @@ func TestGenerateClientCert_Bundle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bundle, err := GenerateClientCert(ca)
+	bundle, err := GenerateClientCert(ca, 1*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +144,7 @@ func TestRoundTrip_mTLS(t *testing.T) {
 	}
 
 	// Server side
-	serverCertPEM, serverKeyPEM, err := GenerateServerCert(ca, []string{"127.0.0.1"})
+	serverCertPEM, serverKeyPEM, err := GenerateServerCert(ca, []string{"127.0.0.1"}, 30*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +164,7 @@ func TestRoundTrip_mTLS(t *testing.T) {
 	}
 
 	// Client side
-	clientBundle, err := GenerateClientCert(ca)
+	clientBundle, err := GenerateClientCert(ca, 1*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,5 +219,32 @@ func TestLoadClientBundle_BadInput(t *testing.T) {
 	_, _, _, err := LoadClientBundle([]byte("not pem"))
 	if err == nil {
 		t.Error("expected error for invalid PEM")
+	}
+}
+
+func TestCertRotator_CachesAndRenews(t *testing.T) {
+	ca, err := DeriveCA(testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rotator := NewCertRotator(ca, []string{"pigeon-enroll"}, 1*time.Hour)
+
+	// First call generates a cert.
+	cert1, err := rotator.GetCertificate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cert1 == nil {
+		t.Fatal("expected non-nil cert")
+	}
+
+	// Second call returns cached cert.
+	cert2, err := rotator.GetCertificate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cert1 != cert2 {
+		t.Error("expected same cached cert pointer")
 	}
 }

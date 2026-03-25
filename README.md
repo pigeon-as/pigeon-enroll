@@ -33,9 +33,9 @@ pigeon-enroll run-actions -type=vault-init
 
 ## TLS
 
-mTLS is enabled by default — the CA is derived deterministically from the enrollment key via HKDF. Every server with the same key produces the same Ed25519 CA, no coordination needed. Server certs (P-256, 30d validity) and client certs (P-256, 1h validity) are signed by this CA.
+mTLS is enabled by default — the CA is derived deterministically from the enrollment key via HKDF. Every server with the same key produces the same Ed25519 CA, no coordination needed. Server certs (P-256, `server_cert_ttl` default 30d) auto-rotate at 50% lifetime. Client certs (P-256, `client_cert_ttl` default 1h) are signed by this CA.
 
-`generate-cert` outputs a standard PEM bundle (client cert + EC private key + CA cert). Default is PEM to stdout; `-base64` encodes it for env var embedding; `-output <path>` writes to a file (0600 perms). Flags combine: `-base64 -output /tmp/cert.b64` writes base64 to file.
+`generate-cert` outputs a standard PEM bundle (client cert + EC private key + CA cert). Default is PEM to stdout; `-base64` encodes it for env var embedding; `-output <path>` writes to a file (0600 perms).
 
 Use `-skip-tls` for testing without TLS.
 
@@ -46,6 +46,8 @@ Use `-skip-tls` for testing without TLS.
   "listen": ":8443",
   "key_path": "/encrypted/pigeon/enrollment-key",
   "token_window": "30m",
+  "client_cert_ttl": "1h",
+  "server_cert_ttl": "720h",
   "audit_path": "/var/log/pigeon-enroll/audit.jsonl",
   "trusted_proxies": ["10.0.0.0/8"],
   "verifiers": [
