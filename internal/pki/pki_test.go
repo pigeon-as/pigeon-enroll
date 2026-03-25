@@ -27,10 +27,12 @@ func TestDeriveCA_Deterministic(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if string(ca1.CertPEM) != string(ca2.CertPEM) {
+		t.Error("same IKM should produce identical CA certs")
+	}
 	if !ca1.Key.Equal(ca2.Key) {
 		t.Error("same IKM should produce identical CA keys")
 	}
-	// CA cert bytes may differ (time.Now() in NotBefore/NotAfter) — only the key must be deterministic.
 }
 
 func TestDeriveCA_DifferentIKM(t *testing.T) {

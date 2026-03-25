@@ -40,8 +40,9 @@ type CA struct {
 	Key     ed25519.PrivateKey
 }
 
-// DeriveCA produces a deterministic Ed25519 CA from the enrollment key.
-// The CA certificate is self-signed with a 1-year validity.
+// DeriveCA produces a fully deterministic Ed25519 CA from the enrollment key.
+// Every server with the same IKM produces byte-identical CA certs (fixed validity
+// window, deterministic serial, Ed25519 deterministic signing).
 func DeriveCA(ikm []byte) (*CA, error) {
 	seed := make([]byte, ed25519.SeedSize)
 	r := hkdf.New(sha256.New, ikm, nil, []byte(hkdfInfoCAKey))
@@ -51,19 +52,15 @@ func DeriveCA(ikm []byte) (*CA, error) {
 	key := ed25519.NewKeyFromSeed(seed)
 
 	serialBytes := make([]byte, 16)
-	// Deterministic serial from the seed so the CA key is identical everywhere.
-	// The cert bytes may differ between servers (NotBefore/NotAfter use time.Now()),
-	// but trust is determined by the key, not the cert encoding.
 	h := sha256.Sum256(seed)
 	copy(serialBytes, h[:16])
 	serial := new(big.Int).SetBytes(serialBytes)
 
-	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "pigeon-enroll CA"},
-		NotBefore:             now.Add(-5 * time.Minute), // clock skew tolerance
-		NotAfter:              now.Add(10 * 365 * 24 * time.Hour),
+		NotBefore:             time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		IsCA:                  true,
 		BasicConstraintsValid: true,
