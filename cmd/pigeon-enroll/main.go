@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
 	"strings"
 	"time"
 
@@ -98,14 +97,6 @@ func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byt
 		return logger, config.Config{}, nil, nil, err
 	}
 
-	if runtime.GOOS != "windows" {
-		if info, err := os.Stat(cfg.KeyPath); err == nil && info.Mode().Perm()&0077 != 0 {
-			logger.Warn("enrollment key file has loose permissions — should be 0600",
-				"path", cfg.KeyPath,
-				"mode", fmt.Sprintf("%04o", info.Mode().Perm()))
-		}
-	}
-
 	enrollmentKeyHex, err := os.ReadFile(cfg.KeyPath)
 	if err != nil {
 		return logger, config.Config{}, nil, nil, fmt.Errorf("read enrollment key: %w", err)
@@ -131,6 +122,7 @@ func cmdServer(args []string) int {
 	flags := flag.NewFlagSet("server", flag.ExitOnError)
 	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
 	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
+	skipTLS := flags.Bool("skip-tls", false, "Allow plain HTTP (no TLS)")
 	flags.Parse(args)
 
 	logger, cfg, ikm, hmacKey, err := loadConfig(*configPath, *logLevel)
@@ -194,8 +186,15 @@ func cmdServer(args []string) int {
 			logger.Error("listen", "err", err)
 			return 1
 		}
+	} else if cfg.TLSCert != "" || cfg.TLSKey != "" {
+		logger.Error("both tls_cert and tls_key must be set (only one provided)")
+		return 1
 	} else {
-		logger.Info("listening (plain HTTP)", "addr", cfg.Listen)
+		if !*skipTLS {
+			logger.Error("TLS not configured — use -skip-tls to allow plain HTTP")
+			return 1
+		}
+		logger.Warn("listening without TLS (-skip-tls)", "addr", cfg.Listen)
 		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 			logger.Error("listen", "err", err)
 			return 1

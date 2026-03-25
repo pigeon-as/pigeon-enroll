@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/action"
@@ -131,13 +132,17 @@ func validate(cfg Config) error {
 	return nil
 }
 
-// CheckKeyFile verifies the enrollment key file exists.
+// CheckKeyFile verifies the enrollment key file exists and has safe permissions.
 func CheckKeyFile(path string) error {
-	if _, err := os.Stat(path); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("enrollment key not found at %s: %w (must be provisioned by Terraform)", path, err)
 		}
 		return fmt.Errorf("cannot access enrollment key at %s: %w", path, err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+		return fmt.Errorf("enrollment key file %s has loose permissions %04o — must be 0600", path, info.Mode().Perm())
 	}
 	return nil
 }

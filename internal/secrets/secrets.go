@@ -16,10 +16,23 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
-// ValidateIKM checks that the enrollment key is exactly 32 bytes.
+const (
+	// IKMLength is the required enrollment key size (256-bit).
+	IKMLength = 32
+
+	// hkdfInfoPrefix is the domain separator for HKDF secret derivation.
+	// Changing this changes all derived secrets.
+	hkdfInfoPrefix = "pigeon-enroll derive "
+
+	// hkdfInfoHMACKey is the HKDF info string for the HMAC signing key.
+	// Changing this changes the signing key and invalidates all tokens.
+	hkdfInfoHMACKey = "pigeon-enroll hmac-signing-key"
+)
+
+// ValidateIKM checks that the enrollment key is exactly IKMLength bytes.
 func ValidateIKM(ikm []byte) error {
-	if len(ikm) != 32 {
-		return fmt.Errorf("enrollment key must be 32 bytes, got %d", len(ikm))
+	if len(ikm) != IKMLength {
+		return fmt.Errorf("enrollment key must be %d bytes, got %d", IKMLength, len(ikm))
 	}
 	return nil
 }
@@ -29,7 +42,7 @@ func DeriveHMACKey(ikm []byte) ([]byte, error) {
 	if err := ValidateIKM(ikm); err != nil {
 		return nil, fmt.Errorf("derive HMAC key: %w", err)
 	}
-	r := hkdf.New(sha256.New, ikm, nil, []byte("pigeon-enroll hmac-signing-key"))
+	r := hkdf.New(sha256.New, ikm, nil, []byte(hkdfInfoHMACKey))
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(r, key); err != nil {
 		return nil, fmt.Errorf("derive HMAC key: %w", err)
@@ -123,9 +136,9 @@ func derive(specs []config.SecretSpec, ikm []byte) (map[string]string, error) {
 	for _, s := range specs {
 		var info []byte
 		if s.Scope != "" {
-			info = []byte("pigeon-enroll derive " + s.Scope + " " + s.Name)
+			info = []byte(hkdfInfoPrefix + s.Scope + " " + s.Name)
 		} else {
-			info = []byte("pigeon-enroll derive " + s.Name)
+			info = []byte(hkdfInfoPrefix + s.Name)
 		}
 		r := hkdf.New(sha256.New, ikm, nil, info)
 		b := make([]byte, s.Length)
