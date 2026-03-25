@@ -28,6 +28,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.TokenWindow != 30*time.Minute {
 		t.Errorf("token_window = %v, want 30m", cfg.TokenWindow)
 	}
+	if cfg.ClientCertTTL != time.Hour {
+		t.Errorf("client_cert_ttl = %v, want 1h", cfg.ClientCertTTL)
+	}
+	if cfg.ServerCertTTL != 720*time.Hour {
+		t.Errorf("server_cert_ttl = %v, want 720h", cfg.ServerCertTTL)
+	}
 }
 
 func TestLoadTokenWindow(t *testing.T) {
@@ -63,6 +69,53 @@ func TestLoadTokenWindowTooSmall(t *testing.T) {
 	_, err := Load(path)
 	if err == nil {
 		t.Error("expected error for sub-second token_window")
+	}
+}
+
+func TestLoadCertTTL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "client_cert_ttl": "2h", "server_cert_ttl": "48h"}`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.ClientCertTTL != 2*time.Hour {
+		t.Errorf("client_cert_ttl = %v, want 2h", cfg.ClientCertTTL)
+	}
+	if cfg.ServerCertTTL != 48*time.Hour {
+		t.Errorf("server_cert_ttl = %v, want 48h", cfg.ServerCertTTL)
+	}
+}
+
+func TestLoadCertTTLInvalid(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "client_cert_ttl": "bogus"}`), 0644)
+	if _, err := Load(path); err == nil {
+		t.Error("expected error for invalid client_cert_ttl")
+	}
+
+	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "server_cert_ttl": "bogus"}`), 0644)
+	if _, err := Load(path); err == nil {
+		t.Error("expected error for invalid server_cert_ttl")
+	}
+}
+
+func TestLoadCertTTLTooSmall(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "client_cert_ttl": "500ms"}`), 0644)
+	if _, err := Load(path); err == nil {
+		t.Error("expected error for sub-second client_cert_ttl")
+	}
+
+	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "server_cert_ttl": "100ms"}`), 0644)
+	if _, err := Load(path); err == nil {
+		t.Error("expected error for sub-second server_cert_ttl")
 	}
 }
 

@@ -51,7 +51,9 @@ func DeriveCA(ikm []byte) (*CA, error) {
 	key := ed25519.NewKeyFromSeed(seed)
 
 	serialBytes := make([]byte, 16)
-	// Deterministic serial from the seed so the CA cert is identical everywhere.
+	// Deterministic serial from the seed so the CA key is identical everywhere.
+	// The cert bytes may differ between servers (NotBefore/NotAfter use time.Now()),
+	// but trust is determined by the key, not the cert encoding.
 	h := sha256.Sum256(seed)
 	copy(serialBytes, h[:16])
 	serial := new(big.Int).SetBytes(serialBytes)
@@ -61,7 +63,7 @@ func DeriveCA(ikm []byte) (*CA, error) {
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "pigeon-enroll CA"},
 		NotBefore:             now.Add(-5 * time.Minute), // clock skew tolerance
-		NotAfter:              now.Add(365 * 24 * time.Hour),
+		NotAfter:              now.Add(10 * 365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		IsCA:                  true,
 		BasicConstraintsValid: true,
@@ -200,8 +202,6 @@ func generateLeaf(ca *CA, hosts []string, usage x509.ExtKeyUsage, validity time.
 	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 	return certPEM, keyPEM, nil
 }
-
-
 
 // CertRotator lazily generates and caches a server TLS certificate,
 // regenerating it at 50% of its lifetime. Implements tls.Config.GetCertificate.
