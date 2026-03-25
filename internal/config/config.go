@@ -23,19 +23,21 @@ type SecretSpec struct {
 
 // Config holds the pigeon-enroll configuration.
 type Config struct {
-	Listen         string            `json:"listen"`
-	KeyPath        string            `json:"key_path"`
-	TLSCert        string            `json:"tls_cert"`
-	TLSKey         string            `json:"tls_key"`
-	TokenWindow    time.Duration     `json:"-"`
-	TokenWindowRaw string            `json:"token_window"`
-	AuditPath      string            `json:"audit_path"`
-	Verifiers      []verify.Config   `json:"verifiers"`
-	Vars           map[string]string `json:"vars"`
-	Secrets        []SecretSpec      `json:"secrets"`
-	SecretsPath    string            `json:"secrets_path"`
-	TrustedProxies []string          `json:"trusted_proxies"`
-	Actions        []action.Config   `json:"actions"`
+	Listen           string            `json:"listen"`
+	KeyPath          string            `json:"key_path"`
+	TokenWindow      time.Duration     `json:"-"`
+	TokenWindowRaw   string            `json:"token_window"`
+	ClientCertTTL    time.Duration     `json:"-"`
+	ClientCertTTLRaw string            `json:"client_cert_ttl"`
+	ServerCertTTL    time.Duration     `json:"-"`
+	ServerCertTTLRaw string            `json:"server_cert_ttl"`
+	AuditPath        string            `json:"audit_path"`
+	Verifiers        []verify.Config   `json:"verifiers"`
+	Vars             map[string]string `json:"vars"`
+	Secrets          []SecretSpec      `json:"secrets"`
+	SecretsPath      string            `json:"secrets_path"`
+	TrustedProxies   []string          `json:"trusted_proxies"`
+	Actions          []action.Config   `json:"actions"`
 }
 
 // Load reads a JSON config file and returns a validated Config with defaults applied.
@@ -65,6 +67,24 @@ func Load(path string) (Config, error) {
 		}
 		cfg.TokenWindow = d
 	}
+	if cfg.ClientCertTTLRaw == "" {
+		cfg.ClientCertTTL = 1 * time.Hour
+	} else {
+		d, err := time.ParseDuration(cfg.ClientCertTTLRaw)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse client_cert_ttl: %w", err)
+		}
+		cfg.ClientCertTTL = d
+	}
+	if cfg.ServerCertTTLRaw == "" {
+		cfg.ServerCertTTL = 30 * 24 * time.Hour
+	} else {
+		d, err := time.ParseDuration(cfg.ServerCertTTLRaw)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse server_cert_ttl: %w", err)
+		}
+		cfg.ServerCertTTL = d
+	}
 
 	if err := validate(cfg); err != nil {
 		return Config{}, err
@@ -75,6 +95,12 @@ func Load(path string) (Config, error) {
 func validate(cfg Config) error {
 	if cfg.TokenWindow < time.Second {
 		return fmt.Errorf("token_window must be at least 1s")
+	}
+	if cfg.ClientCertTTL < time.Second {
+		return fmt.Errorf("client_cert_ttl must be at least 1s")
+	}
+	if cfg.ServerCertTTL < time.Second {
+		return fmt.Errorf("server_cert_ttl must be at least 1s")
 	}
 	if len(cfg.Vars) == 0 && len(cfg.Secrets) == 0 {
 		return fmt.Errorf("vars or secrets must not be empty")

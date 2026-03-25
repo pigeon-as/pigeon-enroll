@@ -15,9 +15,13 @@ pigeon-enroll server
 # Generate a claim token
 pigeon-enroll generate-token [-scope=worker]
 
-# Claim (worker side)
+# Generate a client TLS certificate bundle
+pigeon-enroll generate-cert -output /tmp/enroll-cert.pem
+
+# Claim (worker side, with mTLS)
 pigeon-enroll claim -url https://enroll:8443/claim \
-  -token <hmac> -scope worker \
+  -token <hmac> -tls /tmp/enroll-cert.pem \
+  -scope worker \
   -output /encrypted/pigeon/secrets.json
 
 # Run all actions
@@ -27,15 +31,23 @@ pigeon-enroll run-actions
 pigeon-enroll run-actions -type=vault-init
 ```
 
+## TLS
+
+mTLS is enabled by default — the CA is derived deterministically from the enrollment key via HKDF. Every server with the same key produces the same Ed25519 CA, no coordination needed. Server certs (P-256, `server_cert_ttl` default 30d) auto-rotate at 50% lifetime. Client certs (P-256, `client_cert_ttl` default 1h) are signed by this CA.
+
+`generate-cert` outputs a standard PEM bundle (client cert + EC private key + CA cert). Default is PEM to stdout; `-base64` encodes it for env var embedding; `-output <path>` writes to a file (0600 perms).
+
+Use `-skip-tls` for testing without TLS.
+
 ## Config
 
 ```json
 {
   "listen": ":8443",
   "key_path": "/encrypted/pigeon/enrollment-key",
-  "tls_cert": "/path/to/cert.pem",
-  "tls_key": "/path/to/key.pem",
   "token_window": "30m",
+  "client_cert_ttl": "1h",
+  "server_cert_ttl": "720h",
   "audit_path": "/var/log/pigeon-enroll/audit.jsonl",
   "trusted_proxies": ["10.0.0.0/8"],
   "verifiers": [
@@ -141,12 +153,12 @@ Adds a recovery passphrase to a LUKS2 keyslot for disaster recovery. Uses the vo
 
 ## Verifiers
 
-Pluggable claim verification. Multiple verifiers run as a chain. Each has a `fatal` flag — fatal verifiers reject the claim, non-fatal log and continue.
+Pluggable claim verification. Multiple verifiers run as a chain. All verifiers are fatal by default — set `"fatal": false` to log and continue instead.
 
-| Type | Description | Default fatal |
-|------|-------------|---------------|
-| `cidr` | Allow claims from specific CIDRs | no |
-| `ovh` | Verify client IP is an OVH-owned server | yes |
+| Type | Description |
+|------|-------------|
+| `cidr` | Allow claims from specific CIDRs |
+| `ovh` | Verify client IP is an OVH-owned server |
 
 ## Build
 
