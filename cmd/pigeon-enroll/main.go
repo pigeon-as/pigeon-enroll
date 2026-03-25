@@ -131,7 +131,7 @@ func cmdServer(args []string) int {
 	flags := flag.NewFlagSet("server", flag.ExitOnError)
 	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
 	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
-	insecure := flags.Bool("insecure", false, "Allow plain HTTP (no TLS)")
+	skipTLS := flags.Bool("skip-tls", false, "Allow plain HTTP (no TLS)")
 	flags.Parse(args)
 
 	logger, cfg, ikm, hmacKey, err := loadConfig(*configPath, *logLevel)
@@ -199,11 +199,11 @@ func cmdServer(args []string) int {
 		logger.Error("both tls_cert and tls_key must be set (only one provided)")
 		return 1
 	} else {
-		if !*insecure {
-			logger.Error("TLS not configured — use -insecure to allow plain HTTP")
+		if !*skipTLS {
+			logger.Error("TLS not configured — use -skip-tls to allow plain HTTP")
 			return 1
 		}
-		logger.Warn("listening without TLS (-insecure)", "addr", cfg.Listen)
+		logger.Warn("listening without TLS (-skip-tls)", "addr", cfg.Listen)
 		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 			logger.Error("listen", "err", err)
 			return 1
