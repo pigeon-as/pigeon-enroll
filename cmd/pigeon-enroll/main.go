@@ -195,6 +195,9 @@ func cmdServer(args []string) int {
 			logger.Error("listen", "err", err)
 			return 1
 		}
+	} else if cfg.TLSCert != "" || cfg.TLSKey != "" {
+		logger.Error("both tls_cert and tls_key must be set (only one provided)")
+		return 1
 	} else {
 		if !*insecure {
 			logger.Error("TLS not configured — use -insecure to allow plain HTTP")
