@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -245,6 +246,7 @@ func cmdGenerateCert(args []string) int {
 	flags := flag.NewFlagSet("generate-cert", flag.ExitOnError)
 	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
 	output := flags.String("output", "", "Write PEM bundle to file (0600) instead of stdout")
+	encodeBase64 := flags.Bool("base64", false, "Base64-encode the output (for embedding in env vars)")
 	flags.Parse(args)
 
 	_, _, ikm, _, err := loadConfig(*configPath, "error")
@@ -265,15 +267,22 @@ func cmdGenerateCert(args []string) int {
 		return 1
 	}
 
+	var data []byte
+	if *encodeBase64 {
+		data = []byte(base64.StdEncoding.EncodeToString(bundle))
+	} else {
+		data = bundle
+	}
+
 	if *output != "" {
-		if err := os.WriteFile(*output, bundle, 0600); err != nil {
+		if err := os.WriteFile(*output, data, 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "write: %v\n", err)
 			return 1
 		}
 		return 0
 	}
 
-	os.Stdout.Write(bundle)
+	os.Stdout.Write(data)
 	return 0
 }
 
