@@ -288,7 +288,7 @@ func cmdClaim(args []string) int {
 	flags.Parse(args)
 
 	if *url == "" || *tok == "" || *output == "" {
-		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<url> -token=<hmac> -output=<path>")
+		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<url> -token=<hmac> -output=<path> [-tls=<bundle>] [-scope=<scope>] [-insecure]")
 		return 1
 	}
 

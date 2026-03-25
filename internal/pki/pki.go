@@ -124,8 +124,11 @@ func LoadClientBundle(bundlePEM []byte) (*ecdsa.PrivateKey, *x509.Certificate, *
 			if certDER == nil {
 				certDER = block.Bytes
 			} else {
-				// Second cert is the CA
-				pool.AddCert(mustParseCert(block.Bytes))
+				caCert, err := x509.ParseCertificate(block.Bytes)
+				if err != nil {
+					return nil, nil, nil, fmt.Errorf("parse CA cert in bundle: %w", err)
+				}
+				pool.AddCert(caCert)
 			}
 		case "EC PRIVATE KEY":
 			keyDER = block.Bytes
@@ -137,6 +140,9 @@ func LoadClientBundle(bundlePEM []byte) (*ecdsa.PrivateKey, *x509.Certificate, *
 	}
 	if keyDER == nil {
 		return nil, nil, nil, fmt.Errorf("no private key found in bundle")
+	}
+	if len(pool.Subjects()) == 0 {
+		return nil, nil, nil, fmt.Errorf("no CA certificate found in bundle")
 	}
 
 	cert, err := x509.ParseCertificate(certDER)
@@ -195,13 +201,7 @@ func generateLeaf(ca *CA, hosts []string, usage x509.ExtKeyUsage, validity time.
 	return certPEM, keyPEM, nil
 }
 
-func mustParseCert(der []byte) *x509.Certificate {
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		panic("pki: invalid CA certificate in bundle: " + err.Error())
-	}
-	return cert
-}
+
 
 // CertRotator lazily generates and caches a server TLS certificate,
 // regenerating it at 50% of its lifetime. Implements tls.Config.GetCertificate.
