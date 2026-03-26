@@ -394,6 +394,9 @@ func parsePerms(s string) (os.FileMode, error) {
 	if err != nil {
 		return 0, fmt.Errorf("parse perms %q: %w", s, err)
 	}
+	if p > 0o777 {
+		return 0, fmt.Errorf("invalid perms %q: must be between 0000 and 0777", s)
+	}
 	return os.FileMode(p), nil
 }
 
