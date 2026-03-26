@@ -84,7 +84,7 @@ func trimJSONWhitespace(b []byte) []byte {
 }
 
 // WriteAtomic writes data to path atomically via temp file + rename.
-func WriteAtomic(path string, data []byte, perm os.FileMode) error {
+func WriteAtomic(path string, data []byte, perm os.FileMode, uid, gid int) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -103,6 +103,9 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := chown(tmp.Name(), uid, gid); err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)

@@ -378,7 +378,18 @@ func cmdRender(args []string) int {
 			return 1
 		}
 
-		if err := render.WriteAtomic(tpl.Destination, rendered, perm); err != nil {
+		uid, err := render.LookupUser(tpl.User)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", tpl.Destination, err)
+			return 1
+		}
+		gid, err := render.LookupGroup(tpl.Group)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", tpl.Destination, err)
+			return 1
+		}
+
+		if err := render.WriteAtomic(tpl.Destination, rendered, perm, uid, gid); err != nil {
 			fmt.Fprintf(os.Stderr, "write %s: %v\n", tpl.Destination, err)
 			return 1
 		}
