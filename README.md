@@ -177,7 +177,7 @@ template {
 }
 ```
 
-Variables come from the claim response JSON (merged secrets + vars). Workers use `pigeon-enroll render` instead of running a pigeon-template daemon.
+Variables come from the `-vars` JSON file, passed as-is to templates. Like Terraform's `templatefile(path, vars)`, the vars object can contain nested maps — templates navigate the structure directly (e.g. `${secrets.gossip_key}`, `${vars.datacenter}`).
 
 ## Build
 

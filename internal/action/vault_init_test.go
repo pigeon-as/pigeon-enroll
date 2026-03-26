@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -23,11 +22,6 @@ func jsonToBody(t *testing.T, data []byte) hcl.Body {
 		t.Fatalf("parse test body: %s", diags.Error())
 	}
 	return f.Body
-}
-
-// hclEscape escapes backslashes for embedding paths in HCL strings (Windows).
-func hclEscape(s string) string {
-	return strings.ReplaceAll(s, `\`, `\\`)
 }
 
 func TestVaultInit_AlreadyInitialized(t *testing.T) {
