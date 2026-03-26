@@ -5,11 +5,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/zclconf/go-cty/cty"
 )
 
 func TestFileSimple(t *testing.T) {
 	tpl := writeTempFile(t, "simple.tpl", `hello ${name}`)
-	got, err := File(tpl, map[string]string{"name": "world"})
+	got, err := File(tpl, map[string]cty.Value{"name": cty.StringVal("world")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,9 +22,9 @@ func TestFileSimple(t *testing.T) {
 
 func TestFileMultipleVars(t *testing.T) {
 	tpl := writeTempFile(t, "multi.tpl", `dc=${datacenter} key=${gossip_key}`)
-	got, err := File(tpl, map[string]string{
-		"datacenter": "eu-west-gra",
-		"gossip_key": "abc123",
+	got, err := File(tpl, map[string]cty.Value{
+		"datacenter": cty.StringVal("eu-west-gra"),
+		"gossip_key": cty.StringVal("abc123"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +38,7 @@ func TestFileMultipleVars(t *testing.T) {
 func TestFileGoTemplatePassthrough(t *testing.T) {
 	// {{ }} must pass through as literal text — HCL template engine ignores them.
 	tpl := writeTempFile(t, "passthrough.tpl", `bind_addr = "{{ GetInterfaceIP \"wg0\" }}"`)
-	got, err := File(tpl, map[string]string{})
+	got, err := File(tpl, map[string]cty.Value{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +52,7 @@ func TestFileMixedSyntax(t *testing.T) {
 	// Real-world pattern: HCL ${} interpolation alongside Go {{ }} passthrough.
 	tpl := writeTempFile(t, "mixed.tpl", `encrypt = "${consul_encrypt}"
 bind_addr = "{{ GetInterfaceIP \"wg0\" }}"`)
-	got, err := File(tpl, map[string]string{"consul_encrypt": "secret123"})
+	got, err := File(tpl, map[string]cty.Value{"consul_encrypt": cty.StringVal("secret123")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +65,7 @@ bind_addr = "{{ GetInterfaceIP \"wg0\" }}"`
 
 func TestFileUndefinedVar(t *testing.T) {
 	tpl := writeTempFile(t, "undef.tpl", `hello ${missing}`)
-	_, err := File(tpl, map[string]string{})
+	_, err := File(tpl, map[string]cty.Value{})
 	if err == nil {
 		t.Fatal("expected error for undefined variable")
 	}
@@ -71,7 +73,7 @@ func TestFileUndefinedVar(t *testing.T) {
 
 func TestFileInvalidSyntax(t *testing.T) {
 	tpl := writeTempFile(t, "invalid.tpl", `hello ${`)
-	_, err := File(tpl, map[string]string{})
+	_, err := File(tpl, map[string]cty.Value{})
 	if err == nil {
 		t.Fatal("expected error for invalid template syntax")
 	}
@@ -83,10 +85,10 @@ func TestFileMultiline(t *testing.T) {
   "gossip_key": "${gossip_key}",
   "wg_psk": "${wg_psk}"
 }`)
-	got, err := File(tpl, map[string]string{
-		"mesh_seeds": `["10.0.0.1", "10.0.0.2"]`,
-		"gossip_key": "gk-base64",
-		"wg_psk":     "psk-base64",
+	got, err := File(tpl, map[string]cty.Value{
+		"mesh_seeds": cty.StringVal(`["10.0.0.1", "10.0.0.2"]`),
+		"gossip_key": cty.StringVal("gk-base64"),
+		"wg_psk":     cty.StringVal("psk-base64"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -119,6 +121,58 @@ func TestWriteAtomic(t *testing.T) {
 		if info.Mode().Perm() != 0640 {
 			t.Fatalf("got perms %04o, want 0640", info.Mode().Perm())
 		}
+	}
+}
+
+func TestFileNestedObject(t *testing.T) {
+	tpl := writeTempFile(t, "nested.tpl", `key=${secrets.gossip_key} dc=${vars.datacenter}`)
+	got, err := File(tpl, map[string]cty.Value{
+		"secrets": cty.ObjectVal(map[string]cty.Value{
+			"gossip_key": cty.StringVal("abc123"),
+		}),
+		"vars": cty.ObjectVal(map[string]cty.Value{
+			"datacenter": cty.StringVal("eu-west-gra"),
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `key=abc123 dc=eu-west-gra`
+	if string(got) != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestParseVarsJSON(t *testing.T) {
+	data := []byte(`{"name": "world", "nested": {"key": "val"}}`)
+	got, err := ParseVarsJSON(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["name"].AsString() != "world" {
+		t.Fatalf("name: got %q, want %q", got["name"].AsString(), "world")
+	}
+	nested := got["nested"].AsValueMap()
+	if nested["key"].AsString() != "val" {
+		t.Fatalf("nested.key: got %q, want %q", nested["key"].AsString(), "val")
+	}
+}
+
+func TestParseVarsJSONNotObject(t *testing.T) {
+	_, err := ParseVarsJSON([]byte(`"just a string"`))
+	if err == nil {
+		t.Fatal("expected error for non-object JSON")
+	}
+}
+
+func TestParseVarsFileEmpty(t *testing.T) {
+	path := writeTempFile(t, "empty.json", "")
+	got, err := ParseVarsFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil for empty file, got %v", got)
 	}
 }
 

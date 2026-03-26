@@ -14,10 +14,12 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
+	ctyjson "github.com/zclconf/go-cty/cty/json"
 )
 
 // File renders a single HCL template file with the given variables.
-func File(path string, vars map[string]string) ([]byte, error) {
+// Variables can be strings or nested objects, like Terraform's templatefile().
+func File(path string, vars map[string]cty.Value) ([]byte, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read template %s: %w", path, err)
@@ -28,12 +30,7 @@ func File(path string, vars map[string]string) ([]byte, error) {
 		return nil, fmt.Errorf("parse template %s: %s", path, diags.Error())
 	}
 
-	ctx := &hcl.EvalContext{
-		Variables: make(map[string]cty.Value, len(vars)),
-	}
-	for k, v := range vars {
-		ctx.Variables[k] = cty.StringVal(v)
-	}
+	ctx := &hcl.EvalContext{Variables: vars}
 
 	val, diags := expr.Value(ctx)
 	if diags.HasErrors() {
@@ -41,6 +38,49 @@ func File(path string, vars map[string]string) ([]byte, error) {
 	}
 
 	return []byte(val.AsString()), nil
+}
+
+// ParseVarsJSON reads a JSON file and converts it to cty values for use as
+// template variables. Uses go-cty's built-in JSON → cty type inference
+// (the same approach as Terraform's templatefile).
+func ParseVarsJSON(data []byte) (map[string]cty.Value, error) {
+	ty, err := ctyjson.ImpliedType(data)
+	if err != nil {
+		return nil, fmt.Errorf("infer type: %w", err)
+	}
+	val, err := ctyjson.Unmarshal(data, ty)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal: %w", err)
+	}
+	if !val.Type().IsObjectType() {
+		return nil, fmt.Errorf("vars must be a JSON object, got %s", val.Type().FriendlyName())
+	}
+	return val.AsValueMap(), nil
+}
+
+// ParseVarsFile reads a JSON file from disk and converts it to template variables.
+func ParseVarsFile(path string) (map[string]cty.Value, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	// Reject empty files. An empty JSON file is not a valid vars object but
+	// json.Decoder would report a confusing "EOF" error.
+	data = trimJSONWhitespace(data)
+	if len(data) == 0 {
+		return nil, nil
+	}
+	return ParseVarsJSON(data)
+}
+
+func trimJSONWhitespace(b []byte) []byte {
+	for len(b) > 0 && (b[0] == ' ' || b[0] == '\t' || b[0] == '\n' || b[0] == '\r') {
+		b = b[1:]
+	}
+	for len(b) > 0 && (b[len(b)-1] == ' ' || b[len(b)-1] == '\t' || b[len(b)-1] == '\n' || b[len(b)-1] == '\r') {
+		b = b[:len(b)-1]
+	}
+	return b
 }
 
 // WriteAtomic writes data to path atomically via temp file + rename.

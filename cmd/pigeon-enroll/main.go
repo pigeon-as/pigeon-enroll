@@ -21,7 +21,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -356,25 +355,10 @@ func cmdRender(args []string) int {
 		return 1
 	}
 
-	data, err := os.ReadFile(*varsPath)
+	vars, err := render.ParseVarsFile(*varsPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "read vars: %v\n", err)
-		return 1
-	}
-
-	var envelope claim.Response
-	if err := json.Unmarshal(data, &envelope); err != nil {
 		fmt.Fprintf(os.Stderr, "parse vars: %v\n", err)
 		return 1
-	}
-
-	// Merge secrets + vars into a flat map. Secrets override vars on conflict.
-	vars := make(map[string]string, len(envelope.Vars)+len(envelope.Secrets))
-	for k, v := range envelope.Vars {
-		vars[k] = v
-	}
-	for k, v := range envelope.Secrets {
-		vars[k] = v
 	}
 
 	for _, tpl := range cfg.Templates {
