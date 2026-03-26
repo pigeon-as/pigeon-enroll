@@ -106,7 +106,7 @@ func TestFileMultiline(t *testing.T) {
 func TestWriteAtomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "output.txt")
-	if err := WriteAtomic(path, []byte("content"), 0640); err != nil {
+	if err := WriteAtomic(path, []byte("content"), 0640, -1, -1); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(path)

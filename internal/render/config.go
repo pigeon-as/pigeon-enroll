@@ -12,6 +12,8 @@ type Template struct {
 	Source      string `hcl:"source"`
 	Destination string `hcl:"destination"`
 	Perms       string `hcl:"perms,optional"`
+	User        string `hcl:"user,optional"`
+	Group       string `hcl:"group,optional"`
 }
 
 // LoadConfig reads a render HCL config file.
