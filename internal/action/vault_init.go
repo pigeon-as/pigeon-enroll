@@ -12,29 +12,32 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/gohcl"
 )
 
 // vaultInitConfig holds vault-init action configuration.
 type vaultInitConfig struct {
-	Addr              string           `json:"addr"`
-	TLSSkipVerify     bool             `json:"tls_skip_verify"`
-	SecretShares      int              `json:"secret_shares"`
-	SecretThreshold   int              `json:"secret_threshold"`
-	RecoveryShares    int              `json:"recovery_shares"`
-	RecoveryThreshold int              `json:"recovery_threshold"`
-	Output            string           `json:"output"`
-	Token             vaultTokenConfig `json:"token"`
+	Addr              string             `hcl:"addr,optional"`
+	TLSSkipVerify     bool               `hcl:"tls_skip_verify,optional"`
+	SecretShares      int                `hcl:"secret_shares,optional"`
+	SecretThreshold   int                `hcl:"secret_threshold,optional"`
+	RecoveryShares    int                `hcl:"recovery_shares,optional"`
+	RecoveryThreshold int                `hcl:"recovery_threshold,optional"`
+	Output            string             `hcl:"output,optional"`
+	Token             []vaultTokenConfig `hcl:"token,block"`
 }
 
 // vaultTokenConfig holds the management token configuration.
 type vaultTokenConfig struct {
 	// ID references a secret name. The derived secret value becomes the
 	// custom token ID passed to vault token create.
-	ID string `json:"id"`
+	ID string `hcl:"id"`
 	// Policies to attach to the management token.
-	Policies []string `json:"policies"`
+	Policies []string `hcl:"policies,optional"`
 	// RevokeRoot revokes the initial root token after the management token is created.
-	RevokeRoot bool `json:"revoke_root"`
+	RevokeRoot bool `hcl:"revoke_root,optional"`
 }
 
 type vaultInit struct {
@@ -42,16 +45,18 @@ type vaultInit struct {
 }
 
 func (v *vaultInit) SecretNames() []string {
-	if v.cfg.Token.ID != "" {
-		return []string{v.cfg.Token.ID}
+	if len(v.cfg.Token) > 0 && v.cfg.Token[0].ID != "" {
+		return []string{v.cfg.Token[0].ID}
 	}
 	return nil
 }
 
-func newVaultInit(raw json.RawMessage) (*vaultInit, error) {
+func newVaultInit(body hcl.Body) (*vaultInit, error) {
 	var cfg vaultInitConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("parse vault-init config: %w", err)
+	if body != nil {
+		if diags := gohcl.DecodeBody(body, nil, &cfg); diags.HasErrors() {
+			return nil, fmt.Errorf("parse vault-init config: %s", diags.Error())
+		}
 	}
 	// Defaults.
 	if cfg.Addr == "" {
@@ -66,8 +71,8 @@ func newVaultInit(raw json.RawMessage) (*vaultInit, error) {
 	if cfg.Output == "" {
 		cfg.Output = "/encrypted/vault/init.json"
 	}
-	if len(cfg.Token.Policies) == 0 && cfg.Token.ID != "" {
-		cfg.Token.Policies = []string{"root"}
+	if len(cfg.Token) > 0 && len(cfg.Token[0].Policies) == 0 && cfg.Token[0].ID != "" {
+		cfg.Token[0].Policies = []string{"root"}
 	}
 	return &vaultInit{cfg: cfg}, nil
 }
@@ -93,11 +98,11 @@ func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[st
 
 	// Preflight: resolve management token ID before initializing Vault.
 	var tokenID string
-	if v.cfg.Token.ID != "" {
+	if len(v.cfg.Token) > 0 && v.cfg.Token[0].ID != "" {
 		var ok bool
-		tokenID, ok = secrets[v.cfg.Token.ID]
+		tokenID, ok = secrets[v.cfg.Token[0].ID]
 		if !ok {
-			return fmt.Errorf("vault-init: token.id %q not found in derived secrets", v.cfg.Token.ID)
+			return fmt.Errorf("vault-init: token.id %q not found in derived secrets", v.cfg.Token[0].ID)
 		}
 	}
 
@@ -119,13 +124,13 @@ func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[st
 
 	rootToken := initResp.RootToken
 
-	if v.cfg.Token.ID != "" {
-		if err := createManagementToken(ctx, client, v.cfg.Addr, rootToken, tokenID, v.cfg.Token.Policies); err != nil {
+	if len(v.cfg.Token) > 0 && v.cfg.Token[0].ID != "" {
+		if err := createManagementToken(ctx, client, v.cfg.Addr, rootToken, tokenID, v.cfg.Token[0].Policies); err != nil {
 			return err
 		}
-		logger.Info("management token created", "policies", v.cfg.Token.Policies)
+		logger.Info("management token created", "policies", v.cfg.Token[0].Policies)
 
-		if v.cfg.Token.RevokeRoot {
+		if v.cfg.Token[0].RevokeRoot {
 			if err := revokeToken(ctx, client, v.cfg.Addr, rootToken); err != nil {
 				return err
 			}

@@ -9,7 +9,7 @@
 ## Usage
 
 ```bash
-# Server (reads /etc/pigeon/enroll.json by default)
+# Server (reads /etc/pigeon/enroll.hcl by default)
 pigeon-enroll server
 
 # Generate a claim token
@@ -23,6 +23,11 @@ pigeon-enroll claim -url https://enroll:8443/claim \
   -token <hmac> -tls /tmp/enroll-cert.pem \
   -scope worker \
   -output /encrypted/pigeon/secrets.json
+
+# Render templates (worker side, one-shot after claim)
+pigeon-enroll render \
+  -config /etc/pigeon/render.hcl \
+  -vars /encrypted/pigeon/secrets.json
 
 # Run all actions
 pigeon-enroll run-actions
@@ -41,43 +46,48 @@ Use `-skip-tls` for testing without TLS.
 
 ## Config
 
-```json
-{
-  "listen": ":8443",
-  "key_path": "/encrypted/pigeon/enrollment-key",
-  "token_window": "30m",
-  "client_cert_ttl": "1h",
-  "server_cert_ttl": "720h",
-  "audit_path": "/var/log/pigeon-enroll/audit.jsonl",
-  "trusted_proxies": ["10.0.0.0/8"],
-  "verifiers": [
-    {"type": "cidr", "config": {"allow": ["0.0.0.0/0", "::/0"]}}
-  ],
-  "secrets": [
-    {"name": "secret_a", "length": 32, "encoding": "base64"},
-    {"name": "secret_b", "length": 16, "encoding": "hex", "scope": "server"}
-  ],
-  "secrets_path": "/encrypted/pigeon/secrets.json",
-  "vars": {
-    "datacenter": "eu-west-gra",
-    "seeds": "10.0.0.1,10.0.0.2"
-  },
-  "actions": [
-    {
-      "type": "vault-init",
-      "config": {
-        "addr": "https://127.0.0.1:8200",
-        "secret_shares": 1,
-        "secret_threshold": 1,
-        "output": "/encrypted/vault/init.json",
-        "token": {
-          "id": "secret_a",
-          "policies": ["root"],
-          "revoke_root": true
-        }
-      }
-    }
-  ]
+```hcl
+listen       = ":8443"
+key_path     = "/encrypted/pigeon/enrollment-key"
+token_window = "30m"
+client_cert_ttl = "1h"
+server_cert_ttl = "720h"
+audit_path   = "/var/log/pigeon-enroll/audit.jsonl"
+trusted_proxies = ["10.0.0.0/8"]
+
+verifier "cidr" {
+  allow = ["0.0.0.0/0", "::/0"]
+}
+
+secret "secret_a" {
+  length   = 32
+  encoding = "base64"
+}
+
+secret "secret_b" {
+  length   = 16
+  encoding = "hex"
+  scope    = "server"
+}
+
+secrets_path = "/encrypted/pigeon/secrets.json"
+
+vars = {
+  datacenter = "eu-west-gra"
+  seeds      = "10.0.0.1,10.0.0.2"
+}
+
+action "vault-init" {
+  addr             = "https://127.0.0.1:8200"
+  secret_shares    = 1
+  secret_threshold = 1
+  output           = "/encrypted/vault/init.json"
+
+  token {
+    id          = "secret_a"
+    policies    = ["root"]
+    revoke_root = true
+  }
 }
 ```
 
@@ -116,19 +126,17 @@ Initializes Vault and creates a management token with a known HKDF-derived ID, s
 3. Creates management token with `token.id` (HKDF-derived)
 4. Optionally revokes root token and redacts it from output
 
-```json
-{
-  "type": "vault-init",
-  "config": {
-    "addr": "https://127.0.0.1:8200",
-    "secret_shares": 1,
-    "secret_threshold": 1,
-    "output": "/encrypted/vault/init.json",
-    "token": {
-      "id": "vault_management_token",
-      "policies": ["root"],
-      "revoke_root": true
-    }
+```hcl
+action "vault-init" {
+  addr             = "https://127.0.0.1:8200"
+  secret_shares    = 1
+  secret_threshold = 1
+  output           = "/encrypted/vault/init.json"
+
+  token {
+    id          = "vault_management_token"
+    policies    = ["root"]
+    revoke_root = true
   }
 }
 ```
@@ -139,15 +147,12 @@ For auto-unseal, also set `recovery_shares` and `recovery_threshold`.
 
 Adds a recovery passphrase to a LUKS2 keyslot for disaster recovery. Uses the volume key from an already unlocked dm-crypt device to authenticate. Fails if the keyslot is already occupied.
 
-```json
-{
-  "type": "luks-recovery",
-  "config": {
-    "device": "/dev/md1",
-    "mapped_name": "encrypted",
-    "key_slot": 1,
-    "secret": "luks_recovery"
-  }
+```hcl
+action "luks-recovery" {
+  device      = "/dev/md1"
+  mapped_name = "encrypted"
+  key_slot    = 1
+  secret      = "luks_recovery"
 }
 ```
 
@@ -159,6 +164,20 @@ Pluggable claim verification. Multiple verifiers run as a chain. All verifiers a
 |------|-------------|
 | `cidr` | Allow claims from specific CIDRs |
 | `ovh` | Verify client IP is an OVH-owned server |
+
+## Render
+
+One-shot HCL template rendering using `hclsyntax.ParseTemplate()` — Terraform's `templatefile()` engine. Template syntax: `${var}` for interpolation, `{{ }}` passes through as literal text.
+
+```hcl
+template {
+  source      = "/etc/pigeon/templates/consul.hcl.tpl"
+  destination = "/encrypted/consul/consul.hcl"
+  perms       = "0640"
+}
+```
+
+Variables come from the claim response JSON (merged secrets + vars). Workers use `pigeon-enroll render` instead of running a pigeon-template daemon.
 
 ## Build
 

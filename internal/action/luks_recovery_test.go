@@ -8,13 +8,13 @@ import (
 )
 
 func TestLuksRecovery_SecretNames(t *testing.T) {
-	cfgJSON, _ := json.Marshal(luksRecoveryConfig{
-		Device:  "/dev/md1",
-		Secret:  "luks_recovery",
-		KeySlot: 1,
+	cfgJSON, _ := json.Marshal(map[string]interface{}{
+		"device":   "/dev/md1",
+		"secret":   "luks_recovery",
+		"key_slot": 1,
 	})
 
-	a, err := New(Config{Type: "luks-recovery", Config: cfgJSON})
+	a, err := New(Config{Type: "luks-recovery", Body: jsonToBody(t, cfgJSON)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -25,26 +25,26 @@ func TestLuksRecovery_SecretNames(t *testing.T) {
 }
 
 func TestLuksRecovery_MissingKeySlot(t *testing.T) {
-	cfgJSON, _ := json.Marshal(luksRecoveryConfig{
-		Device: "/dev/md1",
-		Secret: "luks_recovery",
+	cfgJSON, _ := json.Marshal(map[string]interface{}{
+		"device": "/dev/md1",
+		"secret": "luks_recovery",
 	})
 
-	_, err := newLuksRecovery(cfgJSON)
+	_, err := newLuksRecovery(jsonToBody(t, cfgJSON))
 	if err == nil {
 		t.Fatal("expected error for missing key_slot, got nil")
 	}
 }
 
 func TestLuksRecovery_CustomKeySlot(t *testing.T) {
-	cfgJSON, _ := json.Marshal(luksRecoveryConfig{
-		Device:     "/dev/md1",
-		MappedName: "data",
-		KeySlot:    3,
-		Secret:     "luks_recovery",
+	cfgJSON, _ := json.Marshal(map[string]interface{}{
+		"device":      "/dev/md1",
+		"mapped_name": "data",
+		"key_slot":    3,
+		"secret":      "luks_recovery",
 	})
 
-	a, err := newLuksRecovery(cfgJSON)
+	a, err := newLuksRecovery(jsonToBody(t, cfgJSON))
 	if err != nil {
 		t.Fatalf("newLuksRecovery: %v", err)
 	}
@@ -57,35 +57,37 @@ func TestLuksRecovery_CustomKeySlot(t *testing.T) {
 }
 
 func TestLuksRecovery_MissingDevice(t *testing.T) {
-	cfgJSON, _ := json.Marshal(map[string]string{
-		"secret": "luks_recovery",
+	cfgJSON, _ := json.Marshal(map[string]interface{}{
+		"secret":   "luks_recovery",
+		"key_slot": 1,
 	})
 
-	_, err := newLuksRecovery(cfgJSON)
+	_, err := newLuksRecovery(jsonToBody(t, cfgJSON))
 	if err == nil {
 		t.Fatal("expected error for missing device")
 	}
 }
 
 func TestLuksRecovery_MissingSecret(t *testing.T) {
-	cfgJSON, _ := json.Marshal(map[string]string{
-		"device": "/dev/md1",
+	cfgJSON, _ := json.Marshal(map[string]interface{}{
+		"device":   "/dev/md1",
+		"key_slot": 1,
 	})
 
-	_, err := newLuksRecovery(cfgJSON)
+	_, err := newLuksRecovery(jsonToBody(t, cfgJSON))
 	if err == nil {
 		t.Fatal("expected error for missing secret")
 	}
 }
 
 func TestLuksRecovery_MissingSecretInDerived(t *testing.T) {
-	cfgJSON, _ := json.Marshal(luksRecoveryConfig{
-		Device:  "/dev/md1",
-		Secret:  "luks_recovery",
-		KeySlot: 1,
+	cfgJSON, _ := json.Marshal(map[string]interface{}{
+		"device":   "/dev/md1",
+		"secret":   "luks_recovery",
+		"key_slot": 1,
 	})
 
-	a, err := newLuksRecovery(cfgJSON)
+	a, err := newLuksRecovery(jsonToBody(t, cfgJSON))
 	if err != nil {
 		t.Fatalf("newLuksRecovery: %v", err)
 	}

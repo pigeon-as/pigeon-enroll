@@ -1,54 +1,49 @@
-// Package config loads and validates the pigeon-enroll JSON configuration.
+// Package config loads and validates the pigeon-enroll HCL configuration.
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"runtime"
 	"time"
 
+	"github.com/hashicorp/hcl/v2/hclsimple"
 	"github.com/pigeon-as/pigeon-enroll/internal/action"
 	"github.com/pigeon-as/pigeon-enroll/internal/verify"
 )
 
 // SecretSpec describes a secret to derive from the enrollment key via HKDF.
 type SecretSpec struct {
-	Name     string `json:"name"`
-	Length   int    `json:"length"`
-	Encoding string `json:"encoding"` // "base64" or "hex"
-	Scope    string `json:"scope"`    // optional: only returned to claims matching this scope
+	Name     string `hcl:"name,label"`
+	Length   int    `hcl:"length"`
+	Encoding string `hcl:"encoding"` // "base64" or "hex"
+	Scope    string `hcl:"scope,optional"`
 }
 
 // Config holds the pigeon-enroll configuration.
 type Config struct {
-	Listen           string            `json:"listen"`
-	KeyPath          string            `json:"key_path"`
-	TokenWindow      time.Duration     `json:"-"`
-	TokenWindowRaw   string            `json:"token_window"`
-	ClientCertTTL    time.Duration     `json:"-"`
-	ClientCertTTLRaw string            `json:"client_cert_ttl"`
-	ServerCertTTL    time.Duration     `json:"-"`
-	ServerCertTTLRaw string            `json:"server_cert_ttl"`
-	AuditPath        string            `json:"audit_path"`
-	Verifiers        []verify.Config   `json:"verifiers"`
-	Vars             map[string]string `json:"vars"`
-	Secrets          []SecretSpec      `json:"secrets"`
-	SecretsPath      string            `json:"secrets_path"`
-	TrustedProxies   []string          `json:"trusted_proxies"`
-	Actions          []action.Config   `json:"actions"`
+	Listen           string `hcl:"listen,optional"`
+	KeyPath          string `hcl:"key_path,optional"`
+	TokenWindow      time.Duration
+	TokenWindowRaw   string `hcl:"token_window,optional"`
+	ClientCertTTL    time.Duration
+	ClientCertTTLRaw string `hcl:"client_cert_ttl,optional"`
+	ServerCertTTL    time.Duration
+	ServerCertTTLRaw string            `hcl:"server_cert_ttl,optional"`
+	AuditPath        string            `hcl:"audit_path,optional"`
+	Verifiers        []verify.Config   `hcl:"verifier,block"`
+	Vars             map[string]string `hcl:"vars,optional"`
+	Secrets          []SecretSpec      `hcl:"secret,block"`
+	SecretsPath      string            `hcl:"secrets_path,optional"`
+	TrustedProxies   []string          `hcl:"trusted_proxies,optional"`
+	Actions          []action.Config   `hcl:"action,block"`
 }
 
-// Load reads a JSON config file and returns a validated Config with defaults applied.
+// Load reads an HCL config file and returns a validated Config with defaults applied.
 func Load(path string) (Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Config{}, fmt.Errorf("read config: %w", err)
-	}
-
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := hclsimple.DecodeFile(path, nil, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
 

@@ -3,35 +3,39 @@ package action
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/gohcl"
 )
 
 // luksRecoveryConfig holds luks-recovery action configuration.
 type luksRecoveryConfig struct {
 	// Device is the LUKS2 block device (e.g. "/dev/md1").
-	Device string `json:"device"`
+	Device string `hcl:"device"`
 	// MappedName is the dm-crypt mapped device name (default: "encrypted").
-	MappedName string `json:"mapped_name"`
+	MappedName string `hcl:"mapped_name,optional"`
 	// KeySlot is the LUKS2 keyslot to add the recovery key to (required, must be >= 1).
-	KeySlot int `json:"key_slot"`
+	KeySlot int `hcl:"key_slot"`
 	// Secret references a derived secret name whose value becomes the recovery passphrase.
-	Secret string `json:"secret"`
+	Secret string `hcl:"secret"`
 }
 
 type luksRecovery struct {
 	cfg luksRecoveryConfig
 }
 
-func newLuksRecovery(raw json.RawMessage) (*luksRecovery, error) {
+func newLuksRecovery(body hcl.Body) (*luksRecovery, error) {
 	var cfg luksRecoveryConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("parse luks-recovery config: %w", err)
+	if body != nil {
+		if diags := gohcl.DecodeBody(body, nil, &cfg); diags.HasErrors() {
+			return nil, fmt.Errorf("parse luks-recovery config: %s", diags.Error())
+		}
 	}
 	if cfg.Device == "" {
 		return nil, fmt.Errorf("luks-recovery: device is required")

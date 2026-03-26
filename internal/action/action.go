@@ -3,9 +3,10 @@ package action
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
+
+	"github.com/hashicorp/hcl/v2"
 )
 
 // Action performs a lifecycle operation using derived secrets.
@@ -16,21 +17,17 @@ type Action interface {
 
 // Config holds action configuration from the enrollment config file.
 type Config struct {
-	Type   string          `json:"type"`
-	Config json.RawMessage `json:"config"`
+	Type string   `hcl:"type,label"`
+	Body hcl.Body `hcl:",remain"`
 }
 
 // New creates an Action from config.
 func New(cfg Config) (Action, error) {
-	if len(cfg.Config) == 0 {
-		cfg.Config = json.RawMessage("{}")
-	}
-
 	switch cfg.Type {
 	case "vault-init":
-		return newVaultInit(cfg.Config)
+		return newVaultInit(cfg.Body)
 	case "luks-recovery":
-		return newLuksRecovery(cfg.Config)
+		return newLuksRecovery(cfg.Body)
 	default:
 		return nil, fmt.Errorf("unknown action type")
 	}
