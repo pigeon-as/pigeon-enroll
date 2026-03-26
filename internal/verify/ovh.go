@@ -2,7 +2,6 @@ package verify
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -10,15 +9,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/gohcl"
 	"github.com/ovh/go-ovh/ovh"
 )
 
 // OVHConfig holds OVH API credentials.
 type OVHConfig struct {
-	Endpoint          string `json:"endpoint"` // e.g. "ovh-eu"
-	ApplicationKey    string `json:"application_key"`
-	ApplicationSecret string `json:"application_secret"`
-	ConsumerKey       string `json:"consumer_key"`
+	Endpoint          string `hcl:"endpoint,optional"`
+	ApplicationKey    string `hcl:"application_key,optional"`
+	ApplicationSecret string `hcl:"application_secret,optional"`
+	ConsumerKey       string `hcl:"consumer_key,optional"`
 }
 
 const ipCacheTTL = 5 * time.Minute
@@ -34,13 +35,13 @@ type OVH struct {
 	expiry time.Time
 }
 
-func newOVH(logger *slog.Logger, raw json.RawMessage) (*OVH, error) {
+func newOVH(logger *slog.Logger, body hcl.Body) (*OVH, error) {
 	var oc OVHConfig
-	if len(raw) == 0 {
+	if body == nil {
 		return nil, fmt.Errorf("ovh verifier: config required")
 	}
-	if err := json.Unmarshal(raw, &oc); err != nil {
-		return nil, fmt.Errorf("ovh verifier config: %w", err)
+	if diags := gohcl.DecodeBody(body, nil, &oc); diags.HasErrors() {
+		return nil, fmt.Errorf("ovh verifier config: %s", diags.Error())
 	}
 	if oc.Endpoint == "" || oc.ApplicationKey == "" || oc.ApplicationSecret == "" || oc.ConsumerKey == "" {
 		return nil, fmt.Errorf("ovh verifier: endpoint, application_key, application_secret, consumer_key are required")

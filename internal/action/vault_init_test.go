@@ -10,7 +10,19 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+
+	"github.com/hashicorp/hcl/v2"
+	hcljson "github.com/hashicorp/hcl/v2/json"
 )
+
+func jsonToBody(t *testing.T, data []byte) hcl.Body {
+	t.Helper()
+	f, diags := hcljson.Parse(data, "test.json")
+	if diags.HasErrors() {
+		t.Fatalf("parse test body: %s", diags.Error())
+	}
+	return f.Body
+}
 
 func TestVaultInit_AlreadyInitialized(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -22,14 +34,15 @@ func TestVaultInit_AlreadyInitialized(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfgJSON, _ := json.Marshal(vaultInitConfig{
-		Addr:              srv.URL,
-		RecoveryShares:    1,
-		RecoveryThreshold: 1,
-		Output:            filepath.Join(t.TempDir(), "init.json"),
+	outputPath := filepath.Join(t.TempDir(), "init.json")
+	cfgJSON, _ := json.Marshal(map[string]interface{}{
+		"addr":               srv.URL,
+		"recovery_shares":    1,
+		"recovery_threshold": 1,
+		"output":             outputPath,
 	})
 
-	a, err := newVaultInit(cfgJSON)
+	a, err := newVaultInit(jsonToBody(t, cfgJSON))
 	if err != nil {
 		t.Fatalf("newVaultInit: %v", err)
 	}
@@ -80,22 +93,21 @@ func TestVaultInit_InitAndCreateToken(t *testing.T) {
 	defer srv.Close()
 
 	outputPath := filepath.Join(t.TempDir(), "init.json")
-
-	cfgJSON, _ := json.Marshal(vaultInitConfig{
-		Addr:              srv.URL,
-		SecretShares:      1,
-		SecretThreshold:   1,
-		RecoveryShares:    1,
-		RecoveryThreshold: 1,
-		Output:            outputPath,
-		Token: vaultTokenConfig{
-			ID:         "vault_management_token",
-			Policies:   []string{"root"},
-			RevokeRoot: true,
+	cfgJSON, _ := json.Marshal(map[string]interface{}{
+		"addr":               srv.URL,
+		"secret_shares":      1,
+		"secret_threshold":   1,
+		"recovery_shares":    1,
+		"recovery_threshold": 1,
+		"output":             outputPath,
+		"token": map[string]interface{}{
+			"id":          "vault_management_token",
+			"policies":    []string{"root"},
+			"revoke_root": true,
 		},
 	})
 
-	a, err := newVaultInit(cfgJSON)
+	a, err := newVaultInit(jsonToBody(t, cfgJSON))
 	if err != nil {
 		t.Fatalf("newVaultInit: %v", err)
 	}
@@ -147,15 +159,14 @@ func TestVaultInit_InitWithoutToken(t *testing.T) {
 	defer srv.Close()
 
 	outputPath := filepath.Join(t.TempDir(), "init.json")
-
-	cfgJSON, _ := json.Marshal(vaultInitConfig{
-		Addr:            srv.URL,
-		SecretShares:    1,
-		SecretThreshold: 1,
-		Output:          outputPath,
+	cfgJSON, _ := json.Marshal(map[string]interface{}{
+		"addr":             srv.URL,
+		"secret_shares":    1,
+		"secret_threshold": 1,
+		"output":           outputPath,
 	})
 
-	a, err := newVaultInit(cfgJSON)
+	a, err := newVaultInit(jsonToBody(t, cfgJSON))
 	if err != nil {
 		t.Fatalf("newVaultInit: %v", err)
 	}
@@ -193,15 +204,18 @@ func TestVaultInit_MissingSecretForTokenID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfgJSON, _ := json.Marshal(vaultInitConfig{
-		Addr:            srv.URL,
-		SecretShares:    1,
-		SecretThreshold: 1,
-		Output:          filepath.Join(t.TempDir(), "init.json"),
-		Token:           vaultTokenConfig{ID: "nonexistent_secret"},
+	outputPath := filepath.Join(t.TempDir(), "init.json")
+	cfgJSON, _ := json.Marshal(map[string]interface{}{
+		"addr":             srv.URL,
+		"secret_shares":    1,
+		"secret_threshold": 1,
+		"output":           outputPath,
+		"token": map[string]interface{}{
+			"id": "nonexistent_secret",
+		},
 	})
 
-	a, err := newVaultInit(cfgJSON)
+	a, err := newVaultInit(jsonToBody(t, cfgJSON))
 	if err != nil {
 		t.Fatalf("newVaultInit: %v", err)
 	}
@@ -213,7 +227,7 @@ func TestVaultInit_MissingSecretForTokenID(t *testing.T) {
 }
 
 func TestRun_UnknownActionType(t *testing.T) {
-	cfgs := []Config{{Type: "nonexistent", Config: json.RawMessage(`{}`)}}
+	cfgs := []Config{{Type: "nonexistent", Body: jsonToBody(t, []byte(`{}`))}}
 	err := Run(context.Background(), slog.Default(), cfgs, nil, "")
 	if err == nil {
 		t.Fatal("expected error for unknown action type")
@@ -228,11 +242,8 @@ func TestRun_ActionNotFound(t *testing.T) {
 }
 
 func TestSecretNames_VaultInit(t *testing.T) {
-	cfgJSON, _ := json.Marshal(vaultInitConfig{
-		Token: vaultTokenConfig{ID: "my_token"},
-	})
-
-	a, err := New(Config{Type: "vault-init", Config: cfgJSON})
+	body := jsonToBody(t, []byte(`{"token": {"id": "my_token"}}`))
+	a, err := New(Config{Type: "vault-init", Body: body})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

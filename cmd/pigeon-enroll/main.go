@@ -10,6 +10,7 @@
 //	generate-token  Generate an HMAC claim token
 //	generate-cert   Generate a client TLS certificate bundle
 //	claim           Claim secrets from an enrollment server
+//	render          Render HCL templates with variables
 //	run-actions     Run post-claim lifecycle actions
 //	version         Print version
 package main
@@ -26,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +37,7 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/claim"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/pki"
+	"github.com/pigeon-as/pigeon-enroll/internal/render"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
 	"github.com/pigeon-as/pigeon-enroll/internal/verify"
@@ -42,7 +45,7 @@ import (
 
 const (
 	version           = "0.1.0"
-	defaultConfigPath = "/etc/pigeon/enroll.json"
+	defaultConfigPath = "/etc/pigeon/enroll.hcl"
 )
 
 func main() {
@@ -65,6 +68,8 @@ func main() {
 		os.Exit(cmdGenerateCert(args))
 	case "claim":
 		os.Exit(cmdClaim(args))
+	case "render":
+		os.Exit(cmdRender(args))
 	case "run-actions":
 		os.Exit(cmdRunActions(args))
 	case "version":
@@ -84,11 +89,12 @@ Commands:
   generate-token  Generate an HMAC claim token
   generate-cert   Generate a client TLS certificate bundle (PEM)
   claim           Claim secrets from an enrollment server
+  render          Render HCL templates with variables
   run-actions     Run post-claim lifecycle actions
   version         Print version`)
 }
 
-// loadConfig loads the JSON config, reads the enrollment key, and derives
+// loadConfig loads the HCL config, reads the enrollment key, and derives
 // the HMAC signing key.
 func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byte, []byte, error) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -127,7 +133,7 @@ func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byt
 
 func cmdServer(args []string) int {
 	flags := flag.NewFlagSet("server", flag.ExitOnError)
-	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
+	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
 	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
 	skipTLS := flags.Bool("skip-tls", false, "Allow plain HTTP (no TLS)")
 	flags.Parse(args)
@@ -220,7 +226,7 @@ func cmdServer(args []string) int {
 
 func cmdGenerateToken(args []string) int {
 	flags := flag.NewFlagSet("generate-token", flag.ExitOnError)
-	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
+	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
 	scope := flags.String("scope", "", "Scope for token generation")
 	flags.Parse(args)
 
@@ -235,7 +241,7 @@ func cmdGenerateToken(args []string) int {
 
 func cmdGenerateCert(args []string) int {
 	flags := flag.NewFlagSet("generate-cert", flag.ExitOnError)
-	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
+	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
 	output := flags.String("output", "", "Write PEM bundle to file (0600) instead of stdout")
 	encodeBase64 := flags.Bool("base64", false, "Base64-encode the output (for embedding in env vars)")
 	flags.Parse(args)
@@ -332,9 +338,71 @@ func cmdClaim(args []string) int {
 	return 0
 }
 
+func cmdRender(args []string) int {
+	flags := flag.NewFlagSet("render", flag.ExitOnError)
+	configPath := flags.String("config", "", "Path to render HCL config")
+	varsPath := flags.String("vars", "/encrypted/pigeon/secrets.json", "Path to template variables JSON")
+	flags.Parse(args)
+
+	if *configPath == "" {
+		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll render -config=<path> [-vars=<path>]")
+		return 1
+	}
+
+	cfg, err := render.LoadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load render config: %v\n", err)
+		return 1
+	}
+
+	vars, err := render.ParseVarsFile(*varsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parse vars: %v\n", err)
+		return 1
+	}
+
+	for _, tpl := range cfg.Templates {
+		perms := tpl.Perms
+		if perms == "" {
+			perms = "0640"
+		}
+		perm, err := parsePerms(perms)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid perms for %s: %v\n", tpl.Source, err)
+			return 1
+		}
+
+		rendered, err := render.File(tpl.Source, vars)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "render %s: %v\n", tpl.Source, err)
+			return 1
+		}
+
+		if err := render.WriteAtomic(tpl.Destination, rendered, perm); err != nil {
+			fmt.Fprintf(os.Stderr, "write %s: %v\n", tpl.Destination, err)
+			return 1
+		}
+
+		fmt.Fprintf(os.Stderr, "rendered %s → %s\n", tpl.Source, tpl.Destination)
+	}
+
+	return 0
+}
+
+func parsePerms(s string) (os.FileMode, error) {
+	p, err := strconv.ParseUint(s, 8, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parse perms %q: %w", s, err)
+	}
+	if p > 0o777 {
+		return 0, fmt.Errorf("invalid perms %q: must be between 0000 and 0777", s)
+	}
+	return os.FileMode(p), nil
+}
+
 func cmdRunActions(args []string) int {
 	flags := flag.NewFlagSet("run-actions", flag.ExitOnError)
-	configPath := flags.String("config", defaultConfigPath, "Path to JSON config file")
+	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
 	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
 	actionType := flags.String("type", "", "Run a specific action type (default: all)")
 	flags.Parse(args)

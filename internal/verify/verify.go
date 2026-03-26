@@ -3,11 +3,12 @@ package verify
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+
+	"github.com/hashicorp/hcl/v2"
 )
 
 // Verifier checks whether a claim request should be allowed.
@@ -17,9 +18,9 @@ type Verifier interface {
 
 // Config holds verifier configuration from the enrollment config file.
 type Config struct {
-	Type   string          `json:"type"`
-	Fatal  *bool           `json:"fatal"`
-	Config json.RawMessage `json:"config"`
+	Type  string   `hcl:"type,label"`
+	Fatal *bool    `hcl:"fatal,optional"`
+	Body  hcl.Body `hcl:",remain"`
 }
 
 // New creates a Verifier from config. Returns Noop if cfgs is empty.
@@ -36,9 +37,9 @@ func New(logger *slog.Logger, cfgs []Config) (Verifier, error) {
 		case "", "noop":
 			continue
 		case "cidr":
-			v, err = newCIDR(cfg.Config)
+			v, err = newCIDR(cfg.Body)
 		case "ovh":
-			v, err = newOVH(logger, cfg.Config)
+			v, err = newOVH(logger, cfg.Body)
 		default:
 			return nil, fmt.Errorf("unknown verifier type: %q", cfg.Type)
 		}

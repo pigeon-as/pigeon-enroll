@@ -2,12 +2,23 @@ package verify
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/hashicorp/hcl/v2"
+	hcljson "github.com/hashicorp/hcl/v2/json"
 )
+
+func jsonToBody(t *testing.T, data []byte) hcl.Body {
+	t.Helper()
+	f, diags := hcljson.Parse(data, "test.json")
+	if diags.HasErrors() {
+		t.Fatalf("parse test body: %s", diags.Error())
+	}
+	return f.Body
+}
 
 func fakeRequest(remoteAddr string) *http.Request {
 	r := httptest.NewRequest("POST", "/claim", nil)
@@ -28,8 +39,8 @@ func TestCIDRDefaultAllowAll(t *testing.T) {
 }
 
 func TestCIDRRestricted(t *testing.T) {
-	raw := json.RawMessage(`{"allow": ["10.0.0.0/8"]}`)
-	v, err := newCIDR(raw)
+	body := jsonToBody(t, []byte(`{"allow": ["10.0.0.0/8"]}`))
+	v, err := newCIDR(body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,8 +66,8 @@ func TestCIDRInvalidIP(t *testing.T) {
 }
 
 func TestCIDRInvalidConfig(t *testing.T) {
-	raw := json.RawMessage(`{"allow": ["not-a-cidr"]}`)
-	_, err := newCIDR(raw)
+	body := jsonToBody(t, []byte(`{"allow": ["not-a-cidr"]}`))
+	_, err := newCIDR(body)
 	if err == nil {
 		t.Error("expected error for invalid CIDR")
 	}
@@ -65,7 +76,7 @@ func TestCIDRInvalidConfig(t *testing.T) {
 func TestNewCIDRViaFactory(t *testing.T) {
 	logger := slog.Default()
 	v, err := New(logger, []Config{
-		{Type: "cidr", Config: json.RawMessage(`{"allow": ["10.0.0.0/8"]}`)},
+		{Type: "cidr", Body: jsonToBody(t, []byte(`{"allow": ["10.0.0.0/8"]}`))},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +97,7 @@ func TestOVHMissingConfig(t *testing.T) {
 func TestOVHIncompleteConfig(t *testing.T) {
 	logger := slog.Default()
 	_, err := New(logger, []Config{
-		{Type: "ovh", Config: json.RawMessage(`{"endpoint": "ovh-eu"}`)},
+		{Type: "ovh", Body: jsonToBody(t, []byte(`{"endpoint": "ovh-eu"}`))},
 	})
 	if err == nil {
 		t.Error("expected error for incomplete OVH config")

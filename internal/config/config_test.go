@@ -1,19 +1,29 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/hashicorp/hcl/v2"
+	hcljson "github.com/hashicorp/hcl/v2/json"
 	"github.com/pigeon-as/pigeon-enroll/internal/action"
 )
 
+func testBody(t *testing.T, jsonStr string) hcl.Body {
+	t.Helper()
+	f, diags := hcljson.Parse([]byte(jsonStr), "test.json")
+	if diags.HasErrors() {
+		t.Fatalf("parse test body: %s", diags.Error())
+	}
+	return f.Body
+}
+
 func TestLoadDefaults(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	os.WriteFile(path, []byte(`{"vars": {"k": "v"}}`), 0644)
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`vars = { k = "v" }`), 0644)
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -38,8 +48,11 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadTokenWindow(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "token_window": "15m"}`), 0644)
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+vars = { k = "v" }
+token_window = "15m"
+`), 0644)
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -52,8 +65,11 @@ func TestLoadTokenWindow(t *testing.T) {
 
 func TestLoadTokenWindowInvalid(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "token_window": "bogus"}`), 0644)
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+vars = { k = "v" }
+token_window = "bogus"
+`), 0644)
 
 	_, err := Load(path)
 	if err == nil {
@@ -63,8 +79,11 @@ func TestLoadTokenWindowInvalid(t *testing.T) {
 
 func TestLoadTokenWindowTooSmall(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "token_window": "500ms"}`), 0644)
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+vars = { k = "v" }
+token_window = "500ms"
+`), 0644)
 
 	_, err := Load(path)
 	if err == nil {
@@ -74,8 +93,12 @@ func TestLoadTokenWindowTooSmall(t *testing.T) {
 
 func TestLoadCertTTL(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "client_cert_ttl": "2h", "server_cert_ttl": "48h"}`), 0644)
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+vars = { k = "v" }
+client_cert_ttl = "2h"
+server_cert_ttl = "48h"
+`), 0644)
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -91,14 +114,20 @@ func TestLoadCertTTL(t *testing.T) {
 
 func TestLoadCertTTLInvalid(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
+	path := filepath.Join(dir, "config.hcl")
 
-	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "client_cert_ttl": "bogus"}`), 0644)
+	os.WriteFile(path, []byte(`
+vars = { k = "v" }
+client_cert_ttl = "bogus"
+`), 0644)
 	if _, err := Load(path); err == nil {
 		t.Error("expected error for invalid client_cert_ttl")
 	}
 
-	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "server_cert_ttl": "bogus"}`), 0644)
+	os.WriteFile(path, []byte(`
+vars = { k = "v" }
+server_cert_ttl = "bogus"
+`), 0644)
 	if _, err := Load(path); err == nil {
 		t.Error("expected error for invalid server_cert_ttl")
 	}
@@ -106,14 +135,20 @@ func TestLoadCertTTLInvalid(t *testing.T) {
 
 func TestLoadCertTTLTooSmall(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
+	path := filepath.Join(dir, "config.hcl")
 
-	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "client_cert_ttl": "500ms"}`), 0644)
+	os.WriteFile(path, []byte(`
+vars = { k = "v" }
+client_cert_ttl = "500ms"
+`), 0644)
 	if _, err := Load(path); err == nil {
 		t.Error("expected error for sub-second client_cert_ttl")
 	}
 
-	os.WriteFile(path, []byte(`{"vars": {"k": "v"}, "server_cert_ttl": "100ms"}`), 0644)
+	os.WriteFile(path, []byte(`
+vars = { k = "v" }
+server_cert_ttl = "100ms"
+`), 0644)
 	if _, err := Load(path); err == nil {
 		t.Error("expected error for sub-second server_cert_ttl")
 	}
@@ -188,15 +223,12 @@ func TestValidateNameConflict(t *testing.T) {
 }
 
 func TestValidateVaultTokenRefersToSecret(t *testing.T) {
-	vaultCfg, _ := json.Marshal(map[string]interface{}{
-		"token": map[string]interface{}{"id": "vault_token"},
-	})
 	cfg := Config{
 		TokenWindow:   time.Minute,
 		ClientCertTTL: time.Hour,
 		ServerCertTTL: time.Hour,
 		Secrets:       []SecretSpec{{Name: "vault_token", Length: 32, Encoding: "hex"}},
-		Actions:       []action.Config{{Type: "vault-init", Config: vaultCfg}},
+		Actions:       []action.Config{{Type: "vault-init", Body: testBody(t, `{"token": {"id": "vault_token"}}`)}},
 	}
 	if err := validate(cfg); err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -204,15 +236,12 @@ func TestValidateVaultTokenRefersToSecret(t *testing.T) {
 }
 
 func TestValidateVaultTokenRefersToMissingSecret(t *testing.T) {
-	vaultCfg, _ := json.Marshal(map[string]interface{}{
-		"token": map[string]interface{}{"id": "nonexistent"},
-	})
 	cfg := Config{
 		TokenWindow:   time.Minute,
 		ClientCertTTL: time.Hour,
 		ServerCertTTL: time.Hour,
 		Secrets:       []SecretSpec{{Name: "other", Length: 32, Encoding: "hex"}},
-		Actions:       []action.Config{{Type: "vault-init", Config: vaultCfg}},
+		Actions:       []action.Config{{Type: "vault-init", Body: testBody(t, `{"token": {"id": "nonexistent"}}`)}},
 	}
 	if err := validate(cfg); err == nil {
 		t.Error("expected error for vault.token.id referencing missing secret")
@@ -221,11 +250,19 @@ func TestValidateVaultTokenRefersToMissingSecret(t *testing.T) {
 
 func TestLoadActionConfig(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	os.WriteFile(path, []byte(`{
-		"secrets": [{"name": "mgmt", "length": 32, "encoding": "hex"}],
-		"actions": [{"type": "vault-init", "config": {"token": {"id": "mgmt"}}}]
-	}`), 0644)
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+secret "mgmt" {
+  length   = 32
+  encoding = "hex"
+}
+
+action "vault-init" {
+  token {
+    id = "mgmt"
+  }
+}
+`), 0644)
 
 	cfg, err := Load(path)
 	if err != nil {

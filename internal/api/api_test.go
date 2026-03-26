@@ -12,6 +12,8 @@ import (
 
 	"log/slog"
 
+	"github.com/hashicorp/hcl/v2"
+	hcljson "github.com/hashicorp/hcl/v2/json"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
@@ -19,6 +21,15 @@ import (
 )
 
 func boolPtr(b bool) *bool { return &b }
+
+func jsonToBody(t *testing.T, data []byte) hcl.Body {
+	t.Helper()
+	f, diags := hcljson.Parse(data, "test.json")
+	if diags.HasErrors() {
+		t.Fatalf("parse JSON body: %s", diags.Error())
+	}
+	return f.Body
+}
 
 var (
 	testKey     = []byte("0123456789abcdef0123456789abcdef") // 32 bytes
@@ -165,7 +176,7 @@ func TestHealth(t *testing.T) {
 func TestVerifierNonFatal(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	v, err := verify.New(logger, []verify.Config{
-		{Type: "cidr", Fatal: boolPtr(false), Config: json.RawMessage(`{"allow": ["10.0.0.0/8"]}`)},
+		{Type: "cidr", Fatal: boolPtr(false), Body: jsonToBody(t, []byte(`{"allow": ["10.0.0.0/8"]}`))},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +204,7 @@ func TestVerifierNonFatal(t *testing.T) {
 func TestVerifierFatal(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	v, err := verify.New(logger, []verify.Config{
-		{Type: "cidr", Fatal: boolPtr(true), Config: json.RawMessage(`{"allow": ["10.0.0.0/8"]}`)},
+		{Type: "cidr", Fatal: boolPtr(true), Body: jsonToBody(t, []byte(`{"allow": ["10.0.0.0/8"]}`))},
 	})
 	if err != nil {
 		t.Fatal(err)
