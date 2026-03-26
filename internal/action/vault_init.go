@@ -71,6 +71,9 @@ func newVaultInit(body hcl.Body) (*vaultInit, error) {
 	if cfg.Output == "" {
 		cfg.Output = "/encrypted/vault/init.json"
 	}
+	if len(cfg.Token) > 1 {
+		return nil, fmt.Errorf("vault-init: at most one token block allowed, got %d", len(cfg.Token))
+	}
 	if len(cfg.Token) > 0 && len(cfg.Token[0].Policies) == 0 && cfg.Token[0].ID != "" {
 		cfg.Token[0].Policies = []string{"root"}
 	}

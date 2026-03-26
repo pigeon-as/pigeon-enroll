@@ -3,7 +3,6 @@ package action
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -259,6 +258,3 @@ func TestSecretNames_VaultInit(t *testing.T) {
 		t.Errorf("SecretNames = %v, want [my_token]", names)
 	}
 }
-
-// Ensure unused imports don't cause issues.
-var _ = fmt.Sprintf
