@@ -279,7 +279,7 @@ func TestClaimRateLimited(t *testing.T) {
 
 	// Send burst+1 requests to trigger rate limiting.
 	for i := 0; i < 6; i++ {
-		body, _ := json.Marshal(claimRequest{Token: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"})
+		body, _ := json.Marshal(claimRequest{Token: "deadbeefdeadbeefdeadbeefdeadbeef" + "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"})
 		req := httptest.NewRequest("POST", "/claim", bytes.NewReader(body))
 		req.RemoteAddr = "10.0.0.99:12345"
 		w := httptest.NewRecorder()
