@@ -21,10 +21,16 @@ type SecretSpec struct {
 	Scope    string `hcl:"scope,optional"`
 }
 
+// CASpec describes a CA certificate to derive from the enrollment key via HKDF.
+type CASpec struct {
+	Name string `hcl:"name,label"`
+}
+
 // Config holds the pigeon-enroll configuration.
 type Config struct {
 	Listen           string `hcl:"listen,optional"`
 	KeyPath          string `hcl:"key_path,optional"`
+	NoncePath        string `hcl:"nonce_path,optional"`
 	TokenWindow      time.Duration
 	TokenWindowRaw   string `hcl:"token_window,optional"`
 	ClientCertTTL    time.Duration
@@ -35,6 +41,7 @@ type Config struct {
 	Verifiers        []verify.Config   `hcl:"verifier,block"`
 	Vars             map[string]string `hcl:"vars,optional"`
 	Secrets          []SecretSpec      `hcl:"secret,block"`
+	CAs              []CASpec          `hcl:"ca,block"`
 	SecretsPath      string            `hcl:"secrets_path,optional"`
 	TrustedProxies   []string          `hcl:"trusted_proxies,optional"`
 	Actions          []action.Config   `hcl:"action,block"`
@@ -52,6 +59,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.KeyPath == "" {
 		cfg.KeyPath = "/etc/pigeon/enrollment-key"
+	}
+	if cfg.NoncePath == "" {
+		cfg.NoncePath = "/var/lib/pigeon-enroll/nonces"
 	}
 	if cfg.TokenWindowRaw == "" {
 		cfg.TokenWindow = 30 * time.Minute
@@ -120,6 +130,17 @@ func validate(cfg Config) error {
 		if seen[k] {
 			return fmt.Errorf("var %q conflicts with a secret entry", k)
 		}
+	}
+
+	caNames := make(map[string]bool, len(cfg.CAs))
+	for _, ca := range cfg.CAs {
+		if ca.Name == "" {
+			return fmt.Errorf("ca: name is required")
+		}
+		if caNames[ca.Name] {
+			return fmt.Errorf("ca %q: duplicate name", ca.Name)
+		}
+		caNames[ca.Name] = true
 	}
 
 	for _, cidr := range cfg.TrustedProxies {

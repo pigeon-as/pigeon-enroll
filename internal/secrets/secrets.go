@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
+	"github.com/pigeon-as/pigeon-enroll/internal/pki"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -50,13 +51,20 @@ func DeriveHMACKey(ikm []byte) ([]byte, error) {
 	return key, nil
 }
 
+// CAEntry holds a derived CA certificate and private key in PEM format.
+// JSON field names follow the Terraform TLS provider output convention.
+type CAEntry struct {
+	CertPEM       string `json:"cert_pem"`
+	PrivateKeyPEM string `json:"private_key_pem"`
+}
+
 // Resolve loads persisted secrets from path, or derives them from ikm
 // via HKDF-SHA256 and persists atomically. If path is empty, derives fresh.
-// The persisted format is {"secrets":{...},"vars":{...}} to match the
-// API response and claim client output.
-func Resolve(specs []config.SecretSpec, vars map[string]string, path string, ikm []byte) (map[string]string, error) {
-	if len(specs) == 0 {
-		return nil, nil
+// The persisted format is {"secrets":{...},"vars":{...},"ca":{...}}.
+// Returns secrets and CAs as separate maps.
+func Resolve(specs []config.SecretSpec, cas []config.CASpec, vars map[string]string, path string, ikm []byte) (map[string]string, map[string]CAEntry, error) {
+	if len(specs) == 0 && len(cas) == 0 {
+		return nil, nil, nil
 	}
 
 	// Normalize so persisted JSON uses {} instead of null.
@@ -66,54 +74,63 @@ func Resolve(specs []config.SecretSpec, vars map[string]string, path string, ikm
 
 	if path == "" {
 		// No persistence path — derive fresh.
-		return derive(specs, ikm)
+		return deriveAll(specs, cas, ikm)
 	}
 
 	data, err := os.ReadFile(path)
 	if err == nil {
-		loaded, diskVars, loadErr := load(data, specs)
+		loaded, loadedCAs, diskVars, loadErr := load(data, specs, cas)
 		if loadErr != nil {
-			return nil, loadErr
+			return nil, nil, loadErr
 		}
 		// Re-persist only when vars have changed.
 		if !mapsEqual(diskVars, vars) {
-			if err := persist(loaded, vars, path); err != nil {
-				return nil, err
+			if err := persist(loaded, loadedCAs, vars, path); err != nil {
+				return nil, nil, err
 			}
 		}
-		return loaded, nil
+		return loaded, loadedCAs, nil
 	}
 	if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("read secrets: %w", err)
+		return nil, nil, fmt.Errorf("read secrets: %w", err)
 	}
-	secrets, err := derive(specs, ikm)
+	secrets, derivedCAs, err := deriveAll(specs, cas, ikm)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := persist(secrets, vars, path); err != nil {
-		return nil, err
+	if err := persist(secrets, derivedCAs, vars, path); err != nil {
+		return nil, nil, err
 	}
-	return secrets, nil
+	return secrets, derivedCAs, nil
 }
 
-// persistedFile is the on-disk format: {"secrets":{...},"vars":{...}}.
+// persistedFile is the on-disk format: {"secrets":{...},"vars":{...},"ca":{...}}.
 type persistedFile struct {
-	Secrets map[string]string `json:"secrets"`
-	Vars    map[string]string `json:"vars"`
+	Secrets map[string]string  `json:"secrets"`
+	Vars    map[string]string  `json:"vars"`
+	CA      map[string]CAEntry `json:"ca,omitempty"`
 }
 
 // load parses persisted secrets and vars, and checks all specs are present.
-func load(data []byte, specs []config.SecretSpec) (map[string]string, map[string]string, error) {
+func load(data []byte, specs []config.SecretSpec, cas []config.CASpec) (map[string]string, map[string]CAEntry, map[string]string, error) {
 	var pf persistedFile
 	if err := json.Unmarshal(data, &pf); err != nil {
-		return nil, nil, fmt.Errorf("parse secrets file: %w", err)
+		return nil, nil, nil, fmt.Errorf("parse secrets file: %w", err)
 	}
 	for _, s := range specs {
 		if _, ok := pf.Secrets[s.Name]; !ok {
-			return nil, nil, fmt.Errorf("secrets file missing key %q", s.Name)
+			return nil, nil, nil, fmt.Errorf("secrets file missing key %q", s.Name)
 		}
 	}
-	return pf.Secrets, pf.Vars, nil
+	if pf.CA == nil {
+		pf.CA = make(map[string]CAEntry)
+	}
+	for _, ca := range cas {
+		if _, ok := pf.CA[ca.Name]; !ok {
+			return nil, nil, nil, fmt.Errorf("secrets file missing CA %q", ca.Name)
+		}
+	}
+	return pf.Secrets, pf.CA, pf.Vars, nil
 }
 
 // mapsEqual reports whether two string maps have identical keys and values.
@@ -127,6 +144,26 @@ func mapsEqual(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// deriveAll produces secrets from ikm via HKDF-SHA256 and derives CA certs.
+func deriveAll(specs []config.SecretSpec, cas []config.CASpec, ikm []byte) (map[string]string, map[string]CAEntry, error) {
+	secrets, err := derive(specs, ikm)
+	if err != nil {
+		return nil, nil, err
+	}
+	caMap := make(map[string]CAEntry, len(cas))
+	for _, ca := range cas {
+		derived, err := pki.DeriveP256CA(ikm, ca.Name)
+		if err != nil {
+			return nil, nil, fmt.Errorf("derive CA %q: %w", ca.Name, err)
+		}
+		caMap[ca.Name] = CAEntry{
+			CertPEM:       string(derived.CertPEM),
+			PrivateKeyPEM: string(derived.KeyPEM),
+		}
+	}
+	return secrets, caMap, nil
 }
 
 // derive produces secrets from ikm via HKDF-SHA256.
@@ -158,11 +195,11 @@ func derive(specs []config.SecretSpec, ikm []byte) (map[string]string, error) {
 }
 
 // persist writes secrets atomically to path via temp file + rename.
-func persist(secrets map[string]string, vars map[string]string, path string) error {
+func persist(secrets map[string]string, cas map[string]CAEntry, vars map[string]string, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("create secrets directory: %w", err)
 	}
-	data, err := json.Marshal(persistedFile{Secrets: secrets, Vars: vars})
+	data, err := json.Marshal(persistedFile{Secrets: secrets, CA: cas, Vars: vars})
 	if err != nil {
 		return fmt.Errorf("marshal secrets: %w", err)
 	}

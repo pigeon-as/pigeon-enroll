@@ -72,6 +72,8 @@ func main() {
 		os.Exit(cmdRender(args))
 	case "run-actions":
 		os.Exit(cmdRunActions(args))
+	case "derive":
+		os.Exit(cmdDerive(args))
 	case "version":
 		fmt.Printf("pigeon-enroll v%s\n", version)
 	default:
@@ -91,6 +93,7 @@ Commands:
   claim           Claim secrets from an enrollment server
   render          Render HCL templates with variables
   run-actions     Run post-claim lifecycle actions
+  derive          Derive a named secret from the enrollment key
   version         Print version`)
 }
 
@@ -145,7 +148,7 @@ func cmdServer(args []string) int {
 	}
 	logger.Info("enrollment key", "path", cfg.KeyPath)
 
-	derived, err := secrets.Resolve(cfg.Secrets, cfg.Vars, cfg.SecretsPath, ikm)
+	derived, cas, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Vars, cfg.SecretsPath, ikm)
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1
@@ -170,7 +173,11 @@ func cmdServer(args []string) int {
 		logger.Info("audit log", "path", cfg.AuditPath)
 	}
 
-	srv := api.New(logger, cfg, hmacKey, derived, v, al)
+	srv, err := api.New(logger, cfg, hmacKey, derived, cas, v, al)
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
 
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,
@@ -429,7 +436,7 @@ func cmdRunActions(args []string) int {
 		return 1
 	}
 
-	derived, err := secrets.Resolve(cfg.Secrets, cfg.Vars, cfg.SecretsPath, ikm)
+	derived, _, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Vars, cfg.SecretsPath, ikm)
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1
@@ -447,6 +454,39 @@ func cmdRunActions(args []string) int {
 	}
 
 	return 0
+}
+
+func cmdDerive(args []string) int {
+	flags := flag.NewFlagSet("derive", flag.ExitOnError)
+	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
+	name := flags.String("name", "", "Name of the secret to derive")
+	flags.Parse(args)
+
+	if *name == "" {
+		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll derive -name=<secret> [-config=<path>]")
+		return 1
+	}
+
+	_, cfg, ikm, _, err := loadConfig(*configPath, "error")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	for _, s := range cfg.Secrets {
+		if s.Name == *name {
+			derived, _, derr := secrets.Resolve([]config.SecretSpec{s}, nil, nil, "", ikm)
+			if derr != nil {
+				fmt.Fprintf(os.Stderr, "derive: %v\n", derr)
+				return 1
+			}
+			fmt.Print(derived[s.Name])
+			return 0
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "secret %q not found in config\n", *name)
+	return 1
 }
 
 func parseLevel(s string) slog.Level {

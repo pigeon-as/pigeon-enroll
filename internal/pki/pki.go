@@ -31,6 +31,11 @@ import (
 
 const (
 	hkdfInfoCAKey = "pigeon-enroll ca key v1"
+
+	// hkdfInfoCAPrefix is the HKDF info prefix for named CA derivation.
+	// Full info string: "pigeon-enroll ca <name> key v1".
+	hkdfInfoCAPrefix = "pigeon-enroll ca "
+	hkdfInfoCASuffix = " key v1"
 )
 
 // CA holds a deterministic CA certificate and private key.
@@ -81,6 +86,58 @@ func DeriveCA(ikm []byte) (*CA, error) {
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 
 	return &CA{Cert: cert, CertPEM: certPEM, Key: key}, nil
+}
+
+// P256CA holds a deterministic P-256 ECDSA CA certificate and private key.
+type P256CA struct {
+	CertPEM []byte
+	KeyPEM  []byte
+}
+
+// DeriveP256CA produces a deterministic ECDSA P-256 CA from the enrollment key.
+// The name is used in the HKDF info string for domain separation.
+// Returns PEM-encoded certificate and private key.
+func DeriveP256CA(ikm []byte, name string) (*P256CA, error) {
+	info := []byte(hkdfInfoCAPrefix + name + hkdfInfoCASuffix)
+	r := hkdf.New(sha256.New, ikm, nil, info)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), r)
+	if err != nil {
+		return nil, fmt.Errorf("derive P256 CA key for %q: %w", name, err)
+	}
+
+	// Deterministic serial from public key hash.
+	pubDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("marshal P256 CA public key: %w", err)
+	}
+	h := sha256.Sum256(pubDER)
+	serial := new(big.Int).SetBytes(h[:16])
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: name},
+		NotBefore:             time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		MaxPathLen:            0,
+		MaxPathLenZero:        true,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return nil, fmt.Errorf("create P256 CA cert for %q: %w", name, err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("marshal P256 CA key for %q: %w", name, err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	return &P256CA{CertPEM: certPEM, KeyPEM: keyPEM}, nil
 }
 
 // GenerateServerCert creates a P-256 server certificate signed by the CA.

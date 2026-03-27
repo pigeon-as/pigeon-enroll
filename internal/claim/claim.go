@@ -13,9 +13,10 @@ import (
 
 // Response is the JSON structure returned by POST /claim.
 type Response struct {
-	Secrets map[string]string `json:"secrets"`
-	Vars    map[string]string `json:"vars"`
-	Error   string            `json:"error,omitempty"`
+	Secrets map[string]string            `json:"secrets"`
+	Vars    map[string]string            `json:"vars"`
+	CA      map[string]map[string]string `json:"ca,omitempty"`
+	Error   string                       `json:"error,omitempty"`
 }
 
 // Run sends a claim request and writes secrets to outputPath.

@@ -59,7 +59,11 @@ func testServer(t *testing.T) *Server {
 		"secret_c": "dGVzdA==",
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	return New(logger, cfg, testHMACKey, secrets, verify.Noop{}, nil)
+	srv, err := New(logger, cfg, testHMACKey, secrets, nil, verify.Noop{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv
 }
 
 func validToken() string {
@@ -185,7 +189,10 @@ func TestVerifierNonFatal(t *testing.T) {
 		TokenWindow: testWindow,
 		Vars:        map[string]string{"k": "v"},
 	}
-	srv := New(logger, cfg, testHMACKey, nil, v, nil)
+	srv, srvErr := New(logger, cfg, testHMACKey, nil, nil, v, nil)
+	if srvErr != nil {
+		t.Fatal(srvErr)
+	}
 
 	body, _ := json.Marshal(claimRequest{
 		Token: validToken(),
@@ -213,7 +220,10 @@ func TestVerifierFatal(t *testing.T) {
 		TokenWindow: testWindow,
 		Vars:        map[string]string{"k": "v"},
 	}
-	srv := New(logger, cfg, testHMACKey, nil, v, nil)
+	srv, srvErr := New(logger, cfg, testHMACKey, nil, nil, v, nil)
+	if srvErr != nil {
+		t.Fatal(srvErr)
+	}
 
 	body, _ := json.Marshal(claimRequest{
 		Token: validToken(),

@@ -3,6 +3,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/audit"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/nonce"
+	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
 	"github.com/pigeon-as/pigeon-enroll/internal/verify"
 )
@@ -23,6 +25,7 @@ import (
 type Server struct {
 	cfg         config.Config
 	secrets     map[string]string
+	ca          map[string]secrets.CAEntry
 	hmacKey     []byte
 	verifier    verify.Verifier
 	audit       *audit.Log
@@ -35,7 +38,7 @@ type Server struct {
 }
 
 // New creates a new enrollment API server.
-func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, secrets map[string]string, v verify.Verifier, al *audit.Log) *Server {
+func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets map[string]string, cas map[string]secrets.CAEntry, v verify.Verifier, al *audit.Log) (*Server, error) {
 	// Build scope map from secret specs.
 	scopes := make(map[string]string, len(cfg.Secrets))
 	for _, s := range cfg.Secrets {
@@ -48,13 +51,18 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, secrets map[str
 		_, n, _ := net.ParseCIDR(cidr)
 		trustedNets = append(trustedNets, n)
 	}
+	nonces, err := nonce.New(2*cfg.TokenWindow, cfg.NoncePath)
+	if err != nil {
+		return nil, fmt.Errorf("create nonce store: %w", err)
+	}
 	srv := &Server{
 		cfg:         cfg,
-		secrets:     secrets,
+		secrets:     derivedSecrets,
+		ca:          cas,
 		hmacKey:     hmacKey,
 		verifier:    v,
 		audit:       al,
-		nonces:      nonce.New(2 * cfg.TokenWindow),
+		nonces:      nonces,
 		limiter:     newIPRateLimiter(rate.Every(12*time.Second), 5),
 		trustedNets: trustedNets,
 		scopes:      scopes,
@@ -63,7 +71,7 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, secrets map[str
 	}
 	srv.mux.HandleFunc("POST /claim", srv.handleClaim)
 	srv.mux.HandleFunc("GET /health", srv.handleHealth)
-	return srv
+	return srv, nil
 }
 
 // Handler returns the HTTP handler.
@@ -132,8 +140,9 @@ type claimRequest struct {
 }
 
 type claimResponse struct {
-	Secrets map[string]string `json:"secrets"`
-	Vars    map[string]string `json:"vars"`
+	Secrets map[string]string          `json:"secrets"`
+	Vars    map[string]string          `json:"vars"`
+	CA      map[string]secrets.CAEntry `json:"ca,omitempty"`
 }
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
@@ -189,7 +198,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(claimResponse{Secrets: filteredSecrets, Vars: filteredVars})
+	json.NewEncoder(w).Encode(claimResponse{Secrets: filteredSecrets, Vars: filteredVars, CA: s.ca})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
