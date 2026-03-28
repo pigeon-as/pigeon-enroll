@@ -103,7 +103,7 @@ func TestDifferentKeys(t *testing.T) {
 	window := 30 * time.Minute
 
 	tok1 := Generate(testKey, now, window, "")
-	// Token generated with different key should not verify with testKey.
+	// Token generated with testKey should not verify with a different key.
 	if Verify([]byte("different-key-32-bytes-different!"), tok1, now, window, "") {
 		t.Error("token should not verify with different key")
 	}

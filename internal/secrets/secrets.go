@@ -117,20 +117,26 @@ func load(data []byte, specs []config.SecretSpec, cas []config.CASpec) (map[stri
 	if err := json.Unmarshal(data, &pf); err != nil {
 		return nil, nil, nil, fmt.Errorf("parse secrets file: %w", err)
 	}
+	filteredSecrets := make(map[string]string, len(specs))
 	for _, s := range specs {
-		if _, ok := pf.Secrets[s.Name]; !ok {
+		v, ok := pf.Secrets[s.Name]
+		if !ok {
 			return nil, nil, nil, fmt.Errorf("secrets file missing key %q", s.Name)
 		}
+		filteredSecrets[s.Name] = v
 	}
-	if pf.CA == nil {
-		pf.CA = make(map[string]CAEntry)
-	}
+	var filteredCAs map[string]CAEntry
 	for _, ca := range cas {
-		if _, ok := pf.CA[ca.Name]; !ok {
+		entry, ok := pf.CA[ca.Name]
+		if !ok {
 			return nil, nil, nil, fmt.Errorf("secrets file missing CA %q", ca.Name)
 		}
+		if filteredCAs == nil {
+			filteredCAs = make(map[string]CAEntry, len(cas))
+		}
+		filteredCAs[ca.Name] = entry
 	}
-	return pf.Secrets, pf.CA, pf.Vars, nil
+	return filteredSecrets, filteredCAs, pf.Vars, nil
 }
 
 // mapsEqual reports whether two string maps have identical keys and values.
