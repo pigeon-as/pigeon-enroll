@@ -1,6 +1,6 @@
 # pigeon-enroll
 
-**Experimental** bootstrap enrollment server and client that derives bootstrap secrets from a shared enrollment key (HKDF) and distributes them to clients via one-time, time-windowed HMAC tokens. Pluggable request verification and post-claim actions.
+**Experimental** bootstrap enrollment server and client that derives bootstrap secrets from a shared enrollment key (HKDF) and distributes them to clients via mTLS and one-time, time-windowed HMAC tokens. Pluggable post-claim actions.
 
 **Not a secrets manager:** covers the minimum secrets needed before Vault is available. The enrollment key is static; all servers with the same key independently derive identical secrets. A separate HMAC signing key is derived from it for token operations.
 
@@ -54,10 +54,6 @@ client_cert_ttl = "1h"
 server_cert_ttl = "720h"
 audit_path   = "/var/log/pigeon-enroll/audit.jsonl"
 trusted_proxies = ["10.0.0.0/8"]
-
-verifier "cidr" {
-  allow = ["0.0.0.0/0", "::/0"]
-}
 
 secret "secret_a" {
   length   = 32
@@ -155,15 +151,6 @@ action "luks-recovery" {
   secret      = "luks_recovery"
 }
 ```
-
-## Verifiers
-
-Pluggable claim verification. Multiple verifiers run as a chain. All verifiers are fatal by default — set `"fatal": false` to log and continue instead.
-
-| Type | Description |
-|------|-------------|
-| `cidr` | Allow claims from specific CIDRs |
-| `ovh` | Verify client IP is an OVH-owned server |
 
 ## Render
 

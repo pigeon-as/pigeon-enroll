@@ -40,7 +40,6 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/render"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
-	"github.com/pigeon-as/pigeon-enroll/internal/verify"
 )
 
 const (
@@ -154,12 +153,6 @@ func cmdServer(args []string) int {
 		logger.Info("secrets resolved", "count", len(derived), "path", cfg.SecretsPath)
 	}
 
-	v, err := verify.New(logger, cfg.Verifiers)
-	if err != nil {
-		logger.Error("create verifier", "err", err)
-		return 1
-	}
-
 	al, err := audit.Open(cfg.AuditPath)
 	if err != nil {
 		logger.Error("open audit log", "err", err)
@@ -170,7 +163,7 @@ func cmdServer(args []string) int {
 		logger.Info("audit log", "path", cfg.AuditPath)
 	}
 
-	srv, err := api.New(logger, cfg, hmacKey, derived, cas, v, al)
+	srv, err := api.New(logger, cfg, hmacKey, derived, cas, al)
 	if err != nil {
 		logger.Error("create api server", "err", err)
 		return 1
