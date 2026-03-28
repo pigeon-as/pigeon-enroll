@@ -104,7 +104,7 @@ func (s *Store) loadFile() error {
 		if err != nil {
 			continue
 		}
-		t := time.Unix(ts, 0)
+		t := time.Unix(0, ts)
 		if t.Before(cutoff) {
 			continue
 		}
@@ -128,7 +128,7 @@ func (s *Store) appendEntry(hash string, t time.Time) (err error) {
 			}
 		}
 	}()
-	_, err = fmt.Fprintf(f, "%s %d\n", hash, t.Unix())
+	_, err = fmt.Fprintf(f, "%s %d\n", hash, t.UnixNano())
 	return err
 }
 
@@ -156,7 +156,7 @@ func (s *Store) rewriteFile() error {
 	defer os.Remove(f.Name())
 
 	for hash, t := range s.seen {
-		if _, err := fmt.Fprintf(f, "%s %d\n", hash, t.Unix()); err != nil {
+		if _, err := fmt.Fprintf(f, "%s %d\n", hash, t.UnixNano()); err != nil {
 			f.Close()
 			return err
 		}
