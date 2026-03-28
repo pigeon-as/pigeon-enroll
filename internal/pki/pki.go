@@ -66,7 +66,7 @@ func DeriveNamedCA(ikm []byte, name string) (*NamedCA, error) {
 	info := hkdfInfoCAPrefix + name + hkdfInfoCASuffix
 	ca, err := deriveCA(ikm, info, name)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("derive CA for %q: %w", name, err)
 	}
 	keyDER, err := x509.MarshalPKCS8PrivateKey(ca.Key)
 	if err != nil {
