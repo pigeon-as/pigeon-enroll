@@ -6,6 +6,7 @@ package nonce
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 )
 
 // Store tracks consumed tokens. Safe for concurrent use.
@@ -149,24 +152,9 @@ func (s *Store) purge() {
 
 // rewriteFile atomically rewrites the nonce file with current entries.
 func (s *Store) rewriteFile() error {
-	f, err := os.CreateTemp(filepath.Dir(s.path), ".nonces-*.tmp")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-
+	var buf bytes.Buffer
 	for hash, t := range s.seen {
-		if _, err := fmt.Fprintf(f, "%s %d\n", hash, t.UnixNano()); err != nil {
-			f.Close()
-			return err
-		}
+		fmt.Fprintf(&buf, "%s %d\n", hash, t.UnixNano())
 	}
-	if err := f.Chmod(0600); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), s.path)
+	return atomicfile.Write(s.path, buf.Bytes(), 0600)
 }

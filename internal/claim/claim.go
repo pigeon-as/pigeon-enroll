@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
+
+	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 )
 
 // Response is the JSON structure returned by POST /claim.
@@ -62,33 +62,11 @@ func Run(client *http.Client, url, token, scope, outputPath string) (*Response, 
 	}
 
 	// Write the raw server response ("ca" field present only when CAs are configured).
-	if err := writeAtomic(outputPath, data); err != nil {
+	if err := atomicfile.Write(outputPath, data, 0600); err != nil {
 		return nil, fmt.Errorf("write secrets: %w", err)
 	}
 
 	return &result, nil
 }
 
-func writeAtomic(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".secrets-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
 
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
-}

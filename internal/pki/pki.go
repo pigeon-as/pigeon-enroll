@@ -49,21 +49,48 @@ type CA struct {
 // Every server with the same IKM produces byte-identical CA certs (fixed validity
 // window, deterministic serial, Ed25519 deterministic signing).
 func DeriveCA(ikm []byte) (*CA, error) {
+	return deriveCA(ikm, hkdfInfoCAKey, "pigeon-enroll CA")
+}
+
+// NamedCA holds a deterministic Ed25519 CA certificate and private key in PEM format.
+type NamedCA struct {
+	CertPEM []byte
+	KeyPEM  []byte
+}
+
+// DeriveNamedCA produces a deterministic Ed25519 CA from the enrollment key.
+// The name is used in the HKDF info string for domain separation.
+// Ed25519 key derivation and signing are both fully deterministic, so every
+// server with the same IKM produces byte-identical CA certs.
+func DeriveNamedCA(ikm []byte, name string) (*NamedCA, error) {
+	info := hkdfInfoCAPrefix + name + hkdfInfoCASuffix
+	ca, err := deriveCA(ikm, info, name)
+	if err != nil {
+		return nil, err
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(ca.Key)
+	if err != nil {
+		return nil, fmt.Errorf("marshal CA key for %q: %w", name, err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	return &NamedCA{CertPEM: ca.CertPEM, KeyPEM: keyPEM}, nil
+}
+
+// deriveCA is the shared implementation for DeriveCA and DeriveNamedCA.
+func deriveCA(ikm []byte, info string, cn string) (*CA, error) {
 	seed := make([]byte, ed25519.SeedSize)
-	r := hkdf.New(sha256.New, ikm, nil, []byte(hkdfInfoCAKey))
+	r := hkdf.New(sha256.New, ikm, nil, []byte(info))
 	if _, err := io.ReadFull(r, seed); err != nil {
 		return nil, fmt.Errorf("derive CA seed: %w", err)
 	}
 	key := ed25519.NewKeyFromSeed(seed)
 
-	serialBytes := make([]byte, 16)
 	h := sha256.Sum256(seed)
-	copy(serialBytes, h[:16])
-	serial := new(big.Int).SetBytes(serialBytes)
+	serial := new(big.Int).SetBytes(h[:16])
 
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "pigeon-enroll CA"},
+		Subject:               pkix.Name{CommonName: cn},
 		NotBefore:             time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
 		NotAfter:              time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
@@ -84,61 +111,7 @@ func DeriveCA(ikm []byte) (*CA, error) {
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-
 	return &CA{Cert: cert, CertPEM: certPEM, Key: key}, nil
-}
-
-// NamedCA holds a deterministic Ed25519 CA certificate and private key in PEM format.
-type NamedCA struct {
-	CertPEM []byte
-	KeyPEM  []byte
-}
-
-// DeriveNamedCA produces a deterministic Ed25519 CA from the enrollment key.
-// The name is used in the HKDF info string for domain separation.
-// Ed25519 key derivation and signing are both fully deterministic, so every
-// server with the same IKM produces byte-identical CA certs.
-func DeriveNamedCA(ikm []byte, name string) (*NamedCA, error) {
-	info := []byte(hkdfInfoCAPrefix + name + hkdfInfoCASuffix)
-	seed := make([]byte, ed25519.SeedSize)
-	r := hkdf.New(sha256.New, ikm, nil, info)
-	if _, err := io.ReadFull(r, seed); err != nil {
-		return nil, fmt.Errorf("derive CA seed for %q: %w", name, err)
-	}
-	key := ed25519.NewKeyFromSeed(seed)
-
-	// Deterministic serial from seed hash.
-	h := sha256.Sum256(seed)
-	serial := new(big.Int).SetBytes(h[:16])
-
-	tmpl := &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: name},
-		NotBefore:             time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
-		NotAfter:              time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		MaxPathLen:            0,
-		MaxPathLenZero:        true,
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
-	if err != nil {
-		return nil, fmt.Errorf("create CA cert for %q: %w", name, err)
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: must(x509.MarshalPKCS8PrivateKey(key))})
-
-	return &NamedCA{CertPEM: certPEM, KeyPEM: keyPEM}, nil
-}
-
-func must(b []byte, err error) []byte {
-	if err != nil {
-		panic(err)
-	}
-	return b
 }
 
 // GenerateServerCert creates an ephemeral Ed25519 server certificate signed by the CA.
@@ -169,6 +142,7 @@ func GenerateClientCert(ca *CA, ttl time.Duration) ([]byte, error) {
 func LoadClientBundle(bundlePEM []byte) (crypto.Signer, *x509.Certificate, *x509.CertPool, error) {
 	var certDER, keyDER []byte
 	var keyType string
+	var hasCA bool
 	pool := x509.NewCertPool()
 
 	rest := bundlePEM
@@ -188,6 +162,7 @@ func LoadClientBundle(bundlePEM []byte) (crypto.Signer, *x509.Certificate, *x509
 					return nil, nil, nil, fmt.Errorf("parse CA cert in bundle: %w", err)
 				}
 				pool.AddCert(caCert)
+				hasCA = true
 			}
 		case "PRIVATE KEY", "EC PRIVATE KEY":
 			keyDER = block.Bytes
@@ -201,7 +176,7 @@ func LoadClientBundle(bundlePEM []byte) (crypto.Signer, *x509.Certificate, *x509
 	if keyDER == nil {
 		return nil, nil, nil, fmt.Errorf("no private key found in bundle")
 	}
-	if len(pool.Subjects()) == 0 {
+	if !hasCA {
 		return nil, nil, nil, fmt.Errorf("no CA certificate found in bundle")
 	}
 
@@ -274,8 +249,13 @@ func generateLeaf(ca *CA, hosts []string, usage x509.ExtKeyUsage, validity time.
 		return nil, nil, fmt.Errorf("sign leaf cert: %w", err)
 	}
 
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal leaf key: %w", err)
+	}
+
 	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: must(x509.MarshalPKCS8PrivateKey(key))})
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	return certPEM, keyPEM, nil
 }
 
