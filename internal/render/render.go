@@ -84,9 +84,8 @@ func trimJSONWhitespace(b []byte) []byte {
 }
 
 // WriteAtomic writes data to path atomically via temp file + rename.
+// Ownership is set on the temp file before rename, so the destination
+// appears with correct ownership atomically.
 func WriteAtomic(path string, data []byte, perm os.FileMode, uid, gid int) error {
-	if err := atomicfile.Write(path, data, perm); err != nil {
-		return err
-	}
-	return chown(path, uid, gid)
+	return atomicfile.WriteOwned(path, data, perm, uid, gid)
 }

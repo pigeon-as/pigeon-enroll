@@ -2,6 +2,7 @@
 package atomicfile
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -10,25 +11,41 @@ import (
 // directory, writes, sets permissions, and renames in one shot. The parent
 // directory is created if it doesn't exist.
 func Write(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
+	return WriteOwned(path, data, perm, -1, -1)
+}
+
+// WriteOwned writes data to path atomically with ownership. It chowns the
+// temp file before renaming, so the destination appears with correct ownership
+// atomically. uid/gid of -1 means "don't change".
+func WriteOwned(path string, data []byte, perm os.FileMode, uid, gid int) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("atomic write %s: %w", path, err)
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".atomic-*")
+	f, err := os.CreateTemp(dir, ".atomic-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("atomic write %s: %w", path, err)
 	}
 	defer os.Remove(f.Name())
 
 	if _, err := f.Write(data); err != nil {
 		f.Close()
-		return err
+		return fmt.Errorf("atomic write %s: %w", path, err)
 	}
 	if err := f.Chmod(perm); err != nil {
 		f.Close()
-		return err
+		return fmt.Errorf("atomic write %s: %w", path, err)
 	}
 	if err := f.Close(); err != nil {
-		return err
+		return fmt.Errorf("atomic write %s: %w", path, err)
 	}
-	return os.Rename(f.Name(), path)
+	if uid != -1 || gid != -1 {
+		if err := os.Chown(f.Name(), uid, gid); err != nil {
+			return fmt.Errorf("atomic write %s: %w", path, err)
+		}
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		return fmt.Errorf("atomic write %s: %w", path, err)
+	}
+	return nil
 }

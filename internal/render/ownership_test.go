@@ -41,10 +41,3 @@ func TestLookupGroupNumeric(t *testing.T) {
 		t.Fatalf("got %d, want 1000", id)
 	}
 }
-
-func TestChownNoop(t *testing.T) {
-	// chown with -1,-1 should be a no-op (no file needed).
-	if err := chown("/nonexistent", -1, -1); err != nil {
-		t.Fatal(err)
-	}
-}

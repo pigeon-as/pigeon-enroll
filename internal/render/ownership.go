@@ -2,7 +2,6 @@ package render
 
 import (
 	"fmt"
-	"os"
 	"os/user"
 	"strconv"
 )
@@ -37,13 +36,4 @@ func LookupGroup(s string) (int, error) {
 		return 0, fmt.Errorf("lookup group %q: %w", s, err)
 	}
 	return strconv.Atoi(g.Gid)
-}
-
-// chown sets the owner and group of a file.
-// A value of -1 for uid or gid means "don't change".
-func chown(path string, uid, gid int) error {
-	if uid == -1 && gid == -1 {
-		return nil
-	}
-	return os.Chown(path, uid, gid)
 }
