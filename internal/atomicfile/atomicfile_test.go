@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"testing"
 )
 
@@ -72,5 +73,41 @@ func TestWriteNoTempLeftOnSuccess(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Fatalf("expected 1 file, got %d: %v", len(entries), names)
+	}
+}
+
+func TestWriteOwned(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chown not supported on windows")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "owned.txt")
+
+	uid := os.Getuid()
+	gid := os.Getgid()
+
+	if err := WriteOwned(path, []byte("owned"), 0640, uid, gid); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOwnership(t, info, uid, gid)
+	if info.Mode().Perm() != 0640 {
+		t.Fatalf("got perm %o, want 0640", info.Mode().Perm())
+	}
+}
+
+func assertOwnership(t *testing.T, info os.FileInfo, uid, gid int) {
+	t.Helper()
+	stat := info.Sys().(*syscall.Stat_t)
+	if int(stat.Uid) != uid {
+		t.Fatalf("got uid %d, want %d", stat.Uid, uid)
+	}
+	if int(stat.Gid) != gid {
+		t.Fatalf("got gid %d, want %d", stat.Gid, gid)
 	}
 }
