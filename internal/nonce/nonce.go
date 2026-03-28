@@ -48,31 +48,31 @@ func New(maxAge time.Duration, path string) (*Store, error) {
 }
 
 // Check returns true if the token has NOT been seen before (and marks it).
-func (s *Store) Check(token string) bool {
+// Returns an error if disk persistence is configured but fails — the caller
+// should treat this as a server error (the token is not safely consumed).
+func (s *Store) Check(token string) (bool, error) {
 	h := hashToken(token)
 	now := time.Now()
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if time.Since(s.lastPurge) > s.maxAge/2 {
 		s.purge()
 		s.lastPurge = time.Now()
 	}
 
 	if _, exists := s.seen[h]; exists {
-		s.mu.Unlock()
-		return false
+		return false, nil
+	}
+
+	if s.path != "" {
+		if err := s.appendEntry(h, now); err != nil {
+			return false, fmt.Errorf("persist nonce: %w", err)
+		}
 	}
 	s.seen[h] = now
-	shouldPersist := s.path != ""
-	s.mu.Unlock()
-
-	if shouldPersist {
-		// Best-effort append — failure here doesn't block the claim.
-		// On restart, the token window will have expired anyway for
-		// tokens that failed to persist.
-		_ = s.appendEntry(h, now)
-	}
-	return true
+	return true, nil
 }
 
 // hashToken returns the hex-encoded SHA-256 of the token.

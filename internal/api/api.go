@@ -183,7 +183,14 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.nonces.Check(req.Token) {
+	ok, err := s.nonces.Check(req.Token)
+	if err != nil {
+		s.logger.Error("nonce persistence failed", "ip", ip, "err", err)
+		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "nonce storage error"})
+		s.jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
 		s.logger.Warn("replayed token", "ip", ip)
 		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "token already used"})
 		s.jsonError(w, "token already used", http.StatusForbidden)
@@ -205,10 +212,13 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		filteredVars[name] = val
 	}
 
-	filteredCAs := make(map[string]secrets.CAEntry, len(s.ca))
+	var filteredCAs map[string]secrets.CAEntry
 	for name, val := range s.ca {
 		sc := s.caScopes[name]
 		if sc == "" || sc == req.Scope {
+			if filteredCAs == nil {
+				filteredCAs = make(map[string]secrets.CAEntry)
+			}
 			filteredCAs[name] = val
 		}
 	}

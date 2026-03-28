@@ -11,10 +11,18 @@ func TestCheckRejectsReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.Check("tok1") {
+	ok, err := s.Check("tok1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
 		t.Fatal("first check should accept")
 	}
-	if s.Check("tok1") {
+	ok, err = s.Check("tok1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
 		t.Fatal("replay should be rejected")
 	}
 }
@@ -24,10 +32,18 @@ func TestCheckAcceptsDifferentTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.Check("tok1") {
+	ok, err := s.Check("tok1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
 		t.Fatal("tok1 should be accepted")
 	}
-	if !s.Check("tok2") {
+	ok, err = s.Check("tok2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
 		t.Fatal("tok2 should be accepted")
 	}
 }
@@ -40,7 +56,11 @@ func TestPersistSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s1.Check("tok1") {
+	ok, err := s1.Check("tok1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
 		t.Fatal("first check should accept")
 	}
 
@@ -49,11 +69,19 @@ func TestPersistSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s2.Check("tok1") {
+	ok, err = s2.Check("tok1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
 		t.Fatal("replayed token should be rejected after restart")
 	}
 	// New token should still work.
-	if !s2.Check("tok2") {
+	ok, err = s2.Check("tok2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
 		t.Fatal("new token should be accepted")
 	}
 }
@@ -67,7 +95,11 @@ func TestExpiredDroppedOnLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s1.Check("tok1") {
+	ok, err := s1.Check("tok1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
 		t.Fatal("first check should accept")
 	}
 
@@ -79,7 +111,11 @@ func TestExpiredDroppedOnLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s2.Check("tok1") {
+	ok, err = s2.Check("tok1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
 		t.Fatal("expired token should be accepted again after reload")
 	}
 }
@@ -89,10 +125,18 @@ func TestInMemoryNoPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.Check("tok1") {
+	ok, err := s.Check("tok1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
 		t.Fatal("should accept")
 	}
-	if s.Check("tok1") {
+	ok, err = s.Check("tok1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
 		t.Fatal("replay should be rejected")
 	}
 }
