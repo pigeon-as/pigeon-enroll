@@ -2,9 +2,12 @@ package secrets
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
@@ -285,5 +288,129 @@ func TestResolveSkipsRepersistWhenVarsUnchanged(t *testing.T) {
 	}
 	if !os.SameFile(infoBefore, infoAfter) {
 		t.Error("file was replaced despite vars being unchanged")
+	}
+}
+
+var testCAs = []config.CASpec{
+	{Name: "mesh"},
+}
+
+func TestResolveDerivesCA(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+
+	_, cas, err := Resolve(testSpecs, testCAs, nil, path, testIKM)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(cas) != 1 {
+		t.Fatalf("expected 1 CA, got %d", len(cas))
+	}
+	ca, ok := cas["mesh"]
+	if !ok {
+		t.Fatal("missing CA 'mesh'")
+	}
+	if ca.CertPEM == "" {
+		t.Error("cert_pem is empty")
+	}
+	if ca.PrivateKeyPEM == "" {
+		t.Error("private_key_pem is empty")
+	}
+}
+
+func TestResolveCAValid(t *testing.T) {
+	dir := t.TempDir()
+
+	_, cas, err := Resolve(testSpecs, testCAs, nil, filepath.Join(dir, "s.json"), testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := cas["mesh"]
+
+	// Parse the PEM-encoded private key to verify it's valid Ed25519.
+	block, _ := pem.Decode([]byte(ca.PrivateKeyPEM))
+	if block == nil {
+		t.Fatal("failed to decode private key PEM")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse PKCS#8 private key: %v", err)
+	}
+	if _, ok := parsed.(ed25519.PrivateKey); !ok {
+		t.Errorf("expected Ed25519 key, got %T", parsed)
+	}
+
+	// Parse the certificate.
+	certBlock, _ := pem.Decode([]byte(ca.CertPEM))
+	if certBlock == nil {
+		t.Fatal("failed to decode certificate PEM")
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	if !cert.IsCA {
+		t.Error("expected CA certificate")
+	}
+}
+
+func TestResolveCADeterministic(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+
+	_, cas1, err := Resolve(testSpecs, testCAs, nil, filepath.Join(dir1, "s.json"), testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cas2, err := Resolve(testSpecs, testCAs, nil, filepath.Join(dir2, "s.json"), testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cas1["mesh"].CertPEM != cas2["mesh"].CertPEM {
+		t.Error("CA cert should be deterministic")
+	}
+	if cas1["mesh"].PrivateKeyPEM != cas2["mesh"].PrivateKeyPEM {
+		t.Error("CA private key should be deterministic")
+	}
+}
+
+func TestResolvePersistedCA(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+
+	// First resolve: derive + persist.
+	_, first, err := Resolve(testSpecs, testCAs, nil, path, testIKM)
+	if err != nil {
+		t.Fatalf("first resolve: %v", err)
+	}
+
+	// Second resolve: load from disk.
+	_, second, err := Resolve(testSpecs, testCAs, nil, path, testIKM)
+	if err != nil {
+		t.Fatalf("second resolve: %v", err)
+	}
+
+	if first["mesh"].CertPEM != second["mesh"].CertPEM {
+		t.Error("CA cert_pem should be identical after reload")
+	}
+	if first["mesh"].PrivateKeyPEM != second["mesh"].PrivateKeyPEM {
+		t.Error("CA private_key_pem should be identical after reload")
+	}
+}
+
+func TestResolveMissingCA(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+
+	// Persist without CAs.
+	if _, _, err := Resolve(testSpecs, nil, nil, path, testIKM); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now try to load with a CA requirement — should fail.
+	_, _, err := Resolve(testSpecs, testCAs, nil, path, testIKM)
+	if err == nil {
+		t.Fatal("expected error for missing CA in persisted file")
 	}
 }

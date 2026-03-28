@@ -172,7 +172,7 @@ func cmdServer(args []string) int {
 
 	srv, err := api.New(logger, cfg, hmacKey, derived, cas, v, al)
 	if err != nil {
-		logger.Error(err.Error())
+		logger.Error("create api server", "err", err)
 		return 1
 	}
 

@@ -33,6 +33,7 @@ type Server struct {
 	limiter     *ipRateLimiter
 	trustedNets []*net.IPNet
 	scopes      map[string]string
+	caScopes    map[string]string
 	logger      *slog.Logger
 	mux         *http.ServeMux
 }
@@ -44,6 +45,12 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 	for _, s := range cfg.Secrets {
 		if s.Scope != "" {
 			scopes[s.Name] = s.Scope
+		}
+	}
+	caScopes := make(map[string]string, len(cfg.CAs))
+	for _, ca := range cfg.CAs {
+		if ca.Scope != "" {
+			caScopes[ca.Name] = ca.Scope
 		}
 	}
 	var trustedNets []*net.IPNet
@@ -66,6 +73,7 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 		limiter:     newIPRateLimiter(rate.Every(12*time.Second), 5),
 		trustedNets: trustedNets,
 		scopes:      scopes,
+		caScopes:    caScopes,
 		logger:      logger,
 		mux:         http.NewServeMux(),
 	}
@@ -197,8 +205,16 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		filteredVars[name] = val
 	}
 
+	filteredCAs := make(map[string]secrets.CAEntry, len(s.ca))
+	for name, val := range s.ca {
+		sc := s.caScopes[name]
+		if sc == "" || sc == req.Scope {
+			filteredCAs[name] = val
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(claimResponse{Secrets: filteredSecrets, Vars: filteredVars, CA: s.ca})
+	json.NewEncoder(w).Encode(claimResponse{Secrets: filteredSecrets, Vars: filteredVars, CA: filteredCAs})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

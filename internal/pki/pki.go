@@ -6,13 +6,13 @@
 // Every server with the same enrollment key independently produces the same
 // CA — no coordination needed.
 //
-// Leaf certificates (server + client) use ephemeral P-256 keys.
+// Ed25519 is used for all keys (CA and leaf). CA keys are deterministic via
+// NewKeyFromSeed; leaf keys are ephemeral via GenerateKey.
 package pki
 
 import (
-	"crypto/ecdsa"
+	"crypto"
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -88,29 +88,27 @@ func DeriveCA(ikm []byte) (*CA, error) {
 	return &CA{Cert: cert, CertPEM: certPEM, Key: key}, nil
 }
 
-// P256CA holds a deterministic P-256 ECDSA CA certificate and private key.
-type P256CA struct {
+// NamedCA holds a deterministic Ed25519 CA certificate and private key in PEM format.
+type NamedCA struct {
 	CertPEM []byte
 	KeyPEM  []byte
 }
 
-// DeriveP256CA produces a deterministic ECDSA P-256 CA from the enrollment key.
+// DeriveNamedCA produces a deterministic Ed25519 CA from the enrollment key.
 // The name is used in the HKDF info string for domain separation.
-// Returns PEM-encoded certificate and private key.
-func DeriveP256CA(ikm []byte, name string) (*P256CA, error) {
+// Ed25519 key derivation and signing are both fully deterministic, so every
+// server with the same IKM produces byte-identical CA certs.
+func DeriveNamedCA(ikm []byte, name string) (*NamedCA, error) {
 	info := []byte(hkdfInfoCAPrefix + name + hkdfInfoCASuffix)
+	seed := make([]byte, ed25519.SeedSize)
 	r := hkdf.New(sha256.New, ikm, nil, info)
-	key, err := ecdsa.GenerateKey(elliptic.P256(), r)
-	if err != nil {
-		return nil, fmt.Errorf("derive P256 CA key for %q: %w", name, err)
+	if _, err := io.ReadFull(r, seed); err != nil {
+		return nil, fmt.Errorf("derive CA seed for %q: %w", name, err)
 	}
+	key := ed25519.NewKeyFromSeed(seed)
 
-	// Deterministic serial from public key hash.
-	pubDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
-	if err != nil {
-		return nil, fmt.Errorf("marshal P256 CA public key: %w", err)
-	}
-	h := sha256.Sum256(pubDER)
+	// Deterministic serial from seed hash.
+	h := sha256.Sum256(seed)
 	serial := new(big.Int).SetBytes(h[:16])
 
 	tmpl := &x509.Certificate{
@@ -125,29 +123,32 @@ func DeriveP256CA(ikm []byte, name string) (*P256CA, error) {
 		MaxPathLenZero:        true,
 	}
 
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
 	if err != nil {
-		return nil, fmt.Errorf("create P256 CA cert for %q: %w", name, err)
+		return nil, fmt.Errorf("create CA cert for %q: %w", name, err)
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		return nil, fmt.Errorf("marshal P256 CA key for %q: %w", name, err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: must(x509.MarshalPKCS8PrivateKey(key))})
 
-	return &P256CA{CertPEM: certPEM, KeyPEM: keyPEM}, nil
+	return &NamedCA{CertPEM: certPEM, KeyPEM: keyPEM}, nil
 }
 
-// GenerateServerCert creates a P-256 server certificate signed by the CA.
+func must(b []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+// GenerateServerCert creates an ephemeral Ed25519 server certificate signed by the CA.
 // The certificate includes the provided IPs/hostnames as SANs.
 func GenerateServerCert(ca *CA, hosts []string, ttl time.Duration) (certPEM, keyPEM []byte, err error) {
 	return generateLeaf(ca, hosts, x509.ExtKeyUsageServerAuth, ttl)
 }
 
-// GenerateClientCert creates a P-256 client certificate bundle (cert + key + CA cert)
-// signed by the CA.
+// GenerateClientCert creates an ephemeral Ed25519 client certificate bundle
+// (cert + key + CA cert) signed by the CA.
 // Returns the PEM bundle as a single byte slice.
 func GenerateClientCert(ca *CA, ttl time.Duration) ([]byte, error) {
 	certPEM, keyPEM, err := generateLeaf(ca, nil, x509.ExtKeyUsageClientAuth, ttl)
@@ -163,9 +164,11 @@ func GenerateClientCert(ca *CA, ttl time.Duration) ([]byte, error) {
 }
 
 // LoadClientBundle parses a PEM bundle (client cert + key + CA cert) and returns
-// a tls-ready certificate and CA pool.
-func LoadClientBundle(bundlePEM []byte) (*ecdsa.PrivateKey, *x509.Certificate, *x509.CertPool, error) {
+// a tls-ready private key, certificate, and CA pool.
+// Accepts PKCS#8 ("PRIVATE KEY") and SEC1 ("EC PRIVATE KEY") key encodings.
+func LoadClientBundle(bundlePEM []byte) (crypto.Signer, *x509.Certificate, *x509.CertPool, error) {
 	var certDER, keyDER []byte
+	var keyType string
 	pool := x509.NewCertPool()
 
 	rest := bundlePEM
@@ -186,8 +189,9 @@ func LoadClientBundle(bundlePEM []byte) (*ecdsa.PrivateKey, *x509.Certificate, *
 				}
 				pool.AddCert(caCert)
 			}
-		case "EC PRIVATE KEY":
+		case "PRIVATE KEY", "EC PRIVATE KEY":
 			keyDER = block.Bytes
+			keyType = block.Type
 		}
 	}
 
@@ -205,7 +209,8 @@ func LoadClientBundle(bundlePEM []byte) (*ecdsa.PrivateKey, *x509.Certificate, *
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("parse client cert: %w", err)
 	}
-	key, err := x509.ParseECPrivateKey(keyDER)
+
+	key, err := parsePrivateKey(keyDER, keyType)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("parse client key: %w", err)
 	}
@@ -213,8 +218,30 @@ func LoadClientBundle(bundlePEM []byte) (*ecdsa.PrivateKey, *x509.Certificate, *
 	return key, cert, pool, nil
 }
 
+// parsePrivateKey parses a DER-encoded private key. Tries PKCS#8 first for
+// "PRIVATE KEY" blocks, SEC1 for "EC PRIVATE KEY" blocks.
+func parsePrivateKey(der []byte, pemType string) (crypto.Signer, error) {
+	if pemType == "PRIVATE KEY" {
+		parsed, err := x509.ParsePKCS8PrivateKey(der)
+		if err != nil {
+			return nil, err
+		}
+		s, ok := parsed.(crypto.Signer)
+		if !ok {
+			return nil, fmt.Errorf("PKCS#8 key is %T, not a signer", parsed)
+		}
+		return s, nil
+	}
+	// SEC1 (EC PRIVATE KEY)
+	key, err := x509.ParseECPrivateKey(der)
+	if err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
 func generateLeaf(ca *CA, hosts []string, usage x509.ExtKeyUsage, validity time.Duration) (certPEM, keyPEM []byte, err error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate leaf key: %w", err)
 	}
@@ -242,18 +269,13 @@ func generateLeaf(ca *CA, hosts []string, usage x509.ExtKeyUsage, validity time.
 		}
 	}
 
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, &key.PublicKey, ca.Key)
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, key.Public(), ca.Key)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sign leaf cert: %w", err)
 	}
 
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("marshal leaf key: %w", err)
-	}
-
 	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: must(x509.MarshalPKCS8PrivateKey(key))})
 	return certPEM, keyPEM, nil
 }
 

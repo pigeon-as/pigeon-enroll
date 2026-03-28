@@ -298,6 +298,70 @@ func TestClaimRateLimited(t *testing.T) {
 	}
 }
 
+func TestClaimCAScopeFiltering(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	cfg := config.Config{
+		TokenWindow: testWindow,
+		Vars:        map[string]string{"k": "v"},
+		CAs: []config.CASpec{
+			{Name: "shared"},
+			{Name: "server_ca", Scope: "server"},
+		},
+	}
+	cas := map[string]secrets.CAEntry{
+		"shared":    {CertPEM: "shared-cert", PrivateKeyPEM: "shared-key"},
+		"server_ca": {CertPEM: "server-cert", PrivateKeyPEM: "server-key"},
+	}
+	srv, err := New(logger, cfg, testHMACKey, nil, cas, verify.Noop{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Claim with worker scope — should only get the unscoped CA.
+	workerTok := token.Generate(testHMACKey, time.Now(), testWindow, "worker")
+	body, _ := json.Marshal(claimRequest{Token: workerTok, Scope: "worker"})
+	req := httptest.NewRequest("POST", "/claim", bytes.NewReader(body))
+	req.RemoteAddr = "192.168.1.100:12345"
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp claimResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.CA) != 1 {
+		t.Fatalf("expected 1 CA for worker scope, got %d: %v", len(resp.CA), resp.CA)
+	}
+	if _, ok := resp.CA["shared"]; !ok {
+		t.Error("expected unscoped CA 'shared' in response")
+	}
+	if _, ok := resp.CA["server_ca"]; ok {
+		t.Error("server-scoped CA should not be returned for worker scope")
+	}
+
+	// Claim with server scope — should get both CAs.
+	serverTok := token.Generate(testHMACKey, time.Now(), testWindow, "server")
+	body2, _ := json.Marshal(claimRequest{Token: serverTok, Scope: "server"})
+	req2 := httptest.NewRequest("POST", "/claim", bytes.NewReader(body2))
+	req2.RemoteAddr = "192.168.1.100:12345"
+	w2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+	var resp2 claimResponse
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp2.CA) != 2 {
+		t.Fatalf("expected 2 CAs for server scope, got %d", len(resp2.CA))
+	}
+}
+
 func TestClaimLargeBody(t *testing.T) {
 	srv := testServer(t)
 

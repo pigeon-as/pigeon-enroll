@@ -31,9 +31,10 @@ type Store struct {
 // If path is non-empty, nonces are persisted to disk and loaded on startup.
 func New(maxAge time.Duration, path string) (*Store, error) {
 	s := &Store{
-		seen:   make(map[string]time.Time),
-		maxAge: maxAge,
-		path:   path,
+		seen:      make(map[string]time.Time),
+		maxAge:    maxAge,
+		lastPurge: time.Now(),
+		path:      path,
 	}
 	if path != "" {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -48,22 +49,24 @@ func New(maxAge time.Duration, path string) (*Store, error) {
 
 // Check returns true if the token has NOT been seen before (and marks it).
 func (s *Store) Check(token string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	h := hashToken(token)
+	now := time.Now()
 
+	s.mu.Lock()
 	if time.Since(s.lastPurge) > s.maxAge/2 {
 		s.purge()
 		s.lastPurge = time.Now()
 	}
 
-	h := hashToken(token)
 	if _, exists := s.seen[h]; exists {
+		s.mu.Unlock()
 		return false
 	}
-	now := time.Now()
 	s.seen[h] = now
+	shouldPersist := s.path != ""
+	s.mu.Unlock()
 
-	if s.path != "" {
+	if shouldPersist {
 		// Best-effort append — failure here doesn't block the claim.
 		// On restart, the token window will have expired anyway for
 		// tokens that failed to persist.
@@ -110,12 +113,20 @@ func (s *Store) loadFile() error {
 }
 
 // appendEntry appends a single nonce entry to the file.
-func (s *Store) appendEntry(hash string, t time.Time) error {
+func (s *Store) appendEntry(hash string, t time.Time) (err error) {
 	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil {
+			if err == nil {
+				err = cerr
+			} else {
+				err = fmt.Errorf("%w; close: %w", err, cerr)
+			}
+		}
+	}()
 	_, err = fmt.Fprintf(f, "%s %d\n", hash, t.Unix())
 	return err
 }

@@ -1,9 +1,10 @@
 package pki
 
 import (
-	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"net"
 	"testing"
 	"time"
@@ -123,8 +124,8 @@ func TestGenerateClientCert_Bundle(t *testing.T) {
 		t.Fatal("LoadClientBundle:", err)
 	}
 
-	if _, ok := key.Public().(*ecdsa.PublicKey); !ok {
-		t.Error("expected ECDSA key")
+	if _, ok := key.Public().(ed25519.PublicKey); !ok {
+		t.Errorf("expected Ed25519 key, got %T", key)
 	}
 
 	if len(cert.ExtKeyUsage) != 1 || cert.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
@@ -246,5 +247,60 @@ func TestCertRotator_CachesAndRenews(t *testing.T) {
 	}
 	if cert1 != cert2 {
 		t.Error("expected same cached cert pointer")
+	}
+}
+
+func TestDeriveNamedCA_Deterministic(t *testing.T) {
+	ca1, err := DeriveNamedCA(testIKM, "mesh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca2, err := DeriveNamedCA(testIKM, "mesh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(ca1.CertPEM) != string(ca2.CertPEM) {
+		t.Error("same IKM+name should produce identical CA certs")
+	}
+	if string(ca1.KeyPEM) != string(ca2.KeyPEM) {
+		t.Error("same IKM+name should produce identical CA keys")
+	}
+}
+
+func TestDeriveNamedCA_DifferentNames(t *testing.T) {
+	ca1, err := DeriveNamedCA(testIKM, "mesh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca2, err := DeriveNamedCA(testIKM, "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(ca1.KeyPEM) == string(ca2.KeyPEM) {
+		t.Error("different names should produce different CA keys")
+	}
+}
+
+func TestDeriveNamedCA_IsCA(t *testing.T) {
+	ca, err := DeriveNamedCA(testIKM, "mesh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	block, _ := pem.Decode(ca.CertPEM)
+	if block == nil {
+		t.Fatal("no PEM block in cert")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cert.IsCA {
+		t.Error("expected IsCA=true")
+	}
+	if cert.Subject.CommonName != "mesh" {
+		t.Errorf("CN = %q, want %q", cert.Subject.CommonName, "mesh")
 	}
 }

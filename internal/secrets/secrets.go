@@ -154,7 +154,7 @@ func deriveAll(specs []config.SecretSpec, cas []config.CASpec, ikm []byte) (map[
 	}
 	caMap := make(map[string]CAEntry, len(cas))
 	for _, ca := range cas {
-		derived, err := pki.DeriveP256CA(ikm, ca.Name)
+		derived, err := pki.DeriveNamedCA(ikm, ca.Name)
 		if err != nil {
 			return nil, nil, fmt.Errorf("derive CA %q: %w", ca.Name, err)
 		}

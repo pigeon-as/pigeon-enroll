@@ -23,7 +23,8 @@ type SecretSpec struct {
 
 // CASpec describes a CA certificate to derive from the enrollment key via HKDF.
 type CASpec struct {
-	Name string `hcl:"name,label"`
+	Name  string `hcl:"name,label"`
+	Scope string `hcl:"scope,optional"`
 }
 
 // Config holds the pigeon-enroll configuration.
@@ -107,8 +108,8 @@ func validate(cfg Config) error {
 	if cfg.ServerCertTTL < time.Second {
 		return fmt.Errorf("server_cert_ttl must be at least 1s")
 	}
-	if len(cfg.Vars) == 0 && len(cfg.Secrets) == 0 {
-		return fmt.Errorf("vars or secrets must not be empty")
+	if len(cfg.Vars) == 0 && len(cfg.Secrets) == 0 && len(cfg.CAs) == 0 {
+		return fmt.Errorf("vars, secrets, or ca must not be empty")
 	}
 	seen := make(map[string]bool, len(cfg.Secrets)+len(cfg.Vars))
 	for _, s := range cfg.Secrets {
