@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
+	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/pki"
 	"golang.org/x/crypto/hkdf"
@@ -202,31 +202,9 @@ func derive(specs []config.SecretSpec, ikm []byte) (map[string]string, error) {
 
 // persist writes secrets atomically to path via temp file + rename.
 func persist(secrets map[string]string, cas map[string]CAEntry, vars map[string]string, path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return fmt.Errorf("create secrets directory: %w", err)
-	}
 	data, err := json.Marshal(persistedFile{Secrets: secrets, CA: cas, Vars: vars})
 	if err != nil {
 		return fmt.Errorf("marshal secrets: %w", err)
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".secrets-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	defer os.Remove(f.Name())
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := f.Chmod(0600); err != nil {
-		f.Close()
-		return fmt.Errorf("chmod temp file: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close temp file: %w", err)
-	}
-	if err := os.Rename(f.Name(), path); err != nil {
-		return fmt.Errorf("rename temp file to %s: %w", path, err)
-	}
-	return nil
+	return atomicfile.Write(path, data, 0600)
 }

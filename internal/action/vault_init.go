@@ -9,12 +9,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/gohcl"
+	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 )
 
 // vaultInitConfig holds vault-init action configuration.
@@ -146,7 +145,7 @@ func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[st
 	if err != nil {
 		return fmt.Errorf("marshal init response: %w", err)
 	}
-	if err := writeAtomic(v.cfg.Output, respJSON, 0600); err != nil {
+	if err := atomicfile.Write(v.cfg.Output, respJSON, 0600); err != nil {
 		return fmt.Errorf("write %s: %w", v.cfg.Output, err)
 	}
 	logger.Info("Vault initialized", "output", v.cfg.Output)
@@ -296,26 +295,4 @@ func pollUntilReachable(ctx context.Context, logger *slog.Logger, client *http.C
 	}
 }
 
-func writeAtomic(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".vault-init-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
 
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
-}

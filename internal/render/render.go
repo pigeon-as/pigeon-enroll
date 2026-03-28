@@ -9,10 +9,10 @@ package render
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 	"github.com/zclconf/go-cty/cty"
 	ctyjson "github.com/zclconf/go-cty/cty/json"
 )
@@ -84,29 +84,8 @@ func trimJSONWhitespace(b []byte) []byte {
 }
 
 // WriteAtomic writes data to path atomically via temp file + rename.
+// Ownership is set on the temp file before rename, so the destination
+// appears with correct ownership atomically.
 func WriteAtomic(path string, data []byte, perm os.FileMode, uid, gid int) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".render-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := chown(tmp.Name(), uid, gid); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return atomicfile.WriteOwned(path, data, perm, uid, gid)
 }
