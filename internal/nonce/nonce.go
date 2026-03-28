@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -140,7 +141,9 @@ func (s *Store) purge() {
 		}
 	}
 	if s.path != "" {
-		_ = s.rewriteFile()
+		if err := s.rewriteFile(); err != nil {
+			slog.Warn("nonce: purge rewrite failed", "path", s.path, "error", err)
+		}
 	}
 }
 
