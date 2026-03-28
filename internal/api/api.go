@@ -18,7 +18,6 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/nonce"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
-	"github.com/pigeon-as/pigeon-enroll/internal/verify"
 )
 
 // Server is the enrollment HTTP server.
@@ -27,7 +26,6 @@ type Server struct {
 	secrets     map[string]string
 	ca          map[string]secrets.CAEntry
 	hmacKey     []byte
-	verifier    verify.Verifier
 	audit       *audit.Log
 	nonces      *nonce.Store
 	limiter     *ipRateLimiter
@@ -39,7 +37,7 @@ type Server struct {
 }
 
 // New creates a new enrollment API server.
-func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets map[string]string, cas map[string]secrets.CAEntry, v verify.Verifier, al *audit.Log) (*Server, error) {
+func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets map[string]string, cas map[string]secrets.CAEntry, al *audit.Log) (*Server, error) {
 	// Build scope map from secret specs.
 	scopes := make(map[string]string, len(cfg.Secrets))
 	for _, s := range cfg.Secrets {
@@ -67,7 +65,6 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 		secrets:     derivedSecrets,
 		ca:          cas,
 		hmacKey:     hmacKey,
-		verifier:    v,
 		audit:       al,
 		nonces:      nonces,
 		limiter:     newIPRateLimiter(rate.Every(12*time.Second), 5),
@@ -154,7 +151,7 @@ type claimResponse struct {
 }
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
-	ip := verify.ClientIP(r)
+	ip := clientIP(r)
 	if !s.limiter.allow(ip) {
 		s.logger.Warn("rate limited", "ip", ip)
 		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "rate limited"})
@@ -173,13 +170,6 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		s.logger.Warn("invalid token", "ip", ip)
 		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "invalid token"})
 		s.jsonError(w, "invalid or expired token", http.StatusForbidden)
-		return
-	}
-
-	if err := s.verifier.Verify(r.Context(), r); err != nil {
-		s.logger.Warn("verification failed", "ip", ip, "err", err)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "verification failed"})
-		s.jsonError(w, "verification failed", http.StatusForbidden)
 		return
 	}
 
@@ -236,6 +226,15 @@ func (s *Server) jsonError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// clientIP extracts the client IP from a request, stripping the port.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // ipRateLimiter tracks per-IP request rates.

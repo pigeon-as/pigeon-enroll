@@ -12,24 +12,10 @@ import (
 
 	"log/slog"
 
-	"github.com/hashicorp/hcl/v2"
-	hcljson "github.com/hashicorp/hcl/v2/json"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
-	"github.com/pigeon-as/pigeon-enroll/internal/verify"
 )
-
-func boolPtr(b bool) *bool { return &b }
-
-func jsonToBody(t *testing.T, data []byte) hcl.Body {
-	t.Helper()
-	f, diags := hcljson.Parse(data, "test.json")
-	if diags.HasErrors() {
-		t.Fatalf("parse JSON body: %s", diags.Error())
-	}
-	return f.Body
-}
 
 var (
 	testKey     = []byte("0123456789abcdef0123456789abcdef") // 32 bytes
@@ -59,7 +45,7 @@ func testServer(t *testing.T) *Server {
 		"secret_c": "dGVzdA==",
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	srv, err := New(logger, cfg, testHMACKey, secrets, nil, verify.Noop{}, nil)
+	srv, err := New(logger, cfg, testHMACKey, secrets, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,68 +163,6 @@ func TestHealth(t *testing.T) {
 	}
 }
 
-func TestVerifierNonFatal(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	v, err := verify.New(logger, []verify.Config{
-		{Type: "cidr", Fatal: boolPtr(false), Body: jsonToBody(t, []byte(`{"allow": ["10.0.0.0/8"]}`))},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Config{
-		TokenWindow: testWindow,
-		Vars:        map[string]string{"k": "v"},
-	}
-	srv, srvErr := New(logger, cfg, testHMACKey, nil, nil, v, nil)
-	if srvErr != nil {
-		t.Fatal(srvErr)
-	}
-
-	body, _ := json.Marshal(claimRequest{
-		Token: validToken(),
-	})
-	req := httptest.NewRequest("POST", "/claim", bytes.NewReader(body))
-	req.RemoteAddr = "192.168.1.100:12345" // not in 10.0.0.0/8
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-
-	// Non-fatal: claim should succeed despite verification failure.
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (non-fatal verifier)", w.Code)
-	}
-}
-
-func TestVerifierFatal(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	v, err := verify.New(logger, []verify.Config{
-		{Type: "cidr", Fatal: boolPtr(true), Body: jsonToBody(t, []byte(`{"allow": ["10.0.0.0/8"]}`))},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Config{
-		TokenWindow: testWindow,
-		Vars:        map[string]string{"k": "v"},
-	}
-	srv, srvErr := New(logger, cfg, testHMACKey, nil, nil, v, nil)
-	if srvErr != nil {
-		t.Fatal(srvErr)
-	}
-
-	body, _ := json.Marshal(claimRequest{
-		Token: validToken(),
-	})
-	req := httptest.NewRequest("POST", "/claim", bytes.NewReader(body))
-	req.RemoteAddr = "192.168.1.100:12345" // not in 10.0.0.0/8
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-
-	// Fatal: claim should be blocked.
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 (fatal verifier)", w.Code)
-	}
-}
-
 func TestClaimScopeMismatch(t *testing.T) {
 	srv := testServer(t)
 
@@ -312,7 +236,7 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 		"shared":    {CertPEM: "shared-cert", PrivateKeyPEM: "shared-key"},
 		"server_ca": {CertPEM: "server-cert", PrivateKeyPEM: "server-key"},
 	}
-	srv, err := New(logger, cfg, testHMACKey, nil, cas, verify.Noop{}, nil)
+	srv, err := New(logger, cfg, testHMACKey, nil, cas, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

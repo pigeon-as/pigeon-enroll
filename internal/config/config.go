@@ -10,7 +10,6 @@ import (
 
 	"github.com/hashicorp/hcl/v2/hclsimple"
 	"github.com/pigeon-as/pigeon-enroll/internal/action"
-	"github.com/pigeon-as/pigeon-enroll/internal/verify"
 )
 
 // SecretSpec describes a secret to derive from the enrollment key via HKDF.
@@ -39,7 +38,6 @@ type Config struct {
 	ServerCertTTL    time.Duration
 	ServerCertTTLRaw string            `hcl:"server_cert_ttl,optional"`
 	AuditPath        string            `hcl:"audit_path,optional"`
-	Verifiers        []verify.Config   `hcl:"verifier,block"`
 	Vars             map[string]string `hcl:"vars,optional"`
 	Secrets          []SecretSpec      `hcl:"secret,block"`
 	CAs              []CASpec          `hcl:"ca,block"`
