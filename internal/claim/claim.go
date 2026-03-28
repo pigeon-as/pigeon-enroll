@@ -12,10 +12,12 @@ import (
 )
 
 // Response is the JSON structure returned by POST /claim.
+// Format: {"secrets":{...},"vars":{...}} with an optional "ca" field when CAs are configured.
 type Response struct {
-	Secrets map[string]string `json:"secrets"`
-	Vars    map[string]string `json:"vars"`
-	Error   string            `json:"error,omitempty"`
+	Secrets map[string]string            `json:"secrets"`
+	Vars    map[string]string            `json:"vars"`
+	CA      map[string]map[string]string `json:"ca,omitempty"`
+	Error   string                       `json:"error,omitempty"`
 }
 
 // Run sends a claim request and writes secrets to outputPath.
@@ -59,7 +61,7 @@ func Run(client *http.Client, url, token, scope, outputPath string) (*Response, 
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	// Write the raw server response — already {"secrets":{...},"vars":{...}}.
+	// Write the raw server response ("ca" field present only when CAs are configured).
 	if err := writeAtomic(outputPath, data); err != nil {
 		return nil, fmt.Errorf("write secrets: %w", err)
 	}

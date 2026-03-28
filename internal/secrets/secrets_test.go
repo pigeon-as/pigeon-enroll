@@ -2,9 +2,12 @@ package secrets
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,7 +29,7 @@ func TestResolveDerives(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.json")
 
-	secrets, err := Resolve(testSpecs, nil, path, testIKM)
+	secrets, _, err := Resolve(testSpecs, nil, nil, path, testIKM)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -72,11 +75,11 @@ func TestResolveDeterministic(t *testing.T) {
 	dir1 := t.TempDir()
 	dir2 := t.TempDir()
 
-	s1, err := Resolve(testSpecs, nil, filepath.Join(dir1, "s.json"), testIKM)
+	s1, _, err := Resolve(testSpecs, nil, nil, filepath.Join(dir1, "s.json"), testIKM)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s2, err := Resolve(testSpecs, nil, filepath.Join(dir2, "s.json"), testIKM)
+	s2, _, err := Resolve(testSpecs, nil, nil, filepath.Join(dir2, "s.json"), testIKM)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,11 +96,11 @@ func TestResolveDifferentIKM(t *testing.T) {
 	ikm2 := make([]byte, 32)
 	ikm2[0] = 1 // one bit different
 
-	s1, err := Resolve(testSpecs, nil, filepath.Join(dir1, "s.json"), testIKM)
+	s1, _, err := Resolve(testSpecs, nil, nil, filepath.Join(dir1, "s.json"), testIKM)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s2, err := Resolve(testSpecs, nil, filepath.Join(dir2, "s.json"), ikm2)
+	s2, _, err := Resolve(testSpecs, nil, nil, filepath.Join(dir2, "s.json"), ikm2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,13 +115,13 @@ func TestResolveLoadsExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.json")
 
-	first, err := Resolve(testSpecs, nil, path, testIKM)
+	first, _, err := Resolve(testSpecs, nil, nil, path, testIKM)
 	if err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
 
 	// Second run loads from disk — values identical.
-	second, err := Resolve(testSpecs, nil, path, testIKM)
+	second, _, err := Resolve(testSpecs, nil, nil, path, testIKM)
 	if err != nil {
 		t.Fatalf("second resolve: %v", err)
 	}
@@ -130,7 +133,7 @@ func TestResolveLoadsExisting(t *testing.T) {
 }
 
 func TestResolveEmptySpecs(t *testing.T) {
-	secrets, err := Resolve(nil, nil, "", nil)
+	secrets, _, err := Resolve(nil, nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("resolve nil specs: %v", err)
 	}
@@ -141,7 +144,7 @@ func TestResolveEmptySpecs(t *testing.T) {
 
 func TestResolveEmptyPath(t *testing.T) {
 	// Empty path: derive fresh, no file written.
-	secrets, err := Resolve(testSpecs, nil, "", testIKM)
+	secrets, _, err := Resolve(testSpecs, nil, nil, "", testIKM)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -157,7 +160,7 @@ func TestResolveMissingKey(t *testing.T) {
 	data, _ := json.Marshal(persistedFile{Secrets: map[string]string{"gossip_key": "abc"}})
 	os.WriteFile(path, data, 0600)
 
-	_, err := Resolve(testSpecs, nil, path, testIKM)
+	_, _, err := Resolve(testSpecs, nil, nil, path, testIKM)
 	if err == nil {
 		t.Fatal("expected error for missing key in secrets file")
 	}
@@ -167,7 +170,7 @@ func TestResolveCreatesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "deep", "secrets.json")
 
-	secrets, err := Resolve(testSpecs, nil, path, testIKM)
+	secrets, _, err := Resolve(testSpecs, nil, nil, path, testIKM)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -218,7 +221,7 @@ func TestResolveRepersistsOnVarsChange(t *testing.T) {
 	oldVars := map[string]string{"dc": "eu-west"}
 
 	// First resolve: derive + persist with old vars.
-	first, err := Resolve(testSpecs, oldVars, path, testIKM)
+	first, _, err := Resolve(testSpecs, nil, oldVars, path, testIKM)
 	if err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
@@ -233,7 +236,7 @@ func TestResolveRepersistsOnVarsChange(t *testing.T) {
 
 	// Second resolve with updated vars.
 	newVars := map[string]string{"dc": "us-east", "extra": "val"}
-	second, err := Resolve(testSpecs, newVars, path, testIKM)
+	second, _, err := Resolve(testSpecs, nil, newVars, path, testIKM)
 	if err != nil {
 		t.Fatalf("second resolve: %v", err)
 	}
@@ -263,7 +266,7 @@ func TestResolveSkipsRepersistWhenVarsUnchanged(t *testing.T) {
 	vars := map[string]string{"dc": "eu-west"}
 
 	// First resolve: derive + persist.
-	if _, err := Resolve(testSpecs, vars, path, testIKM); err != nil {
+	if _, _, err := Resolve(testSpecs, nil, vars, path, testIKM); err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
 
@@ -274,7 +277,7 @@ func TestResolveSkipsRepersistWhenVarsUnchanged(t *testing.T) {
 	}
 
 	// Second resolve with same vars — must succeed without rewriting.
-	if _, err := Resolve(testSpecs, vars, path, testIKM); err != nil {
+	if _, _, err := Resolve(testSpecs, nil, vars, path, testIKM); err != nil {
 		t.Fatalf("second resolve (with unchanged vars) failed: %v", err)
 	}
 
@@ -285,5 +288,129 @@ func TestResolveSkipsRepersistWhenVarsUnchanged(t *testing.T) {
 	}
 	if !os.SameFile(infoBefore, infoAfter) {
 		t.Error("file was replaced despite vars being unchanged")
+	}
+}
+
+var testCAs = []config.CASpec{
+	{Name: "mesh"},
+}
+
+func TestResolveDerivesCA(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+
+	_, cas, err := Resolve(testSpecs, testCAs, nil, path, testIKM)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(cas) != 1 {
+		t.Fatalf("expected 1 CA, got %d", len(cas))
+	}
+	ca, ok := cas["mesh"]
+	if !ok {
+		t.Fatal("missing CA 'mesh'")
+	}
+	if ca.CertPEM == "" {
+		t.Error("cert_pem is empty")
+	}
+	if ca.PrivateKeyPEM == "" {
+		t.Error("private_key_pem is empty")
+	}
+}
+
+func TestResolveCAValid(t *testing.T) {
+	dir := t.TempDir()
+
+	_, cas, err := Resolve(testSpecs, testCAs, nil, filepath.Join(dir, "s.json"), testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := cas["mesh"]
+
+	// Parse the PEM-encoded private key to verify it's valid Ed25519.
+	block, _ := pem.Decode([]byte(ca.PrivateKeyPEM))
+	if block == nil {
+		t.Fatal("failed to decode private key PEM")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse PKCS#8 private key: %v", err)
+	}
+	if _, ok := parsed.(ed25519.PrivateKey); !ok {
+		t.Errorf("expected Ed25519 key, got %T", parsed)
+	}
+
+	// Parse the certificate.
+	certBlock, _ := pem.Decode([]byte(ca.CertPEM))
+	if certBlock == nil {
+		t.Fatal("failed to decode certificate PEM")
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	if !cert.IsCA {
+		t.Error("expected CA certificate")
+	}
+}
+
+func TestResolveCADeterministic(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+
+	_, cas1, err := Resolve(testSpecs, testCAs, nil, filepath.Join(dir1, "s.json"), testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cas2, err := Resolve(testSpecs, testCAs, nil, filepath.Join(dir2, "s.json"), testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cas1["mesh"].CertPEM != cas2["mesh"].CertPEM {
+		t.Error("CA cert should be deterministic")
+	}
+	if cas1["mesh"].PrivateKeyPEM != cas2["mesh"].PrivateKeyPEM {
+		t.Error("CA private key should be deterministic")
+	}
+}
+
+func TestResolvePersistedCA(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+
+	// First resolve: derive + persist.
+	_, first, err := Resolve(testSpecs, testCAs, nil, path, testIKM)
+	if err != nil {
+		t.Fatalf("first resolve: %v", err)
+	}
+
+	// Second resolve: load from disk.
+	_, second, err := Resolve(testSpecs, testCAs, nil, path, testIKM)
+	if err != nil {
+		t.Fatalf("second resolve: %v", err)
+	}
+
+	if first["mesh"].CertPEM != second["mesh"].CertPEM {
+		t.Error("CA cert_pem should be identical after reload")
+	}
+	if first["mesh"].PrivateKeyPEM != second["mesh"].PrivateKeyPEM {
+		t.Error("CA private_key_pem should be identical after reload")
+	}
+}
+
+func TestResolveMissingCA(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+
+	// Persist without CAs.
+	if _, _, err := Resolve(testSpecs, nil, nil, path, testIKM); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now try to load with a CA requirement — should fail.
+	_, _, err := Resolve(testSpecs, testCAs, nil, path, testIKM)
+	if err == nil {
+		t.Fatal("expected error for missing CA in persisted file")
 	}
 }
