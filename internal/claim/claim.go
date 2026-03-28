@@ -12,7 +12,7 @@ import (
 )
 
 // Response is the JSON structure returned by POST /claim.
-// Format: {"secrets":{...},"vars":{...},"ca":{...}}.
+// Format: {"secrets":{...},"vars":{...}} with an optional "ca" field when CAs are configured.
 type Response struct {
 	Secrets map[string]string            `json:"secrets"`
 	Vars    map[string]string            `json:"vars"`
@@ -61,7 +61,7 @@ func Run(client *http.Client, url, token, scope, outputPath string) (*Response, 
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	// Write the raw server response — {"secrets":{...},"vars":{...},"ca":{...}}.
+	// Write the raw server response ("ca" field present only when CAs are configured).
 	if err := writeAtomic(outputPath, data); err != nil {
 		return nil, fmt.Errorf("write secrets: %w", err)
 	}

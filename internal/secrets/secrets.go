@@ -60,7 +60,7 @@ type CAEntry struct {
 
 // Resolve loads persisted secrets from path, or derives them from ikm
 // via HKDF-SHA256 and persists atomically. If path is empty, derives fresh.
-// The persisted format is {"secrets":{...},"vars":{...},"ca":{...}}.
+// The persisted format is {"secrets":{...},"vars":{...}} with an optional "ca" field when CAs are configured.
 // Returns secrets and CAs as separate maps.
 func Resolve(specs []config.SecretSpec, cas []config.CASpec, vars map[string]string, path string, ikm []byte) (map[string]string, map[string]CAEntry, error) {
 	if len(specs) == 0 && len(cas) == 0 {
@@ -104,7 +104,7 @@ func Resolve(specs []config.SecretSpec, cas []config.CASpec, vars map[string]str
 	return secrets, derivedCAs, nil
 }
 
-// persistedFile is the on-disk format: {"secrets":{...},"vars":{...},"ca":{...}}.
+// persistedFile is the on-disk format: {"secrets":{...},"vars":{...}} with an optional "ca" field.
 type persistedFile struct {
 	Secrets map[string]string  `json:"secrets"`
 	Vars    map[string]string  `json:"vars"`
