@@ -116,15 +116,15 @@ func deriveCA(ikm []byte, info string, cn string) (*CA, error) {
 
 // GenerateServerCert creates an ephemeral Ed25519 server certificate signed by the CA.
 // The certificate includes the provided IPs/hostnames as SANs.
-func GenerateServerCert(ca *CA, hosts []string, ttl time.Duration) (certPEM, keyPEM []byte, err error) {
-	return generateLeaf(ca, hosts, x509.ExtKeyUsageServerAuth, ttl)
+func GenerateServerCert(ca *CA, cn string, hosts []string, ttl time.Duration) (certPEM, keyPEM []byte, err error) {
+	return generateLeaf(ca, cn, hosts, x509.ExtKeyUsageServerAuth, ttl)
 }
 
 // GenerateClientCert creates an ephemeral Ed25519 client certificate bundle
 // (cert + key + CA cert) signed by the CA.
 // Returns the PEM bundle as a single byte slice.
 func GenerateClientCert(ca *CA, ttl time.Duration) ([]byte, error) {
-	certPEM, keyPEM, err := generateLeaf(ca, nil, x509.ExtKeyUsageClientAuth, ttl)
+	certPEM, keyPEM, err := generateLeaf(ca, "pigeon-enroll", nil, x509.ExtKeyUsageClientAuth, ttl)
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +134,12 @@ func GenerateClientCert(ca *CA, ttl time.Duration) ([]byte, error) {
 	bundle = append(bundle, keyPEM...)
 	bundle = append(bundle, ca.CertPEM...)
 	return bundle, nil
+}
+
+// GenerateClientCertFiles creates an ephemeral Ed25519 client certificate signed
+// by the CA and returns the cert and key as separate PEM byte slices.
+func GenerateClientCertFiles(ca *CA, cn string, ttl time.Duration) (certPEM, keyPEM []byte, err error) {
+	return generateLeaf(ca, cn, nil, x509.ExtKeyUsageClientAuth, ttl)
 }
 
 // LoadClientBundle parses a PEM bundle (client cert + key + CA cert) and returns
@@ -215,7 +221,7 @@ func parsePrivateKey(der []byte, pemType string) (crypto.Signer, error) {
 	return key, nil
 }
 
-func generateLeaf(ca *CA, hosts []string, usage x509.ExtKeyUsage, validity time.Duration) (certPEM, keyPEM []byte, err error) {
+func generateLeaf(ca *CA, cn string, hosts []string, usage x509.ExtKeyUsage, validity time.Duration) (certPEM, keyPEM []byte, err error) {
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate leaf key: %w", err)
@@ -229,7 +235,7 @@ func generateLeaf(ca *CA, hosts []string, usage x509.ExtKeyUsage, validity time.
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "pigeon-enroll"},
+		Subject:      pkix.Name{CommonName: cn},
 		NotBefore:    now.Add(-5 * time.Minute),
 		NotAfter:     now.Add(validity),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -285,7 +291,7 @@ func (r *CertRotator) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, er
 		return r.cached, nil
 	}
 
-	certPEM, keyPEM, err := GenerateServerCert(r.ca, r.hosts, r.ttl)
+	certPEM, keyPEM, err := GenerateServerCert(r.ca, "pigeon-enroll", r.hosts, r.ttl)
 	if err != nil {
 		return nil, err
 	}

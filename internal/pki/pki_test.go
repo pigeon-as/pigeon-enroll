@@ -74,7 +74,7 @@ func TestGenerateServerCert(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	certPEM, keyPEM, err := GenerateServerCert(ca, []string{"127.0.0.1", "enroll.internal"}, 30*24*time.Hour)
+	certPEM, keyPEM, err := GenerateServerCert(ca, "enroll.internal", []string{"127.0.0.1", "enroll.internal"}, 30*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +95,9 @@ func TestGenerateServerCert(t *testing.T) {
 	}
 	if len(leaf.DNSNames) != 1 || leaf.DNSNames[0] != "enroll.internal" {
 		t.Error("expected enroll.internal in DNSNames")
+	}
+	if leaf.Subject.CommonName != "enroll.internal" {
+		t.Errorf("expected CN=enroll.internal, got %q", leaf.Subject.CommonName)
 	}
 	if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
 		t.Error("expected ServerAuth ext key usage")
@@ -145,7 +148,7 @@ func TestRoundTrip_mTLS(t *testing.T) {
 	}
 
 	// Server side
-	serverCertPEM, serverKeyPEM, err := GenerateServerCert(ca, []string{"127.0.0.1"}, 30*24*time.Hour)
+	serverCertPEM, serverKeyPEM, err := GenerateServerCert(ca, "pigeon-enroll", []string{"127.0.0.1"}, 30*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,6 +250,85 @@ func TestCertRotator_CachesAndRenews(t *testing.T) {
 	}
 	if cert1 != cert2 {
 		t.Error("expected same cached cert pointer")
+	}
+}
+
+func TestGenerateClientCertFiles(t *testing.T) {
+	ca, err := DeriveCA(testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	certPEM, keyPEM, err := GenerateClientCertFiles(ca, "vault-agent", 1*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Parse cert
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatal("X509KeyPair:", err)
+	}
+	leaf, err := x509.ParseCertificate(tlsCert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if leaf.Subject.CommonName != "vault-agent" {
+		t.Errorf("CN = %q, want %q", leaf.Subject.CommonName, "vault-agent")
+	}
+	if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
+		t.Error("expected ClientAuth ext key usage")
+	}
+	if len(leaf.IPAddresses) != 0 {
+		t.Errorf("expected no IP SANs, got %v", leaf.IPAddresses)
+	}
+	if len(leaf.DNSNames) != 0 {
+		t.Errorf("expected no DNS SANs, got %v", leaf.DNSNames)
+	}
+
+	// Verify chain
+	pool := x509.NewCertPool()
+	pool.AddCert(ca.Cert)
+	if _, err := leaf.Verify(x509.VerifyOptions{
+		Roots:     pool,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}); err != nil {
+		t.Error("client cert should verify against CA:", err)
+	}
+}
+
+func TestGenerateServerCert_CustomCN(t *testing.T) {
+	ca, err := DeriveCA(testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	certPEM, keyPEM, err := GenerateServerCert(ca, "pigeon", []string{"localhost", "10.0.0.1"}, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatal("X509KeyPair:", err)
+	}
+	leaf, err := x509.ParseCertificate(tlsCert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if leaf.Subject.CommonName != "pigeon" {
+		t.Errorf("CN = %q, want %q", leaf.Subject.CommonName, "pigeon")
+	}
+	if len(leaf.DNSNames) != 1 || leaf.DNSNames[0] != "localhost" {
+		t.Errorf("DNSNames = %v, want [localhost]", leaf.DNSNames)
+	}
+	if len(leaf.IPAddresses) != 1 || leaf.IPAddresses[0].String() != "10.0.0.1" {
+		t.Errorf("IPAddresses = %v, want [10.0.0.1]", leaf.IPAddresses)
+	}
+	if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
+		t.Error("expected ServerAuth ext key usage")
 	}
 }
 

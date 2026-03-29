@@ -115,7 +115,8 @@ func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[st
 	}
 
 	if initialized {
-		return fmt.Errorf("vault-init: already initialized (addr=%s)", v.cfg.Addr)
+		logger.Info("Vault already initialized, skipping")
+		return nil
 	}
 
 	logger.Info("initializing Vault")
@@ -131,14 +132,14 @@ func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[st
 			return err
 		}
 		logger.Info("management token created", "policies", v.cfg.Token[0].Policies)
+	}
 
-		if v.cfg.Token[0].RevokeRoot {
-			if err := revokeToken(ctx, client, v.cfg.Addr, rootToken); err != nil {
-				return err
-			}
-			logger.Info("root token revoked")
-			initResp.RootToken = "<revoked>"
+	if len(v.cfg.Token) > 0 && v.cfg.Token[0].RevokeRoot {
+		if err := revokeToken(ctx, client, v.cfg.Addr, rootToken); err != nil {
+			return err
 		}
+		logger.Info("root token revoked")
+		initResp.RootToken = "<revoked>"
 	}
 
 	respJSON, err := json.MarshalIndent(initResp, "", "  ")
@@ -294,5 +295,3 @@ func pollUntilReachable(ctx context.Context, logger *slog.Logger, client *http.C
 		}
 	}
 }
-
-

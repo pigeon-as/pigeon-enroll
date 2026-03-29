@@ -115,7 +115,7 @@ Pluggable post-claim lifecycle actions. Run via `run-actions` (all) or `run-acti
 
 ### vault-init
 
-Initializes Vault and creates a management token with a known HKDF-derived ID, so other tools can independently derive the same token without coordination. Fails if Vault is already initialized.
+Initializes Vault and creates a management token with a known HKDF-derived ID, so other tools can independently derive the same token without coordination. Idempotent — skips gracefully if Vault is already initialized.
 
 1. Polls Vault until reachable
 2. Initializes (Shamir or auto-unseal depending on config)
@@ -138,6 +138,24 @@ action "vault-init" {
 ```
 
 For auto-unseal, also set `recovery_shares` and `recovery_threshold`.
+
+### vault-cert-auth
+
+Configures Vault's `auth/cert` method with a role that trusts the enrollment CA. This bridges stage 0 (enrollment) to stage 1 (Vault PKI) — nodes with enrollment-CA-signed client certs can authenticate to Vault via vault-agent. Idempotent — skips if auth/cert is already enabled, upserts the role.
+
+Reads the enrollment CA public cert from disk (`ca_cert_file`) and authenticates to Vault using the management token from the secrets map (`token_secret`).
+
+```hcl
+action "vault-cert-auth" {
+  addr          = "https://127.0.0.1:8200"
+  tls_skip_verify = true
+  ca_cert_file  = "/encrypted/tls/node.ca.crt"
+  token_secret  = "vault_management_token"
+  role          = "node"
+  policies      = ["node-pki"]
+  token_ttl     = "1h"
+}
+```
 
 ### luks-recovery
 

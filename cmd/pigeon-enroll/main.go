@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +47,15 @@ const (
 	version           = "0.1.0"
 	defaultConfigPath = "/etc/pigeon/enroll.hcl"
 )
+
+// stringSlice implements flag.Value for repeatable string flags.
+type stringSlice []string
+
+func (s *stringSlice) String() string { return strings.Join(*s, ",") }
+func (s *stringSlice) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -86,7 +96,7 @@ func printUsage() {
 Commands:
   server          Run the enrollment server
   generate-token  Generate an HMAC claim token
-  generate-cert   Generate a client TLS certificate bundle (PEM)
+  generate-cert   Generate a TLS certificate (client bundle or server cert files)
   claim           Claim secrets from an enrollment server
   render          Render HCL templates with variables
   run-actions     Run post-claim lifecycle actions
@@ -239,8 +249,13 @@ func cmdGenerateToken(args []string) int {
 func cmdGenerateCert(args []string) int {
 	flags := flag.NewFlagSet("generate-cert", flag.ExitOnError)
 	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
-	output := flags.String("output", "", "Write PEM bundle to file (0600) instead of stdout")
-	encodeBase64 := flags.Bool("base64", false, "Base64-encode the output (for embedding in env vars)")
+	output := flags.String("output", "", "Write cert to file(s) instead of stdout")
+	encodeBase64 := flags.Bool("base64", false, "Base64-encode the output (client mode only)")
+	usage := flags.String("usage", "client", "Certificate usage: client or server")
+	cn := flags.String("cn", "", "Certificate CommonName")
+	var dnsNames, ipAddrs stringSlice
+	flags.Var(&dnsNames, "dns", "DNS SAN (repeatable)")
+	flags.Var(&ipAddrs, "ip", "IP SAN (repeatable)")
 	flags.Parse(args)
 
 	_, cfg, ikm, _, err := loadConfig(*configPath, "error")
@@ -255,29 +270,98 @@ func cmdGenerateCert(args []string) int {
 		return 1
 	}
 
-	bundle, err := pki.GenerateClientCert(ca, cfg.ClientCertTTL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "generate client cert: %v\n", err)
-		return 1
-	}
+	switch *usage {
+	case "client":
+		if *output != "" {
+			// Separate files mode: .crt, .key, .ca.crt
+			certCN := *cn
+			if certCN == "" {
+				certCN = "pigeon-enroll"
+			}
+			certPEM, keyPEM, err := pki.GenerateClientCertFiles(ca, certCN, cfg.ClientCertTTL)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "generate client cert: %v\n", err)
+				return 1
+			}
+			if err := os.MkdirAll(filepath.Dir(*output), 0700); err != nil {
+				fmt.Fprintf(os.Stderr, "create output directory: %v\n", err)
+				return 1
+			}
+			if err := os.WriteFile(*output+".crt", certPEM, 0600); err != nil {
+				fmt.Fprintf(os.Stderr, "write cert: %v\n", err)
+				return 1
+			}
+			if err := os.WriteFile(*output+".key", keyPEM, 0600); err != nil {
+				fmt.Fprintf(os.Stderr, "write key: %v\n", err)
+				return 1
+			}
+			if err := os.WriteFile(*output+".ca.crt", ca.CertPEM, 0600); err != nil {
+				fmt.Fprintf(os.Stderr, "write CA cert: %v\n", err)
+				return 1
+			}
+			return 0
+		}
 
-	var data []byte
-	if *encodeBase64 {
-		data = []byte(base64.StdEncoding.EncodeToString(bundle))
-	} else {
-		data = bundle
-	}
+		// Bundle mode: stdout (backward compatible)
+		bundle, err := pki.GenerateClientCert(ca, cfg.ClientCertTTL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "generate client cert: %v\n", err)
+			return 1
+		}
 
-	if *output != "" {
-		if err := os.WriteFile(*output, data, 0600); err != nil {
-			fmt.Fprintf(os.Stderr, "write: %v\n", err)
+		var data []byte
+		if *encodeBase64 {
+			data = []byte(base64.StdEncoding.EncodeToString(bundle))
+		} else {
+			data = bundle
+		}
+
+		os.Stdout.Write(data)
+		return 0
+
+	case "server":
+		if *output == "" {
+			fmt.Fprintln(os.Stderr, "error: -output is required for server certificates")
+			return 1
+		}
+
+		certCN := *cn
+		if certCN == "" {
+			certCN = "pigeon-enroll"
+		}
+
+		var hosts []string
+		hosts = append(hosts, dnsNames...)
+		hosts = append(hosts, ipAddrs...)
+
+		certPEM, keyPEM, err := pki.GenerateServerCert(ca, certCN, hosts, cfg.ServerCertTTL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "generate server cert: %v\n", err)
+			return 1
+		}
+
+		if err := os.MkdirAll(filepath.Dir(*output), 0700); err != nil {
+			fmt.Fprintf(os.Stderr, "create output directory: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(*output+".crt", certPEM, 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "write cert: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(*output+".key", keyPEM, 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "write key: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(*output+".ca.crt", ca.CertPEM, 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "write CA cert: %v\n", err)
 			return 1
 		}
 		return 0
-	}
 
-	os.Stdout.Write(data)
-	return 0
+	default:
+		fmt.Fprintf(os.Stderr, "error: unknown usage %q (expected client or server)\n", *usage)
+		return 1
+	}
 }
 
 func cmdClaim(args []string) int {
