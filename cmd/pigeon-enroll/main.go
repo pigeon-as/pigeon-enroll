@@ -332,7 +332,10 @@ func cmdGenerateCert(args []string) int {
 		}
 
 		if *bundlePath == "-" {
-			os.Stdout.Write(bundle)
+			if _, err := os.Stdout.Write(bundle); err != nil {
+				fmt.Fprintf(os.Stderr, "write bundle: %v\n", err)
+				return 1
+			}
 		} else {
 			if err := os.MkdirAll(filepath.Dir(*bundlePath), 0700); err != nil {
 				fmt.Fprintf(os.Stderr, "create directory: %v\n", err)
