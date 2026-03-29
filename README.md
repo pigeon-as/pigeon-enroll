@@ -50,7 +50,6 @@ Use `-skip-tls` for testing without TLS.
 listen       = ":8443"
 key_path     = "/encrypted/pigeon/enrollment-key"
 token_window = "30m"
-client_cert_ttl = "1h"
 server_cert_ttl = "720h"
 audit_path   = "/var/log/pigeon-enroll/audit.jsonl"
 trusted_proxies = ["10.0.0.0/8"]
