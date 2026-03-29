@@ -288,6 +288,10 @@ func cmdGenerateCert(args []string) int {
 		fmt.Fprintf(os.Stderr, "invalid -ttl: %v\n", err)
 		return 1
 	}
+	if certTTL < time.Second {
+		fmt.Fprintln(os.Stderr, "error: -ttl must be at least 1s")
+		return 1
+	}
 
 	_, _, ikm, _, err := loadConfig(*configPath, "error")
 	if err != nil {
