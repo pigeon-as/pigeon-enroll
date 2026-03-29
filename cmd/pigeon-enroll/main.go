@@ -24,6 +24,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -275,6 +276,13 @@ func cmdGenerateCert(args []string) int {
 		certCN := *cn
 		if certCN == "" {
 			certCN = "pigeon-enroll"
+		}
+
+		for _, ip := range ipAddrs {
+			if net.ParseIP(ip) == nil {
+				fmt.Fprintf(os.Stderr, "invalid IP address: %s\n", ip)
+				return 1
+			}
 		}
 
 		var hosts []string

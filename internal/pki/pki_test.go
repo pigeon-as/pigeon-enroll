@@ -260,7 +260,7 @@ func TestCertRotator_CachesAndRenews(t *testing.T) {
 	}
 }
 
-func TestGenerateClientCertFiles(t *testing.T) {
+func TestGenerateClientCert_NoSANs(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
 	if err != nil {
 		t.Fatal(err)
@@ -334,8 +334,17 @@ func TestGenerateServerCert_CustomCN(t *testing.T) {
 	if len(leaf.IPAddresses) != 1 || leaf.IPAddresses[0].String() != "10.0.0.1" {
 		t.Errorf("IPAddresses = %v, want [10.0.0.1]", leaf.IPAddresses)
 	}
-	if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
-		t.Error("expected ServerAuth ext key usage")
+	hasServer, hasClient := false, false
+	for _, eku := range leaf.ExtKeyUsage {
+		if eku == x509.ExtKeyUsageServerAuth {
+			hasServer = true
+		}
+		if eku == x509.ExtKeyUsageClientAuth {
+			hasClient = true
+		}
+	}
+	if !hasServer || !hasClient {
+		t.Errorf("ExtKeyUsage = %v, want ServerAuth+ClientAuth", leaf.ExtKeyUsage)
 	}
 }
 

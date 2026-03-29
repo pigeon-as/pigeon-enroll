@@ -98,16 +98,6 @@ func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[st
 
 	initURL := v.cfg.Addr + "/v1/sys/init"
 
-	// Preflight: resolve management token ID before initializing Vault.
-	var tokenID string
-	if len(v.cfg.Token) > 0 && v.cfg.Token[0].ID != "" {
-		var ok bool
-		tokenID, ok = secrets[v.cfg.Token[0].ID]
-		if !ok {
-			return fmt.Errorf("vault-init: token.id %q not found in derived secrets", v.cfg.Token[0].ID)
-		}
-	}
-
 	logger.Info("waiting for Vault", "addr", v.cfg.Addr)
 	initialized, err := pollUntilReachable(ctx, logger, client, initURL)
 	if err != nil {
@@ -119,6 +109,16 @@ func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[st
 		return nil
 	}
 
+	// Resolve management token ID after confirming Vault needs initialization.
+	var tokenID string
+	if len(v.cfg.Token) > 0 && v.cfg.Token[0].ID != "" {
+		var ok bool
+		tokenID, ok = secrets[v.cfg.Token[0].ID]
+		if !ok {
+			return fmt.Errorf("vault-init: token.id %q not found in derived secrets", v.cfg.Token[0].ID)
+		}
+	}
+
 	logger.Info("initializing Vault")
 	initResp, err := initVault(ctx, client, initURL, &v.cfg)
 	if err != nil {
@@ -127,14 +127,19 @@ func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[st
 
 	rootToken := initResp.RootToken
 
+	var managementTokenCreated bool
 	if len(v.cfg.Token) > 0 && v.cfg.Token[0].ID != "" {
 		if err := createManagementToken(ctx, client, v.cfg.Addr, rootToken, tokenID, v.cfg.Token[0].Policies); err != nil {
 			return err
 		}
 		logger.Info("management token created", "policies", v.cfg.Token[0].Policies)
+		managementTokenCreated = true
 	}
 
 	if len(v.cfg.Token) > 0 && v.cfg.Token[0].RevokeRoot {
+		if !managementTokenCreated {
+			return fmt.Errorf("vault-init: revoke_root requires a management token (set token.id)")
+		}
 		if err := revokeToken(ctx, client, v.cfg.Addr, rootToken); err != nil {
 			return err
 		}

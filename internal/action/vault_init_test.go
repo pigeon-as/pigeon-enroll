@@ -52,6 +52,78 @@ func TestVaultInit_AlreadyInitialized(t *testing.T) {
 	}
 }
 
+func TestVaultInit_AlreadyInitialized_SkipsMissingSecret(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/sys/init" && r.Method == http.MethodGet {
+			json.NewEncoder(w).Encode(map[string]bool{"initialized": true})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	cfgJSON, _ := json.Marshal(map[string]interface{}{
+		"addr":               srv.URL,
+		"recovery_shares":    1,
+		"recovery_threshold": 1,
+		"output":             filepath.Join(t.TempDir(), "init.json"),
+		"token": map[string]interface{}{
+			"id":          "nonexistent_secret",
+			"revoke_root": true,
+		},
+	})
+
+	a, err := newVaultInit(jsonToBody(t, cfgJSON))
+	if err != nil {
+		t.Fatalf("newVaultInit: %v", err)
+	}
+
+	// Should skip cleanly — tokenID resolution is deferred past the initialized check.
+	if err := a.Run(context.Background(), slog.Default(), map[string]string{}); err != nil {
+		t.Fatalf("expected skip for already-initialized Vault, got: %v", err)
+	}
+}
+
+func TestVaultInit_RevokeRootWithoutManagementToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/sys/init" && r.Method == http.MethodGet:
+			json.NewEncoder(w).Encode(map[string]bool{"initialized": false})
+		case r.URL.Path == "/v1/sys/init" && r.Method == http.MethodPut:
+			json.NewEncoder(w).Encode(initResponse{
+				RootToken:    "s.root",
+				RecoveryKeys: []string{"key"},
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	// token.id references a missing secret — management token won't be created,
+	// so revoke_root should be blocked.
+	cfgJSON, _ := json.Marshal(map[string]interface{}{
+		"addr":             srv.URL,
+		"secret_shares":    1,
+		"secret_threshold": 1,
+		"output":           filepath.Join(t.TempDir(), "init.json"),
+		"token": map[string]interface{}{
+			"id":          "missing_secret",
+			"revoke_root": true,
+		},
+	})
+
+	a, err := newVaultInit(jsonToBody(t, cfgJSON))
+	if err != nil {
+		t.Fatalf("newVaultInit: %v", err)
+	}
+
+	err = a.Run(context.Background(), slog.Default(), map[string]string{})
+	if err == nil {
+		t.Fatal("expected error for missing secret with revoke_root, got nil")
+	}
+}
+
 func TestVaultInit_InitAndCreateToken(t *testing.T) {
 	var tokenCreated atomic.Bool
 	var rootRevoked atomic.Bool
