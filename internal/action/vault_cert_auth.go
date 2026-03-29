@@ -130,7 +130,7 @@ func vaultPost(ctx context.Context, client *http.Client, url, token string, payl
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s %s: %w", req.Method, req.URL.String(), err)
 	}
 	defer resp.Body.Close()
 

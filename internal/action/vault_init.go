@@ -115,7 +115,7 @@ func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[st
 	}
 
 	if initialized {
-		logger.Info("Vault already initialized, skipping")
+		logger.Info("Vault already initialized, skipping", "addr", v.cfg.Addr)
 		return nil
 	}
 
