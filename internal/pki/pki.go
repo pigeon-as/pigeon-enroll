@@ -114,17 +114,19 @@ func deriveCA(ikm []byte, info string, cn string) (*CA, error) {
 	return &CA{Cert: cert, CertPEM: certPEM, Key: key}, nil
 }
 
-// GenerateServerCert creates an ephemeral Ed25519 server certificate signed by the CA.
-// The certificate includes the provided IPs/hostnames as SANs.
-func GenerateServerCert(ca *CA, hosts []string, ttl time.Duration) (certPEM, keyPEM []byte, err error) {
-	return generateLeaf(ca, hosts, x509.ExtKeyUsageServerAuth, ttl)
+// GenerateCert creates an ephemeral Ed25519 certificate signed by the CA.
+// EKU is inferred from inputs (mkcert approach):
+//   - hosts non-empty → ServerAuth + ClientAuth (dual EKU)
+//   - hosts empty → ClientAuth only
+func GenerateCert(ca *CA, cn string, hosts []string, ttl time.Duration) (certPEM, keyPEM []byte, err error) {
+	return generateLeaf(ca, cn, hosts, ttl)
 }
 
 // GenerateClientCert creates an ephemeral Ed25519 client certificate bundle
 // (cert + key + CA cert) signed by the CA.
 // Returns the PEM bundle as a single byte slice.
 func GenerateClientCert(ca *CA, ttl time.Duration) ([]byte, error) {
-	certPEM, keyPEM, err := generateLeaf(ca, nil, x509.ExtKeyUsageClientAuth, ttl)
+	certPEM, keyPEM, err := generateLeaf(ca, "pigeon-enroll", nil, ttl)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +217,7 @@ func parsePrivateKey(der []byte, pemType string) (crypto.Signer, error) {
 	return key, nil
 }
 
-func generateLeaf(ca *CA, hosts []string, usage x509.ExtKeyUsage, validity time.Duration) (certPEM, keyPEM []byte, err error) {
+func generateLeaf(ca *CA, cn string, hosts []string, validity time.Duration) (certPEM, keyPEM []byte, err error) {
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate leaf key: %w", err)
@@ -226,14 +228,20 @@ func generateLeaf(ca *CA, hosts []string, usage x509.ExtKeyUsage, validity time.
 		return nil, nil, fmt.Errorf("generate serial: %w", err)
 	}
 
+	// Infer EKU from inputs: SANs present → server+client, otherwise client-only.
+	eku := []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+	if len(hosts) > 0 {
+		eku = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+	}
+
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "pigeon-enroll"},
+		Subject:      pkix.Name{CommonName: cn},
 		NotBefore:    now.Add(-5 * time.Minute),
 		NotAfter:     now.Add(validity),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{usage},
+		ExtKeyUsage:  eku,
 	}
 
 	for _, h := range hosts {
@@ -285,7 +293,7 @@ func (r *CertRotator) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, er
 		return r.cached, nil
 	}
 
-	certPEM, keyPEM, err := GenerateServerCert(r.ca, r.hosts, r.ttl)
+	certPEM, keyPEM, err := GenerateCert(r.ca, "pigeon-enroll", r.hosts, r.ttl)
 	if err != nil {
 		return nil, err
 	}

@@ -15,8 +15,8 @@ pigeon-enroll server
 # Generate a claim token
 pigeon-enroll generate-token [-scope=worker]
 
-# Generate a client TLS certificate bundle
-pigeon-enroll generate-cert -output /tmp/enroll-cert.pem
+# Generate a TLS certificate bundle
+pigeon-enroll generate-cert -bundle /tmp/enroll-cert.pem
 
 # Claim (worker side, with mTLS)
 pigeon-enroll claim -url https://enroll:8443/claim \
@@ -38,9 +38,9 @@ pigeon-enroll run-actions -type=vault-init
 
 ## TLS
 
-mTLS is enabled by default — the CA is derived deterministically from the enrollment key via HKDF. Every server with the same key produces the same Ed25519 CA, no coordination needed. Server certs (P-256, `server_cert_ttl` default 30d) auto-rotate at 50% lifetime. Client certs (P-256, `client_cert_ttl` default 1h) are signed by this CA.
+mTLS is enabled by default — the CA is derived deterministically from the enrollment key via HKDF. Every server with the same key produces the same Ed25519 CA, no coordination needed. Server certs (`server_cert_ttl` default 30d) auto-rotate at 50% lifetime.
 
-`generate-cert` outputs a standard PEM bundle (client cert + EC private key + CA cert). Default is PEM to stdout; `-base64` encodes it for env var embedding; `-output <path>` writes to a file (0600 perms).
+`generate-cert` outputs are explicit: `-bundle FILE` writes a PEM bundle (cert+key+ca), `-cert`/`-key`/`-ca` write individual files. `-bundle -` writes to stdout. EKU is inferred from SANs: `-dns`/`-ip` present → ServerAuth + ClientAuth, no SANs → ClientAuth only. `-ttl` sets validity (default 24h). `-base64` base64-encodes bundle output.
 
 Use `-skip-tls` for testing without TLS.
 
@@ -50,7 +50,6 @@ Use `-skip-tls` for testing without TLS.
 listen       = ":8443"
 key_path     = "/encrypted/pigeon/enrollment-key"
 token_window = "30m"
-client_cert_ttl = "1h"
 server_cert_ttl = "720h"
 audit_path   = "/var/log/pigeon-enroll/audit.jsonl"
 trusted_proxies = ["10.0.0.0/8"]
@@ -115,7 +114,7 @@ Pluggable post-claim lifecycle actions. Run via `run-actions` (all) or `run-acti
 
 ### vault-init
 
-Initializes Vault and creates a management token with a known HKDF-derived ID, so other tools can independently derive the same token without coordination. Fails if Vault is already initialized.
+Initializes Vault and creates a management token with a known HKDF-derived ID, so other tools can independently derive the same token without coordination. Idempotent — skips gracefully if Vault is already initialized.
 
 1. Polls Vault until reachable
 2. Initializes (Shamir or auto-unseal depending on config)
@@ -138,6 +137,24 @@ action "vault-init" {
 ```
 
 For auto-unseal, also set `recovery_shares` and `recovery_threshold`.
+
+### vault-cert-auth
+
+Configures Vault's `auth/cert` method with a role that trusts the enrollment CA. This bridges stage 0 (enrollment) to stage 1 (Vault PKI) — nodes with enrollment-CA-signed client certs can authenticate to Vault via vault-agent. Idempotent — skips if auth/cert is already enabled, upserts the role.
+
+Reads the enrollment CA public cert from disk (`ca_cert_file`) and authenticates to Vault using the management token from the secrets map (`token_secret`).
+
+```hcl
+action "vault-cert-auth" {
+  addr          = "https://127.0.0.1:8200"
+  tls_skip_verify = true
+  ca_cert_file  = "/encrypted/tls/node.ca.crt"
+  token_secret  = "vault_management_token"
+  role          = "node"
+  policies      = ["node-pki"]
+  token_ttl     = "1h"
+}
+```
 
 ### luks-recovery
 

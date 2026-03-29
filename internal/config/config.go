@@ -33,8 +33,6 @@ type Config struct {
 	NoncePath        string `hcl:"nonce_path,optional"`
 	TokenWindow      time.Duration
 	TokenWindowRaw   string `hcl:"token_window,optional"`
-	ClientCertTTL    time.Duration
-	ClientCertTTLRaw string `hcl:"client_cert_ttl,optional"`
 	ServerCertTTL    time.Duration
 	ServerCertTTLRaw string            `hcl:"server_cert_ttl,optional"`
 	AuditPath        string            `hcl:"audit_path,optional"`
@@ -71,15 +69,6 @@ func Load(path string) (Config, error) {
 		}
 		cfg.TokenWindow = d
 	}
-	if cfg.ClientCertTTLRaw == "" {
-		cfg.ClientCertTTL = 1 * time.Hour
-	} else {
-		d, err := time.ParseDuration(cfg.ClientCertTTLRaw)
-		if err != nil {
-			return Config{}, fmt.Errorf("parse client_cert_ttl: %w", err)
-		}
-		cfg.ClientCertTTL = d
-	}
 	if cfg.ServerCertTTLRaw == "" {
 		cfg.ServerCertTTL = 30 * 24 * time.Hour
 	} else {
@@ -99,9 +88,6 @@ func Load(path string) (Config, error) {
 func validate(cfg Config) error {
 	if cfg.TokenWindow < time.Second {
 		return fmt.Errorf("token_window must be at least 1s")
-	}
-	if cfg.ClientCertTTL < time.Second {
-		return fmt.Errorf("client_cert_ttl must be at least 1s")
 	}
 	if cfg.ServerCertTTL < time.Second {
 		return fmt.Errorf("server_cert_ttl must be at least 1s")
