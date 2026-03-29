@@ -311,7 +311,7 @@ func TestGenerateServerCert_CustomCN(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	certPEM, keyPEM, err := GenerateServerCert(ca, "pigeon", []string{"localhost", "10.0.0.1"}, 24*time.Hour)
+	certPEM, keyPEM, err := GenerateCert(ca, "pigeon", []string{"localhost", "10.0.0.1"}, 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
