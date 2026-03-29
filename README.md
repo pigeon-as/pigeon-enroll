@@ -15,9 +15,8 @@ pigeon-enroll server
 # Generate a claim token
 pigeon-enroll generate-token [-scope=worker]
 
-# Generate a TLS certificate (EKU inferred from inputs)
-pigeon-enroll generate-cert -cn pigeon -dns localhost -ip 127.0.0.1 -output /encrypted/tls/node  # server+client
-pigeon-enroll generate-cert -cn vault-agent -output /encrypted/tls/vault-agent                     # client-only
+# Generate a client TLS certificate bundle
+pigeon-enroll generate-cert -bundle /tmp/enroll-cert.pem
 
 # Claim (worker side, with mTLS)
 pigeon-enroll claim -url https://enroll:8443/claim \
@@ -39,9 +38,9 @@ pigeon-enroll run-actions -type=vault-init
 
 ## TLS
 
-mTLS is enabled by default — the CA is derived deterministically from the enrollment key via HKDF. Every server with the same key produces the same Ed25519 CA, no coordination needed. Server certs (P-256, `server_cert_ttl` default 30d) auto-rotate at 50% lifetime. Client certs (P-256, `client_cert_ttl` default 1h) are signed by this CA.
+mTLS is enabled by default — the CA is derived deterministically from the enrollment key via HKDF. Every server with the same key produces the same Ed25519 CA, no coordination needed. Server certs (P-256, `server_cert_ttl` default 30d) auto-rotate at 50% lifetime.
 
-`generate-cert` writes cert files (.crt, .key, .ca.crt) when `-output` is set, or a PEM bundle to stdout. EKU is inferred: `-dns`/`-ip` SANs present → ServerAuth + ClientAuth (dual EKU), no SANs → ClientAuth only. `-base64` encodes stdout output for env var embedding.
+`generate-cert` outputs are explicit: `-bundle FILE` writes a PEM bundle (cert+key+ca), `-cert`/`-key`/`-ca` write individual files. `-bundle -` writes to stdout. EKU is inferred from SANs: `-dns`/`-ip` present → ServerAuth + ClientAuth, no SANs → ClientAuth only. `-ttl` sets validity (default 24h). `-base64` base64-encodes bundle output.
 
 Use `-skip-tls` for testing without TLS.
 
