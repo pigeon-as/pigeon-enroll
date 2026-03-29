@@ -74,7 +74,7 @@ func TestGenerateServerCert(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	certPEM, keyPEM, err := GenerateServerCert(ca, "enroll.internal", []string{"127.0.0.1", "enroll.internal"}, 30*24*time.Hour)
+	certPEM, keyPEM, err := GenerateCert(ca, "enroll.internal", []string{"127.0.0.1", "enroll.internal"}, 30*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,8 +99,15 @@ func TestGenerateServerCert(t *testing.T) {
 	if leaf.Subject.CommonName != "enroll.internal" {
 		t.Errorf("expected CN=enroll.internal, got %q", leaf.Subject.CommonName)
 	}
-	if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
-		t.Error("expected ServerAuth ext key usage")
+	// With SANs: dual EKU (ServerAuth + ClientAuth)
+	if len(leaf.ExtKeyUsage) != 2 {
+		t.Fatalf("expected 2 EKUs, got %d", len(leaf.ExtKeyUsage))
+	}
+	if leaf.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
+		t.Error("expected ServerAuth as first EKU")
+	}
+	if leaf.ExtKeyUsage[1] != x509.ExtKeyUsageClientAuth {
+		t.Error("expected ClientAuth as second EKU")
 	}
 
 	// Verify chain
@@ -148,7 +155,7 @@ func TestRoundTrip_mTLS(t *testing.T) {
 	}
 
 	// Server side
-	serverCertPEM, serverKeyPEM, err := GenerateServerCert(ca, "pigeon-enroll", []string{"127.0.0.1"}, 30*24*time.Hour)
+	serverCertPEM, serverKeyPEM, err := GenerateCert(ca, "pigeon-enroll", []string{"127.0.0.1"}, 30*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +266,7 @@ func TestGenerateClientCertFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	certPEM, keyPEM, err := GenerateClientCertFiles(ca, "vault-agent", 1*time.Hour)
+	certPEM, keyPEM, err := GenerateCert(ca, "vault-agent", nil, 1*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
