@@ -184,3 +184,82 @@ func writeTempFile(t *testing.T, name, content string) string {
 	}
 	return path
 }
+
+func TestContentSimple(t *testing.T) {
+	got, err := Content("hello ${name}", map[string]cty.Value{"name": cty.StringVal("world")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hello world" {
+		t.Fatalf("got %q, want %q", got, "hello world")
+	}
+}
+
+func TestContentNested(t *testing.T) {
+	vars := map[string]cty.Value{
+		"ca": cty.ObjectVal(map[string]cty.Value{
+			"vault": cty.ObjectVal(map[string]cty.Value{
+				"cert_pem": cty.StringVal("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n"),
+			}),
+		}),
+	}
+	got, err := Content("${ca.vault.cert_pem}", vars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestContentNoVars(t *testing.T) {
+	got, err := Content("static text", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "static text" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestLoadConfigContent(t *testing.T) {
+	path := writeTempFile(t, "render.hcl", `
+template {
+  content     = "hello"
+  destination = "/tmp/out"
+}
+`)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Templates[0].Content != "hello" {
+		t.Fatalf("content = %q", cfg.Templates[0].Content)
+	}
+}
+
+func TestLoadConfigSourceAndContent(t *testing.T) {
+	path := writeTempFile(t, "render.hcl", `
+template {
+  source      = "/tmp/tpl"
+  content     = "hello"
+  destination = "/tmp/out"
+}
+`)
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("expected error for source+content")
+	}
+}
+
+func TestLoadConfigNoSourceNoContent(t *testing.T) {
+	path := writeTempFile(t, "render.hcl", `
+template {
+  destination = "/tmp/out"
+}
+`)
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("expected error for no source and no content")
+	}
+}

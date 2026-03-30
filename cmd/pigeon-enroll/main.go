@@ -250,6 +250,7 @@ func cmdGenerateToken(args []string) int {
 func cmdGenerateCert(args []string) int {
 	flags := flag.NewFlagSet("generate-cert", flag.ExitOnError)
 	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
+	fromCA := flags.String("from-ca", "", "PEM file with CA cert+key (alternative to -config)")
 	cn := flags.String("cn", "", "Certificate CommonName (default: pigeon-enroll)")
 	ttl := flags.String("ttl", "24h", "Certificate validity duration")
 	bundlePath := flags.String("bundle", "", "Write PEM bundle (cert+key+ca) to file, or - for stdout")
@@ -293,16 +294,30 @@ func cmdGenerateCert(args []string) int {
 		return 1
 	}
 
-	_, _, ikm, _, err := loadConfig(*configPath, "error")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
-
-	ca, err := pki.DeriveCA(ikm)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "derive CA: %v\n", err)
-		return 1
+	// Load CA: either from explicit PEM file (-from-ca) or derived from enrollment key (-config).
+	var ca *pki.CA
+	if *fromCA != "" {
+		caPEM, err := os.ReadFile(*fromCA)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "read CA file: %v\n", err)
+			return 1
+		}
+		ca, err = pki.LoadCA(caPEM)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load CA: %v\n", err)
+			return 1
+		}
+	} else {
+		_, _, ikm, _, err := loadConfig(*configPath, "error")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		ca, err = pki.DeriveCA(ikm)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "derive CA: %v\n", err)
+			return 1
+		}
 	}
 
 	certCN := *cn
@@ -468,13 +483,18 @@ func cmdRender(args []string) int {
 		}
 		perm, err := parsePerms(perms)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid perms for %s: %v\n", tpl.Source, err)
+			fmt.Fprintf(os.Stderr, "invalid perms for %s: %v\n", tpl.Destination, err)
 			return 1
 		}
 
-		rendered, err := render.File(tpl.Source, vars)
+		var rendered []byte
+		if tpl.Content != "" {
+			rendered, err = render.Content(tpl.Content, vars)
+		} else {
+			rendered, err = render.File(tpl.Source, vars)
+		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "render %s: %v\n", tpl.Source, err)
+			fmt.Fprintf(os.Stderr, "render %s: %v\n", tpl.Destination, err)
 			return 1
 		}
 
@@ -494,7 +514,11 @@ func cmdRender(args []string) int {
 			return 1
 		}
 
-		fmt.Fprintf(os.Stderr, "rendered %s → %s\n", tpl.Source, tpl.Destination)
+		if tpl.Source != "" {
+			fmt.Fprintf(os.Stderr, "rendered %s → %s\n", tpl.Source, tpl.Destination)
+		} else {
+			fmt.Fprintf(os.Stderr, "rendered → %s\n", tpl.Destination)
+		}
 	}
 
 	return 0

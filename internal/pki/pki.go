@@ -138,6 +138,70 @@ func GenerateClientCert(ca *CA, ttl time.Duration) ([]byte, error) {
 	return bundle, nil
 }
 
+// LoadCA parses a PEM file containing a CA certificate and private key and
+// returns a CA struct suitable for GenerateCert. The PEM file must contain
+// exactly one CERTIFICATE block (which must be a CA) and one PRIVATE KEY block.
+func LoadCA(pemData []byte) (*CA, error) {
+	var certDER, keyDER []byte
+	var keyType string
+
+	rest := pemData
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		switch block.Type {
+		case "CERTIFICATE":
+			if certDER != nil {
+				return nil, fmt.Errorf("multiple certificates in CA file")
+			}
+			certDER = block.Bytes
+		case "PRIVATE KEY", "EC PRIVATE KEY":
+			if keyDER != nil {
+				return nil, fmt.Errorf("multiple private keys in CA file")
+			}
+			keyDER = block.Bytes
+			keyType = block.Type
+		}
+	}
+
+	if certDER == nil {
+		return nil, fmt.Errorf("no certificate found in CA file")
+	}
+	if keyDER == nil {
+		return nil, fmt.Errorf("no private key found in CA file")
+	}
+
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		return nil, fmt.Errorf("parse CA cert: %w", err)
+	}
+	if !cert.IsCA {
+		return nil, fmt.Errorf("certificate is not a CA")
+	}
+
+	signer, err := parsePrivateKey(keyDER, keyType)
+	if err != nil {
+		return nil, fmt.Errorf("parse CA key: %w", err)
+	}
+
+	edKey, ok := signer.(ed25519.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("CA key must be Ed25519, got %T", signer)
+	}
+
+	// Verify cert and key form a matching pair.
+	certPub, ok := cert.PublicKey.(ed25519.PublicKey)
+	if !ok || !certPub.Equal(edKey.Public()) {
+		return nil, fmt.Errorf("CA certificate and private key do not match")
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	return &CA{Cert: cert, CertPEM: certPEM, Key: edKey}, nil
+}
+
 // LoadClientBundle parses a PEM bundle (client cert + key + CA cert) and returns
 // a tls-ready private key, certificate, and CA pool.
 // Accepts PKCS#8 ("PRIVATE KEY") and SEC1 ("EC PRIVATE KEY") key encodings.

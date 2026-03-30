@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -400,5 +401,125 @@ func TestDeriveNamedCA_IsCA(t *testing.T) {
 	}
 	if cert.Subject.CommonName != "mesh" {
 		t.Errorf("CN = %q, want %q", cert.Subject.CommonName, "mesh")
+	}
+}
+
+func TestLoadCA_RoundTrip(t *testing.T) {
+	// Derive a CA and export it as PEM, then load it back.
+	ca, err := DeriveCA(testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keyDER, err := x509.MarshalPKCS8PrivateKey(ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	// Concatenated PEM: cert + key
+	var bundle []byte
+	bundle = append(bundle, ca.CertPEM...)
+	bundle = append(bundle, keyPEM...)
+
+	loaded, err := LoadCA(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !loaded.Cert.Equal(ca.Cert) {
+		t.Error("loaded cert should match original")
+	}
+	if !loaded.Key.Equal(ca.Key) {
+		t.Error("loaded key should match original")
+	}
+
+	// Verify the loaded CA can sign certs.
+	certPEM, _, err := GenerateCert(loaded, "test", []string{"localhost"}, time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateCert with loaded CA: %v", err)
+	}
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		t.Fatal("no PEM block in generated cert")
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(loaded.Cert)
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool}); err != nil {
+		t.Fatalf("leaf cert should verify against loaded CA: %v", err)
+	}
+}
+
+func TestLoadCA_NotCA(t *testing.T) {
+	ca, err := DeriveCA(testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Generate a leaf cert and try to load it as a CA.
+	certPEM, keyPEM, err := GenerateCert(ca, "leaf", nil, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle []byte
+	bundle = append(bundle, certPEM...)
+	bundle = append(bundle, keyPEM...)
+
+	_, err = LoadCA(bundle)
+	if err == nil {
+		t.Fatal("LoadCA should reject non-CA certificate")
+	}
+}
+
+func TestLoadCA_MissingParts(t *testing.T) {
+	ca, err := DeriveCA(testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Cert only — no key.
+	_, err = LoadCA(ca.CertPEM)
+	if err == nil {
+		t.Error("LoadCA should fail with cert-only PEM")
+	}
+
+	// Key only — no cert.
+	keyDER, _ := x509.MarshalPKCS8PrivateKey(ca.Key)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	_, err = LoadCA(keyPEM)
+	if err == nil {
+		t.Error("LoadCA should fail with key-only PEM")
+	}
+}
+
+func TestLoadCA_MismatchedKeyAndCert(t *testing.T) {
+	ca1, err := DeriveCA(testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Derive a different CA by using a different IKM.
+	otherIKM := make([]byte, 32)
+	copy(otherIKM, testIKM)
+	otherIKM[0] ^= 0xff
+	ca2, err := DeriveCA(otherIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Combine cert from ca1 with key from ca2.
+	keyDER, _ := x509.MarshalPKCS8PrivateKey(ca2.Key)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	mixed := append(ca1.CertPEM, keyPEM...)
+
+	_, err = LoadCA(mixed)
+	if err == nil {
+		t.Fatal("LoadCA should fail with mismatched cert and key")
+	}
+	if !strings.Contains(err.Error(), "do not match") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
