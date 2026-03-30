@@ -192,6 +192,12 @@ func LoadCA(pemData []byte) (*CA, error) {
 		return nil, fmt.Errorf("CA key must be Ed25519, got %T", signer)
 	}
 
+	// Verify cert and key form a matching pair.
+	certPub, ok := cert.PublicKey.(ed25519.PublicKey)
+	if !ok || !certPub.Equal(edKey.Public()) {
+		return nil, fmt.Errorf("CA certificate and private key do not match")
+	}
+
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	return &CA{Cert: cert, CertPEM: certPEM, Key: edKey}, nil
 }

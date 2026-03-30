@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -491,5 +492,34 @@ func TestLoadCA_MissingParts(t *testing.T) {
 	_, err = LoadCA(keyPEM)
 	if err == nil {
 		t.Error("LoadCA should fail with key-only PEM")
+	}
+}
+
+func TestLoadCA_MismatchedKeyAndCert(t *testing.T) {
+	ca1, err := DeriveCA(testIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Derive a different CA by using a different IKM.
+	otherIKM := make([]byte, 32)
+	copy(otherIKM, testIKM)
+	otherIKM[0] ^= 0xff
+	ca2, err := DeriveCA(otherIKM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Combine cert from ca1 with key from ca2.
+	keyDER, _ := x509.MarshalPKCS8PrivateKey(ca2.Key)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	mixed := append(ca1.CertPEM, keyPEM...)
+
+	_, err = LoadCA(mixed)
+	if err == nil {
+		t.Fatal("LoadCA should fail with mismatched cert and key")
+	}
+	if !strings.Contains(err.Error(), "do not match") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
