@@ -24,17 +24,25 @@ func File(path string, vars map[string]cty.Value) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read template %s: %w", path, err)
 	}
+	return eval(src, path, vars)
+}
 
-	expr, diags := hclsyntax.ParseTemplate(src, path, hcl.InitialPos)
+// Content renders an inline HCL template string with the given variables.
+func Content(content string, vars map[string]cty.Value) ([]byte, error) {
+	return eval([]byte(content), "inline", vars)
+}
+
+func eval(src []byte, filename string, vars map[string]cty.Value) ([]byte, error) {
+	expr, diags := hclsyntax.ParseTemplate(src, filename, hcl.InitialPos)
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("parse template %s: %s", path, diags.Error())
+		return nil, fmt.Errorf("parse template %s: %s", filename, diags.Error())
 	}
 
 	ctx := &hcl.EvalContext{Variables: vars}
 
 	val, diags := expr.Value(ctx)
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("evaluate template %s: %s", path, diags.Error())
+		return nil, fmt.Errorf("evaluate template %s: %s", filename, diags.Error())
 	}
 
 	return []byte(val.AsString()), nil
