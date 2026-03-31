@@ -240,7 +240,7 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 	// Validate HMAC token signature (nonce consumed in /claim on success).
 	if !token.Verify(s.hmacKey, req.Token, time.Now(), s.cfg.TokenWindow, req.Scope) {
 		s.logger.Warn("invalid token", "ip", ip)
-		s.audit.Record(audit.Entry{Operation: "attest", IP: ip, OK: false, Error: "invalid token"})
+		s.audit.Record(audit.Entry{Operation: "attest", IP: ip, Scope: req.Scope, OK: false, Error: "invalid token"})
 		s.jsonError(w, "invalid or expired token", http.StatusForbidden)
 		return
 	}
@@ -272,13 +272,13 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.logger.Error("start attestation failed", "ip", ip, "err", err)
-		s.audit.Record(audit.Entry{Operation: "attest", IP: ip, OK: false, Error: err.Error()})
+		s.audit.Record(audit.Entry{Operation: "attest", IP: ip, Scope: req.Scope, OK: false, Error: err.Error()})
 		s.jsonError(w, "attestation challenge failed", http.StatusBadRequest)
 		return
 	}
 
 	s.logger.Info("attestation started", "ip", ip, "session", resp.SessionID)
-	s.audit.Record(audit.Entry{Operation: "attest", IP: ip, OK: true})
+	s.audit.Record(audit.Entry{Operation: "attest", IP: ip, Scope: req.Scope, OK: true})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(attestResponse{
