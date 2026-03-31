@@ -402,6 +402,33 @@ func TestClaimCertIssuance(t *testing.T) {
 	}
 }
 
+func TestClaimRequireTPM(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	cfg := config.Config{
+		TokenWindow: testWindow,
+		RequireTPM:  true,
+	}
+	srv, err := New(logger, cfg, testHMACKey, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Close)
+
+	tok := token.Generate(testHMACKey, time.Now(), testWindow, "")
+	body, _ := json.Marshal(claimRequest{Token: tok})
+	req := httptest.NewRequest("POST", "/claim", bytes.NewReader(body))
+	req.RemoteAddr = "192.168.1.100:12345"
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("require_tpm: status = %d, want 403", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "TPM attestation required") {
+		t.Fatalf("require_tpm: unexpected body: %s", w.Body.String())
+	}
+}
+
 func TestClaimLargeBody(t *testing.T) {
 	srv := testServer(t)
 
