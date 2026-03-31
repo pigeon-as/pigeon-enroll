@@ -241,7 +241,7 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Claim with worker scope — should only get the unscoped CA.
+	// Claim with worker scope — should get both CAs, but server_ca has no private key.
 	workerTok := token.Generate(testHMACKey, time.Now(), testWindow, "worker")
 	body, _ := json.Marshal(claimRequest{Token: workerTok, Scope: "worker"})
 	req := httptest.NewRequest("POST", "/claim", bytes.NewReader(body))
@@ -256,14 +256,17 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.CA) != 1 {
-		t.Fatalf("expected 1 CA for worker scope, got %d: %v", len(resp.CA), resp.CA)
+	if len(resp.CA) != 2 {
+		t.Fatalf("expected 2 CAs for worker scope, got %d: %v", len(resp.CA), resp.CA)
 	}
-	if _, ok := resp.CA["shared"]; !ok {
-		t.Error("expected unscoped CA 'shared' in response")
+	if resp.CA["shared"].CertPEM != "shared-cert" || resp.CA["shared"].PrivateKeyPEM != "shared-key" {
+		t.Error("unscoped CA 'shared' should have both cert and key")
 	}
-	if _, ok := resp.CA["server_ca"]; ok {
-		t.Error("server-scoped CA should not be returned for worker scope")
+	if resp.CA["server_ca"].CertPEM != "server-cert" {
+		t.Error("server-scoped CA should have cert_pem for worker scope")
+	}
+	if resp.CA["server_ca"].PrivateKeyPEM != "" {
+		t.Error("server-scoped CA should NOT have private_key_pem for worker scope")
 	}
 
 	// Claim with server scope — should get both CAs.

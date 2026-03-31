@@ -2,10 +2,12 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/hashicorp/hcl/v2/hclsimple"
@@ -42,6 +44,8 @@ type Config struct {
 	SecretsPath      string            `hcl:"secrets_path,optional"`
 	TrustedProxies   []string          `hcl:"trusted_proxies,optional"`
 	Actions          []action.Config   `hcl:"action,block"`
+	RequireTPM       bool              `hcl:"require_tpm,optional"`
+	PCRPolicy        map[string]string `hcl:"pcr_policy,optional"`
 }
 
 // Load reads an HCL config file and returns a validated Config with defaults applied.
@@ -131,6 +135,16 @@ func validate(cfg Config) error {
 	for _, cidr := range cfg.TrustedProxies {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			return fmt.Errorf("trusted_proxies: invalid CIDR %q: %w", cidr, err)
+		}
+	}
+
+	// Validate PCR policy.
+	for k, v := range cfg.PCRPolicy {
+		if _, err := strconv.Atoi(k); err != nil {
+			return fmt.Errorf("pcr_policy: key %q is not a valid PCR index", k)
+		}
+		if _, err := hex.DecodeString(v); err != nil {
+			return fmt.Errorf("pcr_policy: value for PCR %s is not valid hex", k)
 		}
 	}
 

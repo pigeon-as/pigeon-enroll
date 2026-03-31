@@ -42,6 +42,7 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/render"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
+	"github.com/pigeon-as/pigeon-enroll/internal/tpm"
 )
 
 const (
@@ -78,6 +79,8 @@ func main() {
 		os.Exit(cmdGenerateCert(args))
 	case "claim":
 		os.Exit(cmdClaim(args))
+	case "pcr-read":
+		os.Exit(cmdPCRRead(args))
 	case "render":
 		os.Exit(cmdRender(args))
 	case "run-actions":
@@ -99,6 +102,7 @@ Commands:
   generate-token  Generate an HMAC claim token
   generate-cert   Generate a TLS certificate
   claim           Claim secrets from an enrollment server
+  pcr-read        Read TPM PCR values (for deriving golden values)
   render          Render HCL templates with variables
   run-actions     Run post-claim lifecycle actions
   version         Print version`)
@@ -406,10 +410,11 @@ func cmdClaim(args []string) int {
 	scope := flags.String("scope", "", "Scope for secret filtering")
 	tlsBundle := flags.String("tls", "", "Path to client TLS certificate bundle (PEM)")
 	insecure := flags.Bool("insecure", false, "Skip TLS certificate verification")
+	skipTPM := flags.Bool("skip-tpm", false, "Skip TPM attestation (dev/testing only)")
 	flags.Parse(args)
 
 	if *url == "" || *tok == "" || *output == "" {
-		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<url> -token=<hmac> -output=<path> [-tls=<bundle>] [-scope=<scope>] [-insecure]")
+		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<url> -token=<hmac> -output=<path> [-tls=<bundle>] [-scope=<scope>] [-insecure] [-skip-tpm]")
 		return 1
 	}
 
@@ -443,13 +448,68 @@ func cmdClaim(args []string) int {
 		}
 	}
 
-	resp, err := claim.Run(client, *url, *tok, *scope, *output)
+	resp, err := claim.Run(client, *url, *tok, *scope, *output, *skipTPM, slog.Default())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "claim failed: %v\n", err)
 		return 1
 	}
 
 	fmt.Fprintf(os.Stderr, "claimed %d secrets → %s\n", len(resp.Secrets), *output)
+	return 0
+}
+
+func cmdPCRRead(args []string) int {
+	flags := flag.NewFlagSet("pcr-read", flag.ExitOnError)
+	indices := flags.String("pcrs", "7,11", "Comma-separated PCR indices to read")
+	flags.Parse(args)
+
+	if !tpm.Available() {
+		fmt.Fprintln(os.Stderr, "error: no TPM available on this host")
+		return 1
+	}
+
+	sess, err := tpm.Open()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "open TPM: %v\n", err)
+		return 1
+	}
+	defer sess.Close()
+
+	ekHash, _ := sess.EKHash()
+	fmt.Fprintf(os.Stderr, "EK hash: %s\n", ekHash)
+
+	// Parse PCR indices.
+	var pcrList []int
+	for _, s := range strings.Split(*indices, ",") {
+		s = strings.TrimSpace(s)
+		idx, err := strconv.Atoi(s)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid PCR index %q: %v\n", s, err)
+			return 1
+		}
+		pcrList = append(pcrList, idx)
+	}
+
+	pcrs, err := sess.ReadPCRs()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "read PCRs: %v\n", err)
+		return 1
+	}
+
+	// Build index set for filtering.
+	want := make(map[int]bool, len(pcrList))
+	for _, idx := range pcrList {
+		want[idx] = true
+	}
+
+	// Output in a format suitable for pcr_policy config.
+	fmt.Fprintln(os.Stderr, "\nPCR values (use in pcr_policy config):")
+	for _, pcr := range pcrs {
+		if want[pcr.Index] {
+			fmt.Fprintf(os.Stdout, "  \"%d\" = \"%s\"\n", pcr.Index, hex.EncodeToString(pcr.Digest))
+		}
+	}
+
 	return 0
 }
 

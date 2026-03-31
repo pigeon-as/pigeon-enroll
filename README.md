@@ -138,24 +138,6 @@ action "vault-init" {
 
 For auto-unseal, also set `recovery_shares` and `recovery_threshold`.
 
-### vault-cert-auth
-
-Configures Vault's `auth/cert` method with a role that trusts the enrollment CA. This bridges stage 0 (enrollment) to stage 1 (Vault PKI) — nodes with enrollment-CA-signed client certs can authenticate to Vault via vault-agent. Idempotent — skips if auth/cert is already enabled, upserts the role.
-
-Reads the enrollment CA public cert from disk (`ca_cert_file`) and authenticates to Vault using the management token from the secrets map (`token_secret`).
-
-```hcl
-action "vault-cert-auth" {
-  addr          = "https://127.0.0.1:8200"
-  tls_skip_verify = true
-  ca_cert_file  = "/encrypted/tls/node.ca.crt"
-  token_secret  = "vault_management_token"
-  role          = "node"
-  policies      = ["node-pki"]
-  token_ttl     = "1h"
-}
-```
-
 ### luks-recovery
 
 Adds a recovery passphrase to a LUKS2 keyslot for disaster recovery. Uses the volume key from an already unlocked dm-crypt device to authenticate. Fails if the keyslot is already occupied.
