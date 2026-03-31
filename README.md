@@ -121,8 +121,10 @@ action "vault-init" {
 
 Starts TPM attestation. Validates EK identity (hash allowlist or cert chain), returns a credential activation challenge.
 
+`ek_pub`, `ek_cert`, and `ak_params` fields are base64-encoded DER (`[]byte` in Go, auto-encoded by `encoding/json`).
+
 ```json
-{"token": "<hmac>", "scope": "worker", "ek_pub": "...", "ek_cert": "...", "ak_params": {...}}
+{"token": "<hmac>", "scope": "worker", "ek_pub": "<base64 DER>", "ek_cert": "<base64 DER>", "ak_params": {...}}
 ```
 
 ### `POST /claim`
@@ -131,8 +133,10 @@ Completes attestation and returns secrets. With TPM: sends session ID and activa
 
 TPM (default):
 
+`activated_secret` is base64-encoded (`[]byte`).
+
 ```json
-{"session_id": "...", "activated_secret": "..."}
+{"session_id": "...", "activated_secret": "<base64>"}
 ```
 
 Token-only (`-skip-tpm`, dev/testing):

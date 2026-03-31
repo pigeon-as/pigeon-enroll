@@ -25,7 +25,7 @@ type EKValidator struct {
 }
 
 // NewEKValidator creates a validator from optional CA directory and hash file paths.
-// At least one must be non-empty.
+// At least one should be non-empty (caller is responsible for ensuring this).
 func NewEKValidator(caPath, hashPath string) (*EKValidator, error) {
 	v := &EKValidator{}
 

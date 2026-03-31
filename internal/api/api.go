@@ -369,7 +369,7 @@ func (s *Server) handleClaimTPM(w http.ResponseWriter, r *http.Request, ip strin
 	if err != nil {
 		s.logger.Warn("TPM attestation failed", "ip", ip, "err", err)
 		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "TPM: " + err.Error()})
-		s.jsonError(w, "TPM attestation failed: "+err.Error(), http.StatusForbidden)
+		s.jsonError(w, "TPM attestation failed", http.StatusForbidden)
 		return
 	}
 
