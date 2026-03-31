@@ -42,6 +42,7 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/render"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
+	"github.com/pigeon-as/pigeon-enroll/internal/tpm"
 )
 
 const (
@@ -78,6 +79,8 @@ func main() {
 		os.Exit(cmdGenerateCert(args))
 	case "claim":
 		os.Exit(cmdClaim(args))
+	case "ek-hash":
+		os.Exit(cmdEKHash(args))
 	case "render":
 		os.Exit(cmdRender(args))
 	case "run-actions":
@@ -99,6 +102,7 @@ Commands:
   generate-token  Generate an HMAC claim token
   generate-cert   Generate a TLS certificate
   claim           Claim secrets from an enrollment server
+  ek-hash         Print EK public key hash (for ek_hash_path allowlist)
   render          Render HCL templates with variables
   run-actions     Run post-claim lifecycle actions
   version         Print version`)
@@ -195,6 +199,7 @@ func cmdServer(args []string) int {
 	go func() {
 		<-ctx.Done()
 		logger.Info("shutting down")
+		srv.Close()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		httpServer.Shutdown(shutCtx)
@@ -406,10 +411,11 @@ func cmdClaim(args []string) int {
 	scope := flags.String("scope", "", "Scope for secret filtering")
 	tlsBundle := flags.String("tls", "", "Path to client TLS certificate bundle (PEM)")
 	insecure := flags.Bool("insecure", false, "Skip TLS certificate verification")
+	skipTPM := flags.Bool("skip-tpm", false, "Skip TPM attestation (dev/testing only)")
 	flags.Parse(args)
 
 	if *url == "" || *tok == "" || *output == "" {
-		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<url> -token=<hmac> -output=<path> [-tls=<bundle>] [-scope=<scope>] [-insecure]")
+		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<url> -token=<hmac> -output=<path> [-tls=<bundle>] [-scope=<scope>] [-insecure] [-skip-tpm]")
 		return 1
 	}
 
@@ -443,13 +449,39 @@ func cmdClaim(args []string) int {
 		}
 	}
 
-	resp, err := claim.Run(client, *url, *tok, *scope, *output)
+	resp, err := claim.Run(client, *url, *tok, *scope, *output, *skipTPM, slog.Default())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "claim failed: %v\n", err)
 		return 1
 	}
 
 	fmt.Fprintf(os.Stderr, "claimed %d secrets → %s\n", len(resp.Secrets), *output)
+	return 0
+}
+
+func cmdEKHash(args []string) int {
+	flag.NewFlagSet("ek-hash", flag.ExitOnError).Parse(args)
+
+	if !tpm.Available() {
+		fmt.Fprintln(os.Stderr, "error: no TPM available on this host")
+		return 1
+	}
+
+	sess, err := tpm.Open()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "open TPM: %v\n", err)
+		return 1
+	}
+	defer sess.Close()
+
+	ekHash, err := sess.EKHash()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "compute EK hash: %v\n", err)
+		return 1
+	}
+
+	// Print hash to stdout for use in ek_hash_path file.
+	fmt.Println(ekHash)
 	return 0
 }
 

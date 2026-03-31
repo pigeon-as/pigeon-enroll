@@ -58,6 +58,12 @@ type CAEntry struct {
 	PrivateKeyPEM string `json:"private_key_pem"`
 }
 
+// CertEntry holds an auto-issued leaf certificate and private key in PEM format.
+type CertEntry struct {
+	CertPEM string `json:"cert_pem"`
+	KeyPEM  string `json:"key_pem"`
+}
+
 // Resolve loads persisted secrets from path, or derives them from ikm
 // via HKDF-SHA256 and persists atomically. If path is empty, derives fresh.
 // The persisted format is {"secrets":{...},"vars":{...}} with an optional "ca" field when CAs are configured.

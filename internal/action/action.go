@@ -26,8 +26,6 @@ func New(cfg Config) (Action, error) {
 	switch cfg.Type {
 	case "vault-init":
 		return newVaultInit(cfg.Body)
-	case "vault-cert-auth":
-		return newVaultCertAuth(cfg.Body)
 	case "luks-recovery":
 		return newLuksRecovery(cfg.Body)
 	default:

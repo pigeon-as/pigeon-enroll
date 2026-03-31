@@ -1,6 +1,6 @@
 # pigeon-enroll
 
-**Experimental** bootstrap enrollment server and client that derives bootstrap secrets from a shared enrollment key (HKDF) and distributes them to clients via mTLS and one-time, time-windowed HMAC tokens. Pluggable post-claim actions.
+**Experimental** bootstrap enrollment server and client that derives bootstrap secrets from a shared enrollment key (HKDF) and distributes them to clients via mTLS, TPM attestation, and one-time HMAC tokens. Pluggable post-claim actions.
 
 **Not a secrets manager:** covers the minimum secrets needed before Vault is available. The enrollment key is static; all servers with the same key independently derive identical secrets. A separate HMAC signing key is derived from it for token operations.
 
@@ -18,10 +18,16 @@ pigeon-enroll generate-token [-scope=worker]
 # Generate a TLS certificate bundle
 pigeon-enroll generate-cert -bundle /tmp/enroll-cert.pem
 
-# Claim (worker side, with mTLS)
+# Claim (worker side, with mTLS + TPM attestation)
 pigeon-enroll claim -url https://enroll:8443/claim \
   -token <hmac> -tls /tmp/enroll-cert.pem \
   -scope worker \
+  -output /encrypted/pigeon/secrets.json
+
+# Claim (dev/testing only, no TPM)
+pigeon-enroll claim -url https://enroll:8443/claim \
+  -token <hmac> -tls /tmp/enroll-cert.pem \
+  -skip-tpm \
   -output /encrypted/pigeon/secrets.json
 
 # Render templates (worker side, one-shot after claim)
@@ -44,6 +50,19 @@ mTLS is enabled by default — the CA is derived deterministically from the enro
 
 Use `-skip-tls` for testing without TLS.
 
+## TPM Attestation
+
+Claim always performs two-round TPM attestation (SPIRE community plugin pattern):
+
+1. Client opens TPM, reads EK, creates ephemeral AK
+2. `POST /attest` — sends HMAC token + EK pub + EK cert (optional) + AK params → server validates EK identity, returns credential activation challenge
+3. Client activates credential (proves AK is on the same TPM as EK)
+4. `POST /claim` — sends session ID + activated secret → server verifies and returns secrets
+
+EK identity is validated via `ek_ca_path` (manufacturer CA cert chain) and/or `ek_hash_path` (SHA-256 pubkey hash allowlist). At least one must be configured when `require_tpm = true`.
+
+Use `pigeon-enroll ek-hash` to print the EK public key hash for populating the allowlist. Use `-skip-tpm` on the client for dev/testing only.
+
 ## Config
 
 ```hcl
@@ -53,6 +72,12 @@ token_window = "30m"
 server_cert_ttl = "720h"
 audit_path   = "/var/log/pigeon-enroll/audit.jsonl"
 trusted_proxies = ["10.0.0.0/8"]
+require_tpm  = true
+
+# EK identity validation (SPIRE community TPM plugin pattern).
+# At least one required when require_tpm = true.
+ek_ca_path   = "/etc/pigeon/ek-ca"      # directory of manufacturer CA certs (PEM/DER)
+ek_hash_path = "/etc/pigeon/ek-hashes"   # file with one SHA-256 EK pubkey hash per line
 
 secret "secret_a" {
   length   = 32
@@ -92,7 +117,29 @@ action "vault-init" {
 
 ## API
 
+### `POST /attest`
+
+Starts TPM attestation. Validates EK identity (hash allowlist or cert chain), returns a credential activation challenge.
+
+`ek_pub`, `ek_cert`, and `ak_params` fields are base64-encoded DER (`[]byte` in Go, auto-encoded by `encoding/json`).
+
+```json
+{"token": "<hmac>", "scope": "worker", "ek_pub": "<base64 DER>", "ek_cert": "<base64 DER>", "ak_params": {...}}
+```
+
 ### `POST /claim`
+
+Completes attestation and returns secrets. With TPM: sends session ID and activated credential. Without TPM (`-skip-tpm`): sends token only.
+
+TPM (default):
+
+`activated_secret` is base64-encoded (`[]byte`).
+
+```json
+{"session_id": "...", "activated_secret": "<base64>"}
+```
+
+Token-only (`-skip-tpm`, dev/testing):
 
 ```json
 {"token": "<hmac>", "scope": "worker"}
@@ -137,24 +184,6 @@ action "vault-init" {
 ```
 
 For auto-unseal, also set `recovery_shares` and `recovery_threshold`.
-
-### vault-cert-auth
-
-Configures Vault's `auth/cert` method with a role that trusts the enrollment CA. This bridges stage 0 (enrollment) to stage 1 (Vault PKI) — nodes with enrollment-CA-signed client certs can authenticate to Vault via vault-agent. Idempotent — skips if auth/cert is already enabled, upserts the role.
-
-Reads the enrollment CA public cert from disk (`ca_cert_file`) and authenticates to Vault using the management token from the secrets map (`token_secret`).
-
-```hcl
-action "vault-cert-auth" {
-  addr          = "https://127.0.0.1:8200"
-  tls_skip_verify = true
-  ca_cert_file  = "/encrypted/tls/node.ca.crt"
-  token_secret  = "vault_management_token"
-  role          = "node"
-  policies      = ["node-pki"]
-  token_ttl     = "1h"
-}
-```
 
 ### luks-recovery
 
