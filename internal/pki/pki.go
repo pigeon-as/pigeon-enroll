@@ -122,6 +122,46 @@ func GenerateCert(ca *CA, cn string, hosts []string, ttl time.Duration) (certPEM
 	return generateLeaf(ca, cn, hosts, ttl)
 }
 
+// IssueCert creates an ephemeral Ed25519 leaf certificate with explicit EKU control.
+// Used by cert blocks to auto-issue leaf certs during claim.
+func IssueCert(ca *CA, cn string, ttl time.Duration, serverAuth, clientAuth bool) (certPEM, keyPEM []byte, err error) {
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate leaf key: %w", err)
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate serial: %w", err)
+	}
+	var eku []x509.ExtKeyUsage
+	if serverAuth {
+		eku = append(eku, x509.ExtKeyUsageServerAuth)
+	}
+	if clientAuth {
+		eku = append(eku, x509.ExtKeyUsageClientAuth)
+	}
+	now := time.Now()
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    now.Add(-5 * time.Minute),
+		NotAfter:     now.Add(ttl),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  eku,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, key.Public(), ca.Key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sign leaf cert: %w", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal leaf key: %w", err)
+	}
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	return certPEM, keyPEM, nil
+}
+
 // GenerateClientCert creates an ephemeral Ed25519 client certificate bundle
 // (cert + key + CA cert) signed by the CA.
 // Returns the PEM bundle as a single byte slice.

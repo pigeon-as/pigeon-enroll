@@ -19,6 +19,7 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/audit"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/nonce"
+	"github.com/pigeon-as/pigeon-enroll/internal/pki"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
 )
@@ -34,7 +35,9 @@ type Server struct {
 	limiter     *ipRateLimiter
 	trustedNets []*net.IPNet
 	scopes      map[string]string
-	caScopes    map[string]string
+	caScopes    map[string][]string
+	certCAs     map[string]*pki.CA
+	certSpecs   []config.CertSpec
 	logger      *slog.Logger
 	mux         *http.ServeMux
 	verifier    *attestpkg.Verifier
@@ -49,11 +52,29 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 			scopes[s.Name] = s.Scope
 		}
 	}
-	caScopes := make(map[string]string, len(cfg.CAs))
+	caScopes := make(map[string][]string, len(cfg.CAs))
 	for _, ca := range cfg.CAs {
-		if ca.Scope != "" {
+		if len(ca.Scope) > 0 {
 			caScopes[ca.Name] = ca.Scope
 		}
+	}
+
+	// Load CAs referenced by cert blocks for leaf issuance.
+	certCAs := make(map[string]*pki.CA, len(cfg.Certs))
+	for _, c := range cfg.Certs {
+		if _, ok := certCAs[c.CA]; ok {
+			continue
+		}
+		caEntry, ok := cas[c.CA]
+		if !ok {
+			return nil, fmt.Errorf("cert %q references unknown CA %q", c.Name, c.CA)
+		}
+		pemData := append([]byte(caEntry.CertPEM), []byte(caEntry.PrivateKeyPEM)...)
+		loadedCA, loadErr := pki.LoadCA(pemData)
+		if loadErr != nil {
+			return nil, fmt.Errorf("load CA %q for cert issuance: %w", c.CA, loadErr)
+		}
+		certCAs[c.CA] = loadedCA
 	}
 	var trustedNets []*net.IPNet
 	for _, cidr := range cfg.TrustedProxies {
@@ -85,6 +106,8 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 		trustedNets: trustedNets,
 		scopes:      scopes,
 		caScopes:    caScopes,
+		certCAs:     certCAs,
+		certSpecs:   cfg.Certs,
 		logger:      logger,
 		mux:         http.NewServeMux(),
 		verifier:    attestpkg.NewVerifier(ekValidator),
@@ -189,9 +212,10 @@ type claimRequestTPM struct {
 }
 
 type claimResponse struct {
-	Secrets map[string]string          `json:"secrets"`
-	Vars    map[string]string          `json:"vars"`
-	CA      map[string]secrets.CAEntry `json:"ca,omitempty"`
+	Secrets map[string]string            `json:"secrets"`
+	Vars    map[string]string            `json:"vars"`
+	CA      map[string]secrets.CAEntry   `json:"ca,omitempty"`
+	Certs   map[string]secrets.CertEntry `json:"certs,omitempty"`
 }
 
 // handleAttest handles POST /attest — TPM attestation round 1.
@@ -387,19 +411,49 @@ func (s *Server) writeClaimResponse(w http.ResponseWriter, scope string) {
 	filteredCAs := make(map[string]secrets.CAEntry, len(s.ca))
 	for name, val := range s.ca {
 		entry := secrets.CAEntry{CertPEM: val.CertPEM}
-		if sc := s.caScopes[name]; sc == "" || sc == scope {
+		if sc := s.caScopes[name]; len(sc) > 0 && scopeMatch(sc, scope) {
 			entry.PrivateKeyPEM = val.PrivateKeyPEM
 		}
 		filteredCAs[name] = entry
 	}
 
+	// Issue leaf certs for matching cert blocks.
+	var certs map[string]secrets.CertEntry
+	for _, cs := range s.certSpecs {
+		if !scopeMatch(cs.Scope, scope) {
+			continue
+		}
+		ca := s.certCAs[cs.CA]
+		serverAuth := cs.ServerAuth != nil && *cs.ServerAuth
+		clientAuth := cs.ClientAuth == nil || *cs.ClientAuth // default true
+		certPEM, keyPEM, err := pki.IssueCert(ca, cs.CN, cs.TTL, serverAuth, clientAuth)
+		if err != nil {
+			s.logger.Error("issue cert failed", "cert", cs.Name, "err", err)
+			continue
+		}
+		if certs == nil {
+			certs = make(map[string]secrets.CertEntry)
+		}
+		certs[cs.Name] = secrets.CertEntry{CertPEM: string(certPEM), KeyPEM: string(keyPEM)}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(claimResponse{Secrets: filteredSecrets, Vars: filteredVars, CA: filteredCAs})
+	json.NewEncoder(w).Encode(claimResponse{Secrets: filteredSecrets, Vars: filteredVars, CA: filteredCAs, Certs: certs})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"ok"}`))
+}
+
+// scopeMatch reports whether scope is in the allowed list.
+func scopeMatch(allowed []string, scope string) bool {
+	for _, a := range allowed {
+		if a == scope {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) jsonError(w http.ResponseWriter, msg string, code int) {

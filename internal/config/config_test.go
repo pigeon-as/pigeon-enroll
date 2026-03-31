@@ -263,3 +263,109 @@ func TestCheckKeyFile(t *testing.T) {
 		t.Fatalf("valid key: %v", err)
 	}
 }
+
+func TestLoadCertBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+ca "auth" {
+  scope = ["server"]
+}
+
+cert "auth_worker" {
+  ca          = "auth"
+  scope       = ["worker"]
+  ttl         = "720h"
+  client_auth = true
+  cn          = "worker"
+}
+
+vars = { k = "v" }
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Certs) != 1 {
+		t.Fatalf("certs = %d, want 1", len(cfg.Certs))
+	}
+	c := cfg.Certs[0]
+	if c.Name != "auth_worker" {
+		t.Errorf("cert name = %q", c.Name)
+	}
+	if c.CA != "auth" {
+		t.Errorf("cert ca = %q", c.CA)
+	}
+	if c.TTL != 720*time.Hour {
+		t.Errorf("cert ttl = %v", c.TTL)
+	}
+	if c.CN != "worker" {
+		t.Errorf("cert cn = %q", c.CN)
+	}
+}
+
+func TestValidateCertMissingCA(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs:         []CertSpec{{Name: "c", CA: "nonexistent", Scope: []string{"worker"}, CN: "w", TTL: time.Hour}},
+	}
+	if err := validate(cfg); err == nil {
+		t.Error("expected error for cert referencing missing CA")
+	}
+}
+
+func TestValidateCertEmptyScope(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs:         []CertSpec{{Name: "c", CA: "auth", CN: "w", TTL: time.Hour}},
+	}
+	if err := validate(cfg); err == nil {
+		t.Error("expected error for cert with empty scope")
+	}
+}
+
+func TestValidateCertMissingCN(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, TTL: time.Hour}},
+	}
+	if err := validate(cfg); err == nil {
+		t.Error("expected error for cert with missing CN")
+	}
+}
+
+func TestValidateCertTTLTooSmall(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Second}},
+	}
+	if err := validate(cfg); err == nil {
+		t.Error("expected error for cert TTL < 1m")
+	}
+}
+
+func TestValidateCertNameConflictsWithCA(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs:         []CertSpec{{Name: "auth", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour}},
+	}
+	if err := validate(cfg); err == nil {
+		t.Error("expected error for cert name conflicting with CA")
+	}
+}

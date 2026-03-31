@@ -13,6 +13,7 @@ import (
 	"log/slog"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
+	"github.com/pigeon-as/pigeon-enroll/internal/pki"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
 )
@@ -229,20 +230,22 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 		TokenWindow: testWindow,
 		Vars:        map[string]string{"k": "v"},
 		CAs: []config.CASpec{
-			{Name: "shared"},
-			{Name: "server_ca", Scope: "server"},
+			{Name: "shared"},                                        // empty scope = public only
+			{Name: "server_ca", Scope: []string{"server"}},         // server gets private key
+			{Name: "both_ca", Scope: []string{"server", "worker"}}, // both get private key
 		},
 	}
 	cas := map[string]secrets.CAEntry{
 		"shared":    {CertPEM: "shared-cert", PrivateKeyPEM: "shared-key"},
 		"server_ca": {CertPEM: "server-cert", PrivateKeyPEM: "server-key"},
+		"both_ca":   {CertPEM: "both-cert", PrivateKeyPEM: "both-key"},
 	}
 	srv, err := New(logger, cfg, testHMACKey, nil, cas, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Claim with worker scope — should get both CAs, but server_ca has no private key.
+	// Claim with worker scope — shared has no key (empty scope), server_ca has no key, both_ca has key.
 	workerTok := token.Generate(testHMACKey, time.Now(), testWindow, "worker")
 	body, _ := json.Marshal(claimRequest{Token: workerTok, Scope: "worker"})
 	req := httptest.NewRequest("POST", "/claim", bytes.NewReader(body))
@@ -257,11 +260,14 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.CA) != 2 {
-		t.Fatalf("expected 2 CAs for worker scope, got %d: %v", len(resp.CA), resp.CA)
+	if len(resp.CA) != 3 {
+		t.Fatalf("expected 3 CAs for worker scope, got %d: %v", len(resp.CA), resp.CA)
 	}
-	if resp.CA["shared"].CertPEM != "shared-cert" || resp.CA["shared"].PrivateKeyPEM != "shared-key" {
-		t.Error("unscoped CA 'shared' should have both cert and key")
+	if resp.CA["shared"].CertPEM != "shared-cert" {
+		t.Error("unscoped CA 'shared' should have cert_pem")
+	}
+	if resp.CA["shared"].PrivateKeyPEM != "" {
+		t.Error("unscoped CA 'shared' should NOT have private_key_pem (empty scope = public only)")
 	}
 	if resp.CA["server_ca"].CertPEM != "server-cert" {
 		t.Error("server-scoped CA should have cert_pem for worker scope")
@@ -269,8 +275,11 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 	if resp.CA["server_ca"].PrivateKeyPEM != "" {
 		t.Error("server-scoped CA should NOT have private_key_pem for worker scope")
 	}
+	if resp.CA["both_ca"].CertPEM != "both-cert" || resp.CA["both_ca"].PrivateKeyPEM != "both-key" {
+		t.Error("both-scoped CA should have cert and key for worker scope")
+	}
 
-	// Claim with server scope — should get both CAs.
+	// Claim with server scope — shared still no key, server_ca has key, both_ca has key.
 	serverTok := token.Generate(testHMACKey, time.Now(), testWindow, "server")
 	body2, _ := json.Marshal(claimRequest{Token: serverTok, Scope: "server"})
 	req2 := httptest.NewRequest("POST", "/claim", bytes.NewReader(body2))
@@ -285,8 +294,109 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
 		t.Fatal(err)
 	}
-	if len(resp2.CA) != 2 {
-		t.Fatalf("expected 2 CAs for server scope, got %d", len(resp2.CA))
+	if len(resp2.CA) != 3 {
+		t.Fatalf("expected 3 CAs for server scope, got %d", len(resp2.CA))
+	}
+	if resp2.CA["shared"].PrivateKeyPEM != "" {
+		t.Error("unscoped CA 'shared' should NOT have private_key_pem even for server scope")
+	}
+	if resp2.CA["server_ca"].PrivateKeyPEM != "server-key" {
+		t.Error("server-scoped CA should have private_key_pem for server scope")
+	}
+	if resp2.CA["both_ca"].PrivateKeyPEM != "both-key" {
+		t.Error("both-scoped CA should have private_key_pem for server scope")
+	}
+}
+
+func TestClaimCertIssuance(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	// Derive a real CA so LoadCA works in New().
+	namedCA, err := pki.DeriveNamedCA(testKey, "auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Config{
+		TokenWindow: testWindow,
+		Vars:        map[string]string{"k": "v"},
+		CAs: []config.CASpec{
+			{Name: "auth", Scope: []string{"server"}},
+		},
+		Certs: []config.CertSpec{
+			{
+				Name:  "auth_worker",
+				CA:    "auth",
+				Scope: []string{"worker"},
+				TTL:   720 * time.Hour,
+				CN:    "worker",
+			},
+		},
+	}
+	cas := map[string]secrets.CAEntry{
+		"auth": {CertPEM: string(namedCA.CertPEM), PrivateKeyPEM: string(namedCA.KeyPEM)},
+	}
+	srv, err := New(logger, cfg, testHMACKey, nil, cas, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Worker claim — should get cert issued, no CA private key.
+	workerTok := token.Generate(testHMACKey, time.Now(), testWindow, "worker")
+	body, _ := json.Marshal(claimRequest{Token: workerTok, Scope: "worker"})
+	req := httptest.NewRequest("POST", "/claim", bytes.NewReader(body))
+	req.RemoteAddr = "192.168.1.100:12345"
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp claimResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	// CA: cert_pem only, no private_key_pem (scope=server, claim=worker).
+	if resp.CA["auth"].CertPEM == "" {
+		t.Error("auth CA should have cert_pem")
+	}
+	if resp.CA["auth"].PrivateKeyPEM != "" {
+		t.Error("auth CA should NOT have private_key_pem for worker scope")
+	}
+
+	// Cert: should be issued.
+	if len(resp.Certs) != 1 {
+		t.Fatalf("expected 1 cert, got %d", len(resp.Certs))
+	}
+	cert := resp.Certs["auth_worker"]
+	if cert.CertPEM == "" {
+		t.Error("auth_worker cert should have cert_pem")
+	}
+	if cert.KeyPEM == "" {
+		t.Error("auth_worker cert should have key_pem")
+	}
+
+	// Server claim — should get CA private key, no cert (scope mismatch).
+	serverTok := token.Generate(testHMACKey, time.Now(), testWindow, "server")
+	body2, _ := json.Marshal(claimRequest{Token: serverTok, Scope: "server"})
+	req2 := httptest.NewRequest("POST", "/claim", bytes.NewReader(body2))
+	req2.RemoteAddr = "192.168.1.100:12345"
+	w2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w2.Code, w2.Body.String())
+	}
+	var resp2 claimResponse
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
+		t.Fatal(err)
+	}
+	if resp2.CA["auth"].PrivateKeyPEM == "" {
+		t.Error("auth CA should have private_key_pem for server scope")
+	}
+	if len(resp2.Certs) != 0 {
+		t.Errorf("expected 0 certs for server scope, got %d", len(resp2.Certs))
 	}
 }
 

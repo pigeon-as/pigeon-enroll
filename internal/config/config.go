@@ -22,8 +22,21 @@ type SecretSpec struct {
 
 // CASpec describes a CA certificate to derive from the enrollment key via HKDF.
 type CASpec struct {
-	Name  string `hcl:"name,label"`
-	Scope string `hcl:"scope,optional"`
+	Name  string   `hcl:"name,label"`
+	Scope []string `hcl:"scope,optional"`
+}
+
+// CertSpec describes a leaf certificate to auto-issue during claim.
+// Follows the Vault PKI role pattern: issuance policy separate from CA.
+type CertSpec struct {
+	Name       string   `hcl:"name,label"`
+	CA         string   `hcl:"ca"`                   // must reference a ca block name
+	Scope      []string `hcl:"scope"`                 // who gets this cert auto-issued
+	TTLRaw     string   `hcl:"ttl"`                   // e.g. "720h"
+	TTL        time.Duration
+	ClientAuth *bool    `hcl:"client_auth,optional"`  // default true
+	ServerAuth *bool    `hcl:"server_auth,optional"`  // default false
+	CN         string   `hcl:"cn"`                    // static common name
 }
 
 // Config holds the pigeon-enroll configuration.
@@ -39,6 +52,7 @@ type Config struct {
 	Vars             map[string]string `hcl:"vars,optional"`
 	Secrets          []SecretSpec      `hcl:"secret,block"`
 	CAs              []CASpec          `hcl:"ca,block"`
+	Certs            []CertSpec        `hcl:"cert,block"`
 	SecretsPath      string            `hcl:"secrets_path,optional"`
 	TrustedProxies   []string          `hcl:"trusted_proxies,optional"`
 	Actions          []action.Config   `hcl:"action,block"`
@@ -80,6 +94,17 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("parse server_cert_ttl: %w", err)
 		}
 		cfg.ServerCertTTL = d
+	}
+
+	for i, c := range cfg.Certs {
+		if c.TTLRaw == "" {
+			return Config{}, fmt.Errorf("cert %q: ttl is required", c.Name)
+		}
+		d, err := time.ParseDuration(c.TTLRaw)
+		if err != nil {
+			return Config{}, fmt.Errorf("cert %q: parse ttl: %w", c.Name, err)
+		}
+		cfg.Certs[i].TTL = d
 	}
 
 	if err := validate(cfg); err != nil {
@@ -129,6 +154,32 @@ func validate(cfg Config) error {
 			return fmt.Errorf("ca %q: duplicate name", ca.Name)
 		}
 		caNames[ca.Name] = true
+	}
+
+	certNames := make(map[string]bool, len(cfg.Certs))
+	for _, c := range cfg.Certs {
+		if c.Name == "" {
+			return fmt.Errorf("cert: name is required")
+		}
+		if certNames[c.Name] {
+			return fmt.Errorf("cert %q: duplicate name", c.Name)
+		}
+		if caNames[c.Name] {
+			return fmt.Errorf("cert %q: name conflicts with a ca block", c.Name)
+		}
+		certNames[c.Name] = true
+		if !caNames[c.CA] {
+			return fmt.Errorf("cert %q: ca %q is not defined", c.Name, c.CA)
+		}
+		if len(c.Scope) == 0 {
+			return fmt.Errorf("cert %q: scope must not be empty", c.Name)
+		}
+		if c.CN == "" {
+			return fmt.Errorf("cert %q: cn is required", c.Name)
+		}
+		if c.TTL < time.Minute {
+			return fmt.Errorf("cert %q: ttl must be at least 1m", c.Name)
+		}
 	}
 
 	for _, cidr := range cfg.TrustedProxies {
