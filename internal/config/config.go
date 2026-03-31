@@ -153,6 +153,11 @@ func validate(cfg Config) error {
 		if caNames[ca.Name] {
 			return fmt.Errorf("ca %q: duplicate name", ca.Name)
 		}
+		for _, s := range ca.Scope {
+			if s == "" {
+				return fmt.Errorf("ca %q: scope entries must not be empty strings", ca.Name)
+			}
+		}
 		caNames[ca.Name] = true
 	}
 
@@ -174,11 +179,21 @@ func validate(cfg Config) error {
 		if len(c.Scope) == 0 {
 			return fmt.Errorf("cert %q: scope must not be empty", c.Name)
 		}
+		for _, s := range c.Scope {
+			if s == "" {
+				return fmt.Errorf("cert %q: scope entries must not be empty strings", c.Name)
+			}
+		}
 		if c.CN == "" {
 			return fmt.Errorf("cert %q: cn is required", c.Name)
 		}
 		if c.TTL < time.Minute {
 			return fmt.Errorf("cert %q: ttl must be at least 1m", c.Name)
+		}
+		serverAuth := c.ServerAuth != nil && *c.ServerAuth
+		clientAuth := c.ClientAuth == nil || *c.ClientAuth
+		if !serverAuth && !clientAuth {
+			return fmt.Errorf("cert %q: at least one of client_auth or server_auth must be true", c.Name)
 		}
 	}
 
