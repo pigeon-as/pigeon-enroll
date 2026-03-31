@@ -429,7 +429,7 @@ func (s *Server) writeClaimResponse(w http.ResponseWriter, scope string) {
 		certPEM, keyPEM, err := pki.IssueCert(ca, cs.CN, cs.TTL, serverAuth, clientAuth)
 		if err != nil {
 			s.logger.Error("issue cert failed", "cert", cs.Name, "err", err)
-			http.Error(w, fmt.Sprintf("internal error: cert issuance failed for %s", cs.Name), http.StatusInternalServerError)
+			s.jsonError(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		if certs == nil {

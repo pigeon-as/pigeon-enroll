@@ -244,6 +244,7 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(srv.Close)
 
 	// Claim with worker scope — shared has no key (empty scope), server_ca has no key, both_ca has key.
 	workerTok := token.Generate(testHMACKey, time.Now(), testWindow, "worker")
@@ -340,6 +341,7 @@ func TestClaimCertIssuance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(srv.Close)
 
 	// Worker claim — should get cert issued, no CA private key.
 	workerTok := token.Generate(testHMACKey, time.Now(), testWindow, "worker")
