@@ -38,7 +38,7 @@ type attestResponse struct {
 // The url parameter can be either the base URL (e.g. https://host:8443) or
 // the full claim URL (e.g. https://host:8443/claim) for backward compatibility.
 func Run(client *http.Client, url, token, scope, outputPath string, skipTPM bool, logger *slog.Logger) (*Response, error) {
-	baseURL := strings.TrimSuffix(url, "/claim")
+	baseURL := strings.TrimSuffix(strings.TrimRight(url, "/"), "/claim")
 
 	if skipTPM {
 		logger.Warn("WARNING: --skip-tpm set — TPM attestation disabled, do not use in production")
@@ -120,7 +120,7 @@ func runTPM(client *http.Client, baseURL, token, scope, outputPath string, logge
 		return nil, fmt.Errorf("read /attest response: %w", err)
 	}
 	if attestResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("attest failed (%d): %s", attestResp.StatusCode, extractError(attestData))
+		return nil, fmt.Errorf("attest failed (%d): %s", attestResp.StatusCode, extractError(attestData, attestResp.Status))
 	}
 
 	var ar attestResponse
@@ -168,7 +168,7 @@ func doClaimRequest(client *http.Client, url string, body []byte, outputPath str
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("claim failed (%d): %s", resp.StatusCode, extractError(data))
+		return nil, fmt.Errorf("claim failed (%d): %s", resp.StatusCode, extractError(data, resp.Status))
 	}
 
 	var result Response
@@ -185,7 +185,7 @@ func doClaimRequest(client *http.Client, url string, body []byte, outputPath str
 }
 
 // extractError attempts to parse an error message from a JSON error response.
-func extractError(data []byte) string {
+func extractError(data []byte, status string) string {
 	var errResp struct {
 		Error string `json:"error"`
 	}
@@ -194,7 +194,7 @@ func extractError(data []byte) string {
 	}
 	msg := string(bytes.TrimSpace(data))
 	if msg == "" {
-		return "unknown error"
+		return status
 	}
 	return msg
 }

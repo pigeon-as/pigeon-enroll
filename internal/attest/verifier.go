@@ -40,6 +40,7 @@ type Verifier struct {
 	sessions map[string]*session
 	done     chan struct{}
 	ek       *EKValidator
+	once     sync.Once
 }
 
 // NewVerifier creates a Verifier and starts the session cleanup goroutine.
@@ -54,9 +55,9 @@ func NewVerifier(ek *EKValidator) *Verifier {
 	return v
 }
 
-// Close stops the cleanup goroutine.
+// Close stops the cleanup goroutine. Safe to call multiple times.
 func (v *Verifier) Close() {
-	close(v.done)
+	v.once.Do(func() { close(v.done) })
 }
 
 // StartRequest is the input for StartAttestation.

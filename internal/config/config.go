@@ -202,8 +202,12 @@ func validate(cfg Config) error {
 		}
 	}
 	if cfg.EKHashPath != "" {
-		if _, err := os.Stat(cfg.EKHashPath); err != nil {
+		info, err := os.Stat(cfg.EKHashPath)
+		if err != nil {
 			return fmt.Errorf("ek_hash_path: %w", err)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("ek_hash_path must be a regular file")
 		}
 	}
 
