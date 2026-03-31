@@ -154,3 +154,14 @@ func TestEKValidator_EmptyCADir(t *testing.T) {
 		t.Fatal("expected error for empty CA directory")
 	}
 }
+
+func TestEKValidator_UnparseableCAFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "garbage.txt"), []byte("not a cert"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewEKValidator(dir, "")
+	if err == nil {
+		t.Fatal("expected error for unparseable file in CA directory")
+	}
+}

@@ -123,9 +123,10 @@ func loadCACerts(dir string) (*x509.CertPool, error) {
 		if e.IsDir() {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		name := e.Name()
+		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", e.Name(), err)
+			return nil, fmt.Errorf("read %s: %w", name, err)
 		}
 
 		// Try PEM first.
@@ -139,7 +140,10 @@ func loadCACerts(dir string) (*x509.CertPool, error) {
 		if cert, err := x509.ParseCertificate(data); err == nil {
 			pool.AddCert(cert)
 			count++
+			continue
 		}
+		// SPIRE community pattern: fail-closed on unparseable files.
+		return nil, fmt.Errorf("could not parse cert data for %q", name)
 	}
 	if count == 0 {
 		return nil, fmt.Errorf("no valid certificates found in %s", dir)
