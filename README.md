@@ -55,13 +55,13 @@ Use `-skip-tls` for testing without TLS.
 Claim always performs two-round TPM attestation (SPIRE community plugin pattern):
 
 1. Client opens TPM, reads EK, creates ephemeral AK
-2. `POST /attest` — sends HMAC token + EK public key + AK params → server returns credential activation challenge + PCR nonce
-3. Client activates credential (proves AK is on the same TPM as EK), generates PCR quote (PCR 7+11) with server's nonce
-4. `POST /claim` — sends session ID + activated secret + PCR quote → server verifies and returns secrets
+2. `POST /attest` — sends HMAC token + EK pub + EK cert (optional) + AK params → server validates EK identity, returns credential activation challenge
+3. Client activates credential (proves AK is on the same TPM as EK)
+4. `POST /claim` — sends session ID + activated secret → server verifies and returns secrets
 
-The server can enforce PCR values via `pcr_policy` (exact match) or run in log-only mode (empty policy — records values in audit log). Set `require_tpm = true` to reject token-only claims.
+EK identity is validated via `ek_ca_path` (manufacturer CA cert chain) and/or `ek_hash_path` (SHA-256 pubkey hash allowlist). At least one must be configured when `require_tpm = true`.
 
-Use `pigeon-enroll pcr-read` to obtain golden PCR values from a known-good server. Use `-skip-tpm` on the client for dev/testing only.
+Use `pigeon-enroll ek-hash` to print the EK public key hash for populating the allowlist. Use `-skip-tpm` on the client for dev/testing only.
 
 ## Config
 
@@ -74,12 +74,10 @@ audit_path   = "/var/log/pigeon-enroll/audit.jsonl"
 trusted_proxies = ["10.0.0.0/8"]
 require_tpm  = true
 
-# PCR policy: empty = log-only, set values = enforce exact match.
-# Use `pigeon-enroll pcr-read` to obtain golden values.
-# pcr_policy = {
-#   "7"  = "abc123..."
-#   "11" = "def456..."
-# }
+# EK identity validation (SPIRE community TPM plugin pattern).
+# At least one required when require_tpm = true.
+ek_ca_path   = "/etc/pigeon/ek-ca"      # directory of manufacturer CA certs (PEM/DER)
+ek_hash_path = "/etc/pigeon/ek-hashes"   # file with one SHA-256 EK pubkey hash per line
 
 secret "secret_a" {
   length   = 32
@@ -121,18 +119,18 @@ action "vault-init" {
 
 ### `POST /attest`
 
-Starts TPM attestation. Returns a credential activation challenge and PCR nonce.
+Starts TPM attestation. Validates EK identity (hash allowlist or cert chain), returns a credential activation challenge.
 
 ```json
-{"token": "<hmac>", "scope": "worker", "ek_pub": "...", "ak_params": {...}}
+{"token": "<hmac>", "scope": "worker", "ek_pub": "...", "ek_cert": "...", "ak_params": {...}}
 ```
 
 ### `POST /claim`
 
-Completes attestation and returns secrets. With TPM: sends session ID, activated credential, and PCR quote. Without TPM (`-skip-tpm`): sends token only.
+Completes attestation and returns secrets. With TPM: sends session ID and activated credential. Without TPM (`-skip-tpm`): sends token only.
 
 ```json
-{"session_id": "...", "activated_secret": "...", "quote": {...}, "pcrs": {...}}
+{"session_id": "...", "activated_secret": "..."}
 ```
 
 Returns filtered secrets + vars:

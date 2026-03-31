@@ -64,6 +64,16 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 	if err != nil {
 		return nil, fmt.Errorf("create nonce store: %w", err)
 	}
+
+	// Create EK validator if configured (SPIRE pattern).
+	var ekValidator *attestpkg.EKValidator
+	if cfg.EKCAPath != "" || cfg.EKHashPath != "" {
+		ekValidator, err = attestpkg.NewEKValidator(cfg.EKCAPath, cfg.EKHashPath)
+		if err != nil {
+			return nil, fmt.Errorf("create EK validator: %w", err)
+		}
+	}
+
 	srv := &Server{
 		cfg:         cfg,
 		secrets:     derivedSecrets,
@@ -77,7 +87,7 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 		caScopes:    caScopes,
 		logger:      logger,
 		mux:         http.NewServeMux(),
-		verifier:    attestpkg.NewVerifier(),
+		verifier:    attestpkg.NewVerifier(ekValidator),
 	}
 	srv.mux.HandleFunc("POST /attest", srv.handleAttest)
 	srv.mux.HandleFunc("POST /claim", srv.handleClaim)
@@ -155,6 +165,7 @@ type attestRequest struct {
 	Token    string                       `json:"token"`
 	Scope    string                       `json:"scope"`
 	EKPub    []byte                       `json:"ek_pub"`     // PKIX DER of EK public key
+	EKCert   []byte                       `json:"ek_cert"`    // DER X.509 EK certificate (optional)
 	AKParams attest.AttestationParameters `json:"ak_params"`
 }
 
@@ -162,15 +173,12 @@ type attestRequest struct {
 type attestResponse struct {
 	SessionID  string                    `json:"session_id"`
 	Credential attest.EncryptedCredential `json:"credential"`
-	Nonce      []byte                    `json:"nonce"`
 }
 
 // claimRequestTPM is the TPM-attested claim (round 2).
 type claimRequestTPM struct {
-	SessionID       string        `json:"session_id"`
-	ActivatedSecret []byte        `json:"activated_secret"`
-	Quote           attest.Quote  `json:"quote"`
-	PCRs            []attest.PCR  `json:"pcrs"`
+	SessionID       string `json:"session_id"`
+	ActivatedSecret []byte `json:"activated_secret"`
 }
 
 type claimResponse struct {
@@ -213,11 +221,22 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse optional EK certificate.
+	var ekCert *x509.Certificate
+	if len(req.EKCert) > 0 {
+		ekCert, err = x509.ParseCertificate(req.EKCert)
+		if err != nil {
+			s.jsonError(w, "invalid EK certificate", http.StatusBadRequest)
+			return
+		}
+	}
+
 	// Start attestation session.
 	resp, err := s.verifier.StartAttestation(attestpkg.StartRequest{
 		Token:    req.Token,
 		Scope:    req.Scope,
 		EKPub:    ekPub,
+		EKCert:   ekCert,
 		AKParams: req.AKParams,
 	})
 	if err != nil {
@@ -234,7 +253,6 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(attestResponse{
 		SessionID:  resp.SessionID,
 		Credential: *resp.EncryptedCredential,
-		Nonce:      resp.Nonce,
 	})
 }
 
@@ -316,21 +334,11 @@ func (s *Server) handleClaimTPM(w http.ResponseWriter, r *http.Request, ip strin
 	result, err := s.verifier.CompleteAttestation(attestpkg.CompleteRequest{
 		SessionID:       req.SessionID,
 		ActivatedSecret: req.ActivatedSecret,
-		Quote:           req.Quote,
-		PCRs:            req.PCRs,
 	})
 	if err != nil {
 		s.logger.Warn("TPM attestation failed", "ip", ip, "err", err)
 		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "TPM: " + err.Error()})
 		s.jsonError(w, "TPM attestation failed: "+err.Error(), http.StatusForbidden)
-		return
-	}
-
-	// Evaluate PCR policy (nil policy = log-only mode).
-	if err := attestpkg.EvaluatePCRPolicy(s.cfg.PCRPolicy, result.PCRs); err != nil {
-		s.logger.Warn("PCR policy violation", "ip", ip, "ek", result.EKHash, "err", err)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: err.Error()})
-		s.jsonError(w, err.Error(), http.StatusForbidden)
 		return
 	}
 
@@ -349,7 +357,7 @@ func (s *Server) handleClaimTPM(w http.ResponseWriter, r *http.Request, ip strin
 		return
 	}
 
-	s.logger.Info("claimed (TPM attested)", "ip", ip, "scope", result.Scope, "ek", result.EKHash, "pcrs", result.PCRs)
+	s.logger.Info("claimed (TPM attested)", "ip", ip, "scope", result.Scope, "ek", result.EKHash)
 	s.audit.Record(audit.Entry{Operation: "claim", IP: ip, Scope: result.Scope, OK: true})
 
 	s.writeClaimResponse(w, result.Scope)

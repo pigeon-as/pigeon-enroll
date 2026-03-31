@@ -79,8 +79,8 @@ func main() {
 		os.Exit(cmdGenerateCert(args))
 	case "claim":
 		os.Exit(cmdClaim(args))
-	case "pcr-read":
-		os.Exit(cmdPCRRead(args))
+	case "ek-hash":
+		os.Exit(cmdEKHash(args))
 	case "render":
 		os.Exit(cmdRender(args))
 	case "run-actions":
@@ -102,7 +102,7 @@ Commands:
   generate-token  Generate an HMAC claim token
   generate-cert   Generate a TLS certificate
   claim           Claim secrets from an enrollment server
-  pcr-read        Read TPM PCR values (for deriving golden values)
+  ek-hash         Print EK public key hash (for ek_hash_path allowlist)
   render          Render HCL templates with variables
   run-actions     Run post-claim lifecycle actions
   version         Print version`)
@@ -458,10 +458,8 @@ func cmdClaim(args []string) int {
 	return 0
 }
 
-func cmdPCRRead(args []string) int {
-	flags := flag.NewFlagSet("pcr-read", flag.ExitOnError)
-	indices := flags.String("pcrs", "7,11", "Comma-separated PCR indices to read")
-	flags.Parse(args)
+func cmdEKHash(args []string) int {
+	flag.NewFlagSet("ek-hash", flag.ExitOnError).Parse(args)
 
 	if !tpm.Available() {
 		fmt.Fprintln(os.Stderr, "error: no TPM available on this host")
@@ -475,41 +473,14 @@ func cmdPCRRead(args []string) int {
 	}
 	defer sess.Close()
 
-	ekHash, _ := sess.EKHash()
-	fmt.Fprintf(os.Stderr, "EK hash: %s\n", ekHash)
-
-	// Parse PCR indices.
-	var pcrList []int
-	for _, s := range strings.Split(*indices, ",") {
-		s = strings.TrimSpace(s)
-		idx, err := strconv.Atoi(s)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid PCR index %q: %v\n", s, err)
-			return 1
-		}
-		pcrList = append(pcrList, idx)
-	}
-
-	pcrs, err := sess.ReadPCRs()
+	ekHash, err := sess.EKHash()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "read PCRs: %v\n", err)
+		fmt.Fprintf(os.Stderr, "compute EK hash: %v\n", err)
 		return 1
 	}
 
-	// Build index set for filtering.
-	want := make(map[int]bool, len(pcrList))
-	for _, idx := range pcrList {
-		want[idx] = true
-	}
-
-	// Output in a format suitable for pcr_policy config.
-	fmt.Fprintln(os.Stderr, "\nPCR values (use in pcr_policy config):")
-	for _, pcr := range pcrs {
-		if want[pcr.Index] {
-			fmt.Fprintf(os.Stdout, "  \"%d\" = \"%s\"\n", pcr.Index, hex.EncodeToString(pcr.Digest))
-		}
-	}
-
+	// Print hash to stdout for use in ek_hash_path file.
+	fmt.Println(ekHash)
 	return 0
 }
 

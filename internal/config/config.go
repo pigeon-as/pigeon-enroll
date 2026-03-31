@@ -2,12 +2,10 @@
 package config
 
 import (
-	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
 	"runtime"
-	"strconv"
 	"time"
 
 	"github.com/hashicorp/hcl/v2/hclsimple"
@@ -44,8 +42,9 @@ type Config struct {
 	SecretsPath      string            `hcl:"secrets_path,optional"`
 	TrustedProxies   []string          `hcl:"trusted_proxies,optional"`
 	Actions          []action.Config   `hcl:"action,block"`
-	RequireTPM       bool              `hcl:"require_tpm,optional"`
-	PCRPolicy        map[string]string `hcl:"pcr_policy,optional"`
+	RequireTPM       bool   `hcl:"require_tpm,optional"`
+	EKCAPath         string `hcl:"ek_ca_path,optional"`
+	EKHashPath       string `hcl:"ek_hash_path,optional"`
 }
 
 // Load reads an HCL config file and returns a validated Config with defaults applied.
@@ -138,13 +137,22 @@ func validate(cfg Config) error {
 		}
 	}
 
-	// Validate PCR policy.
-	for k, v := range cfg.PCRPolicy {
-		if _, err := strconv.Atoi(k); err != nil {
-			return fmt.Errorf("pcr_policy: key %q is not a valid PCR index", k)
+	// Validate EK identity config (SPIRE pattern: at least one required when TPM is required).
+	if cfg.RequireTPM && cfg.EKCAPath == "" && cfg.EKHashPath == "" {
+		return fmt.Errorf("require_tpm is set but neither ek_ca_path nor ek_hash_path is configured")
+	}
+	if cfg.EKCAPath != "" {
+		info, err := os.Stat(cfg.EKCAPath)
+		if err != nil {
+			return fmt.Errorf("ek_ca_path: %w", err)
 		}
-		if _, err := hex.DecodeString(v); err != nil {
-			return fmt.Errorf("pcr_policy: value for PCR %s is not valid hex", k)
+		if !info.IsDir() {
+			return fmt.Errorf("ek_ca_path must be a directory")
+		}
+	}
+	if cfg.EKHashPath != "" {
+		if _, err := os.Stat(cfg.EKHashPath); err != nil {
+			return fmt.Errorf("ek_hash_path: %w", err)
 		}
 	}
 

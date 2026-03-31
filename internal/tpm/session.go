@@ -2,7 +2,7 @@
 
 // Package tpm provides client-side TPM operations for node attestation.
 // Follows the SPIRE community TPM plugin pattern: EK-based identity,
-// credential activation, PCR quoting via go-attestation/attest.
+// credential activation via go-attestation/attest.
 package tpm
 
 import (
@@ -90,27 +90,6 @@ func (s *Session) AKParams() attest.AttestationParameters {
 // This proves the AK is resident on the same TPM as the EK.
 func (s *Session) ActivateCredential(ec attest.EncryptedCredential) ([]byte, error) {
 	return s.ak.ActivateCredential(s.tpm, ec)
-}
-
-// Quote generates a TPM quote over the specified PCRs with the given nonce.
-// Returns the quote and the current PCR values.
-func (s *Session) Quote(nonce []byte, pcrIndices []int) (*attest.Quote, []attest.PCR, error) {
-	quote, err := s.ak.QuotePCRs(s.tpm, nonce, attest.HashSHA256, pcrIndices)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate quote: %w", err)
-	}
-
-	pcrs, err := s.tpm.PCRs(attest.HashSHA256)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read PCRs: %w", err)
-	}
-
-	return quote, pcrs, nil
-}
-
-// ReadPCRs reads the current PCR values for the SHA-256 bank.
-func (s *Session) ReadPCRs() ([]attest.PCR, error) {
-	return s.tpm.PCRs(attest.HashSHA256)
 }
 
 // Close releases all TPM resources.

@@ -1,6 +1,6 @@
 // Package attest provides server-side TPM attestation verification.
 // Follows the SPIRE community TPM plugin pattern: credential activation
-// challenge-response, with the addition of PCR quote verification.
+// challenge-response with EK identity validation.
 package attest
 
 import (
@@ -29,9 +29,7 @@ type session struct {
 	id        string
 	scope     string
 	secret    []byte // expected credential activation response
-	nonce     []byte // sent to client for PCR quote
 	ekHash    string
-	akPublic  []byte // AK public area for quote verification
 	token     string // original HMAC token, consumed on success
 	expiresAt time.Time
 }
@@ -41,13 +39,16 @@ type Verifier struct {
 	mu       sync.RWMutex
 	sessions map[string]*session
 	done     chan struct{}
+	ek       *EKValidator
 }
 
 // NewVerifier creates a Verifier and starts the session cleanup goroutine.
-func NewVerifier() *Verifier {
+// If ek is non-nil, EK identity is validated before generating challenges.
+func NewVerifier(ek *EKValidator) *Verifier {
 	v := &Verifier{
 		sessions: make(map[string]*session),
 		done:     make(chan struct{}),
+		ek:       ek,
 	}
 	go v.cleanupLoop()
 	return v
@@ -63,6 +64,7 @@ type StartRequest struct {
 	Token    string
 	Scope    string
 	EKPub    crypto.PublicKey
+	EKCert   *x509.Certificate // optional, for CA chain validation
 	AKParams attest.AttestationParameters
 }
 
@@ -70,13 +72,18 @@ type StartRequest struct {
 type StartResponse struct {
 	SessionID           string
 	EncryptedCredential *attest.EncryptedCredential
-	Nonce               []byte // for PCR quote
 }
 
-// StartAttestation begins a new attestation session. It generates the
-// credential activation challenge (SPIRE community plugin pattern) and
-// a fresh nonce for the PCR quote.
+// StartAttestation begins a new attestation session. It validates EK identity
+// (SPIRE pattern) and generates the credential activation challenge.
 func (v *Verifier) StartAttestation(req StartRequest) (*StartResponse, error) {
+	// Validate EK identity (SPIRE community plugin pattern).
+	if v.ek != nil {
+		if err := v.ek.Validate(req.EKPub, req.EKCert); err != nil {
+			return nil, fmt.Errorf("EK validation failed: %w", err)
+		}
+	}
+
 	// Generate credential activation challenge.
 	ap := attest.ActivationParameters{
 		EK:   req.EKPub,
@@ -89,12 +96,6 @@ func (v *Verifier) StartAttestation(req StartRequest) (*StartResponse, error) {
 	secret, ec, err := ap.Generate()
 	if err != nil {
 		return nil, fmt.Errorf("generate credential activation challenge: %w", err)
-	}
-
-	// Generate PCR quote nonce.
-	nonce := make([]byte, 32)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("generate nonce: %w", err)
 	}
 
 	// Generate session ID.
@@ -116,9 +117,7 @@ func (v *Verifier) StartAttestation(req StartRequest) (*StartResponse, error) {
 		id:        sessionID,
 		scope:     req.Scope,
 		secret:    secret,
-		nonce:     nonce,
 		ekHash:    hex.EncodeToString(ekSHA[:]),
-		akPublic:  req.AKParams.Public,
 		token:     req.Token,
 		expiresAt: time.Now().Add(sessionTTL),
 	}
@@ -130,7 +129,6 @@ func (v *Verifier) StartAttestation(req StartRequest) (*StartResponse, error) {
 	return &StartResponse{
 		SessionID:           sessionID,
 		EncryptedCredential: ec,
-		Nonce:               nonce,
 	}, nil
 }
 
@@ -138,8 +136,6 @@ func (v *Verifier) StartAttestation(req StartRequest) (*StartResponse, error) {
 type CompleteRequest struct {
 	SessionID       string
 	ActivatedSecret []byte
-	Quote           attest.Quote
-	PCRs            []attest.PCR
 }
 
 // CompleteResult is returned on successful attestation.
@@ -147,10 +143,9 @@ type CompleteResult struct {
 	Scope  string
 	Token  string // original HMAC token for nonce consumption
 	EKHash string // for audit logging
-	PCRs   map[int]string // verified PCR index → hex digest
 }
 
-// CompleteAttestation verifies the credential activation response and PCR quote.
+// CompleteAttestation verifies the credential activation response.
 func (v *Verifier) CompleteAttestation(req CompleteRequest) (*CompleteResult, error) {
 	// Look up and remove session atomically.
 	v.mu.Lock()
@@ -167,31 +162,15 @@ func (v *Verifier) CompleteAttestation(req CompleteRequest) (*CompleteResult, er
 		return nil, errors.New("session expired")
 	}
 
-	// Step 1: Verify credential activation (proves real TPM with this EK).
+	// Verify credential activation (proves real TPM with this EK).
 	if subtle.ConstantTimeCompare(sess.secret, req.ActivatedSecret) != 1 {
 		return nil, errors.New("credential activation failed")
-	}
-
-	// Step 2: Verify PCR quote signature (proves PCR values are hardware-attested).
-	akPub, err := attest.ParseAKPublic(sess.akPublic)
-	if err != nil {
-		return nil, fmt.Errorf("parse AK public: %w", err)
-	}
-	if err := akPub.Verify(req.Quote, req.PCRs, sess.nonce); err != nil {
-		return nil, fmt.Errorf("quote verification failed: %w", err)
-	}
-
-	// Collect PCR values (all verified — Verify succeeded).
-	pcrMap := make(map[int]string, len(req.PCRs))
-	for _, pcr := range req.PCRs {
-		pcrMap[pcr.Index] = hex.EncodeToString(pcr.Digest)
 	}
 
 	return &CompleteResult{
 		Scope:  sess.scope,
 		Token:  sess.token,
 		EKHash: sess.ekHash,
-		PCRs:   pcrMap,
 	}, nil
 }
 

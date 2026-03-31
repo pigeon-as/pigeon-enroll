@@ -16,10 +16,6 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/tpm"
 )
 
-// pcrIndices are the PCR banks to quote: 7 (Secure Boot state), 11 (UKI hash).
-// Same PCRs used for LUKS TPM2 sealing.
-var pcrIndices = []int{7, 11}
-
 // Response is the JSON structure returned by POST /claim.
 // Format: {"secrets":{...},"vars":{...}} with an optional "ca" field when CAs are configured.
 type Response struct {
@@ -33,7 +29,6 @@ type Response struct {
 type attestResponse struct {
 	SessionID  string                    `json:"session_id"`
 	Credential attest.EncryptedCredential `json:"credential"`
-	Nonce      []byte                    `json:"nonce"`
 }
 
 // Run sends a claim request and writes secrets to outputPath.
@@ -88,16 +83,24 @@ func runTPM(client *http.Client, baseURL, token, scope, outputPath string, logge
 		return nil, fmt.Errorf("marshal EK public key: %w", err)
 	}
 
-	// Step 3: POST /attest with token + EK pub + AK params.
+	// Step 3: Get optional EK certificate.
+	var ekCertDER []byte
+	if cert := sess.EKCertificate(); cert != nil {
+		ekCertDER = cert.Raw
+	}
+
+	// Step 4: POST /attest with token + EK pub + EK cert + AK params.
 	attestReq := struct {
 		Token    string                       `json:"token"`
 		Scope    string                       `json:"scope"`
 		EKPub    []byte                       `json:"ek_pub"`
+		EKCert   []byte                       `json:"ek_cert,omitempty"`
 		AKParams attest.AttestationParameters `json:"ak_params"`
 	}{
 		Token:    token,
 		Scope:    scope,
 		EKPub:    ekDER,
+		EKCert:   ekCertDER,
 		AKParams: sess.AKParams(),
 	}
 	attestBody, err := json.Marshal(attestReq)
@@ -126,31 +129,21 @@ func runTPM(client *http.Client, baseURL, token, scope, outputPath string, logge
 
 	logger.Info("attestation challenge received", "session", ar.SessionID)
 
-	// Step 4: Activate credential (proves AK is on same TPM as EK).
+	// Step 5: Activate credential (proves AK is on same TPM as EK).
 	activated, err := sess.ActivateCredential(ar.Credential)
 	if err != nil {
 		return nil, fmt.Errorf("activate credential: %w", err)
 	}
 
-	// Step 5: Generate PCR quote with server's nonce.
-	quote, pcrs, err := sess.Quote(ar.Nonce, pcrIndices)
-	if err != nil {
-		return nil, fmt.Errorf("generate PCR quote: %w", err)
-	}
-
 	logger.Info("TPM attestation complete, claiming secrets")
 
-	// Step 6: POST /claim with session_id + activated_secret + quote + pcrs.
+	// Step 6: POST /claim with session_id + activated_secret.
 	claimReq := struct {
-		SessionID       string       `json:"session_id"`
-		ActivatedSecret []byte       `json:"activated_secret"`
-		Quote           attest.Quote `json:"quote"`
-		PCRs            []attest.PCR `json:"pcrs"`
+		SessionID       string `json:"session_id"`
+		ActivatedSecret []byte `json:"activated_secret"`
 	}{
 		SessionID:       ar.SessionID,
 		ActivatedSecret: activated,
-		Quote:           *quote,
-		PCRs:            pcrs,
 	}
 	claimBody, err := json.Marshal(claimReq)
 	if err != nil {

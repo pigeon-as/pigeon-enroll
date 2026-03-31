@@ -6,7 +6,7 @@ import (
 )
 
 func TestVerifier_SessionExpiry(t *testing.T) {
-	v := NewVerifier()
+	v := NewVerifier(nil)
 	defer v.Close()
 
 	// Create a session manually with an already-expired TTL.
@@ -24,7 +24,7 @@ func TestVerifier_SessionExpiry(t *testing.T) {
 }
 
 func TestVerifier_UnknownSession(t *testing.T) {
-	v := NewVerifier()
+	v := NewVerifier(nil)
 	defer v.Close()
 
 	_, err := v.CompleteAttestation(CompleteRequest{SessionID: "nonexistent"})
@@ -34,7 +34,7 @@ func TestVerifier_UnknownSession(t *testing.T) {
 }
 
 func TestVerifier_SessionDeletedAfterLookup(t *testing.T) {
-	v := NewVerifier()
+	v := NewVerifier(nil)
 	defer v.Close()
 
 	v.mu.Lock()
