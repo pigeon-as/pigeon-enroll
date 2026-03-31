@@ -1,6 +1,6 @@
 # pigeon-enroll
 
-**Experimental** bootstrap enrollment server and client that derives bootstrap secrets from a shared enrollment key (HKDF) and distributes them to clients via mTLS and one-time, time-windowed HMAC tokens. Pluggable post-claim actions.
+**Experimental** bootstrap enrollment server and client that derives bootstrap secrets from a shared enrollment key (HKDF) and distributes them to clients via mTLS, TPM attestation, and one-time HMAC tokens. Pluggable post-claim actions.
 
 **Not a secrets manager:** covers the minimum secrets needed before Vault is available. The enrollment key is static; all servers with the same key independently derive identical secrets. A separate HMAC signing key is derived from it for token operations.
 
@@ -18,10 +18,16 @@ pigeon-enroll generate-token [-scope=worker]
 # Generate a TLS certificate bundle
 pigeon-enroll generate-cert -bundle /tmp/enroll-cert.pem
 
-# Claim (worker side, with mTLS)
+# Claim (worker side, with mTLS + TPM attestation)
 pigeon-enroll claim -url https://enroll:8443/claim \
   -token <hmac> -tls /tmp/enroll-cert.pem \
   -scope worker \
+  -output /encrypted/pigeon/secrets.json
+
+# Claim (dev/testing only, no TPM)
+pigeon-enroll claim -url https://enroll:8443/claim \
+  -token <hmac> -tls /tmp/enroll-cert.pem \
+  -skip-tpm \
   -output /encrypted/pigeon/secrets.json
 
 # Render templates (worker side, one-shot after claim)
@@ -44,6 +50,19 @@ mTLS is enabled by default — the CA is derived deterministically from the enro
 
 Use `-skip-tls` for testing without TLS.
 
+## TPM Attestation
+
+Claim always performs two-round TPM attestation (SPIRE community plugin pattern):
+
+1. Client opens TPM, reads EK, creates ephemeral AK
+2. `POST /attest` — sends HMAC token + EK public key + AK params → server returns credential activation challenge + PCR nonce
+3. Client activates credential (proves AK is on the same TPM as EK), generates PCR quote (PCR 7+11) with server's nonce
+4. `POST /claim` — sends session ID + activated secret + PCR quote → server verifies and returns secrets
+
+The server can enforce PCR values via `pcr_policy` (exact match) or run in log-only mode (empty policy — records values in audit log). Set `require_tpm = true` to reject token-only claims.
+
+Use `pigeon-enroll pcr-read` to obtain golden PCR values from a known-good server. Use `-skip-tpm` on the client for dev/testing only.
+
 ## Config
 
 ```hcl
@@ -53,6 +72,14 @@ token_window = "30m"
 server_cert_ttl = "720h"
 audit_path   = "/var/log/pigeon-enroll/audit.jsonl"
 trusted_proxies = ["10.0.0.0/8"]
+require_tpm  = true
+
+# PCR policy: empty = log-only, set values = enforce exact match.
+# Use `pigeon-enroll pcr-read` to obtain golden values.
+# pcr_policy = {
+#   "7"  = "abc123..."
+#   "11" = "def456..."
+# }
 
 secret "secret_a" {
   length   = 32
@@ -92,10 +119,20 @@ action "vault-init" {
 
 ## API
 
-### `POST /claim`
+### `POST /attest`
+
+Starts TPM attestation. Returns a credential activation challenge and PCR nonce.
 
 ```json
-{"token": "<hmac>", "scope": "worker"}
+{"token": "<hmac>", "scope": "worker", "ek_pub": "...", "ak_params": {...}}
+```
+
+### `POST /claim`
+
+Completes attestation and returns secrets. With TPM: sends session ID, activated credential, and PCR quote. Without TPM (`-skip-tpm`): sends token only.
+
+```json
+{"session_id": "...", "activated_secret": "...", "quote": {...}, "pcrs": {...}}
 ```
 
 Returns filtered secrets + vars:
