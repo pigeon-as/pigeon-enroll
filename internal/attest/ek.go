@@ -168,8 +168,12 @@ func loadHashFile(path string) (map[string]bool, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if _, err := hex.DecodeString(line); err != nil {
+		decoded, err := hex.DecodeString(line)
+		if err != nil {
 			return nil, fmt.Errorf("invalid hex hash %q: %w", line, err)
+		}
+		if len(decoded) != sha256.Size {
+			return nil, fmt.Errorf("invalid EK hash %q: expected %d-byte SHA-256 hash", line, sha256.Size)
 		}
 		hashes[strings.ToLower(line)] = true
 	}

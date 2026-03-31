@@ -50,6 +50,20 @@ func TestLoadHashFile_InvalidHex(t *testing.T) {
 	}
 }
 
+func TestLoadHashFile_WrongLength(t *testing.T) {
+	dir := t.TempDir()
+	hashPath := filepath.Join(dir, "hashes")
+	// Valid hex but not SHA-256 length (only 16 bytes / 32 hex chars).
+	if err := os.WriteFile(hashPath, []byte("abcdef0123456789abcdef0123456789\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := loadHashFile(hashPath)
+	if err == nil {
+		t.Fatal("expected error for wrong-length hash")
+	}
+}
+
 func TestEKValidator_HashMatch(t *testing.T) {
 	// Generate a test key.
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

@@ -129,8 +129,16 @@ Starts TPM attestation. Validates EK identity (hash allowlist or cert chain), re
 
 Completes attestation and returns secrets. With TPM: sends session ID and activated credential. Without TPM (`-skip-tpm`): sends token only.
 
+TPM (default):
+
 ```json
 {"session_id": "...", "activated_secret": "..."}
+```
+
+Token-only (`-skip-tpm`, dev/testing):
+
+```json
+{"token": "<hmac>", "scope": "worker"}
 ```
 
 Returns filtered secrets + vars:

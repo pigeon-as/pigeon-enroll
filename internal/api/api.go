@@ -95,6 +95,13 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 	return srv, nil
 }
 
+// Close releases resources held by the server.
+func (s *Server) Close() {
+	if s.verifier != nil {
+		s.verifier.Close()
+	}
+}
+
 // Handler returns the HTTP handler.
 func (s *Server) Handler() http.Handler {
 	if len(s.trustedNets) == 0 {
@@ -189,7 +196,7 @@ type claimResponse struct {
 
 // handleAttest handles POST /attest — TPM attestation round 1.
 // Validates the HMAC token (signature only, nonce not consumed yet),
-// generates a credential activation challenge and PCR quote nonce.
+// generates a credential activation challenge.
 func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	if !s.limiter.allow(ip) {

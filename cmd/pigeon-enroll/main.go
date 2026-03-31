@@ -199,6 +199,7 @@ func cmdServer(args []string) int {
 	go func() {
 		<-ctx.Done()
 		logger.Info("shutting down")
+		srv.Close()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		httpServer.Shutdown(shutCtx)

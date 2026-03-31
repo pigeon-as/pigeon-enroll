@@ -21,9 +21,11 @@ func Open() (*Session, error) {
 	return nil, errors.New("TPM not supported on this platform")
 }
 
-func (s *Session) EKPublic() crypto.PublicKey                { return nil }
-func (s *Session) EKCertificate() *x509.Certificate          { return nil }
-func (s *Session) EKHash() (string, error)                   { return "", nil }
-func (s *Session) AKParams() attest.AttestationParameters    { return attest.AttestationParameters{} }
-func (s *Session) ActivateCredential(attest.EncryptedCredential) ([]byte, error) { return nil, nil }
-func (s *Session) Close() error                     { return nil }
+func (s *Session) EKPublic() crypto.PublicKey             { return nil }
+func (s *Session) EKCertificate() *x509.Certificate       { return nil }
+func (s *Session) EKHash() (string, error)                { return "", nil }
+func (s *Session) AKParams() attest.AttestationParameters { return attest.AttestationParameters{} }
+func (s *Session) ActivateCredential(attest.EncryptedCredential) ([]byte, error) {
+	return nil, nil
+}
+func (s *Session) Close() error { return nil }
