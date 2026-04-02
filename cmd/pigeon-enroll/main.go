@@ -47,7 +47,7 @@ import (
 
 const (
 	version           = "0.1.0"
-	defaultConfigPath = "/etc/pigeon/enroll.hcl"
+	defaultConfigPath = "/etc/pigeon/enroll-server.hcl"
 )
 
 // stringSlice implements flag.Value for repeatable string flags.
@@ -488,7 +488,7 @@ func cmdEKHash(args []string) int {
 func cmdRender(args []string) int {
 	flags := flag.NewFlagSet("render", flag.ExitOnError)
 	configPath := flags.String("config", "", "Path to render HCL config")
-	varsPath := flags.String("vars", "/encrypted/pigeon/secrets.json", "Path to template variables JSON")
+	varsPath := flags.String("vars", "/encrypted/pigeon/enroll.json", "Path to template variables JSON")
 	flags.Parse(args)
 
 	if *configPath == "" {

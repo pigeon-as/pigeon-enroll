@@ -9,7 +9,7 @@
 ## Usage
 
 ```bash
-# Server (reads /etc/pigeon/enroll.hcl by default)
+# Server (reads /etc/pigeon/enroll-server.hcl by default)
 pigeon-enroll server
 
 # Generate a claim token
@@ -22,18 +22,18 @@ pigeon-enroll generate-cert -bundle /tmp/enroll-cert.pem
 pigeon-enroll claim -url https://enroll:8443/claim \
   -token <hmac> -tls /tmp/enroll-cert.pem \
   -scope worker \
-  -output /encrypted/pigeon/secrets.json
+  -output /encrypted/pigeon/enroll.json
 
 # Claim (dev/testing only, no TPM)
 pigeon-enroll claim -url https://enroll:8443/claim \
   -token <hmac> -tls /tmp/enroll-cert.pem \
   -skip-tpm \
-  -output /encrypted/pigeon/secrets.json
+  -output /encrypted/pigeon/enroll.json
 
 # Render templates (worker side, one-shot after claim)
 pigeon-enroll render \
   -config /etc/pigeon/render.hcl \
-  -vars /encrypted/pigeon/secrets.json
+  -vars /encrypted/pigeon/enroll.json
 
 # Run all actions
 pigeon-enroll run-actions
@@ -90,7 +90,7 @@ secret "secret_b" {
   scope    = "server"
 }
 
-secrets_path = "/encrypted/pigeon/secrets.json"
+secrets_path = "/encrypted/pigeon/enroll.json"
 
 vars = {
   datacenter = "eu-west-gra"
