@@ -32,7 +32,7 @@ func TestRun_Success(t *testing.T) {
 	defer srv.Close()
 
 	out := filepath.Join(t.TempDir(), "secrets.json")
-	resp, err := Run(srv.Client(), srv.URL, "abc123", "", out, true, testLogger)
+	resp, err := Run(srv.Client(), srv.URL, "abc123", "", "", out, true, testLogger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestRun_Forbidden(t *testing.T) {
 	defer srv.Close()
 
 	out := filepath.Join(t.TempDir(), "secrets.json")
-	_, err := Run(srv.Client(), srv.URL, "bad", "", out, true, testLogger)
+	_, err := Run(srv.Client(), srv.URL, "bad", "", "", out, true, testLogger)
 	if err == nil {
 		t.Fatal("expected error for 403")
 	}
@@ -87,7 +87,7 @@ func TestRun_ServerError(t *testing.T) {
 	defer srv.Close()
 
 	out := filepath.Join(t.TempDir(), "secrets.json")
-	_, err := Run(srv.Client(), srv.URL, "tok", "", out, true, testLogger)
+	_, err := Run(srv.Client(), srv.URL, "tok", "", "", out, true, testLogger)
 	if err == nil {
 		t.Fatal("expected error for 500")
 	}
@@ -95,7 +95,7 @@ func TestRun_ServerError(t *testing.T) {
 
 func TestRun_ConnectionRefused(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "secrets.json")
-	_, err := Run(&http.Client{}, "http://127.0.0.1:1", "tok", "", out, true, testLogger)
+	_, err := Run(&http.Client{}, "http://127.0.0.1:1", "tok", "", "", out, true, testLogger)
 	if err == nil {
 		t.Fatal("expected connection error")
 	}
@@ -113,7 +113,7 @@ func TestRun_FilePermissions(t *testing.T) {
 	defer srv.Close()
 
 	out := filepath.Join(t.TempDir(), "sub", "secrets.json")
-	_, err := Run(srv.Client(), srv.URL, "tok", "", out, true, testLogger)
+	_, err := Run(srv.Client(), srv.URL, "tok", "", "", out, true, testLogger)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,6 +18,7 @@ import (
 	attestpkg "github.com/pigeon-as/pigeon-enroll/internal/attest"
 	"github.com/pigeon-as/pigeon-enroll/internal/audit"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
+	jwtpkg "github.com/pigeon-as/pigeon-enroll/internal/jwt"
 	"github.com/pigeon-as/pigeon-enroll/internal/nonce"
 	"github.com/pigeon-as/pigeon-enroll/internal/pki"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
@@ -38,13 +39,15 @@ type Server struct {
 	caScopes    map[string][]string
 	certCAs     map[string]*pki.CA
 	certSpecs   []config.CertSpec
+	jwtKeys     map[string]secrets.JWTKeyEntry
+	jwtSpecs    []config.JWTSpec
 	logger      *slog.Logger
 	mux         *http.ServeMux
 	verifier    *attestpkg.Verifier
 }
 
 // New creates a new enrollment API server.
-func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets map[string]string, cas map[string]secrets.CAEntry, al *audit.Log) (*Server, error) {
+func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets map[string]string, cas map[string]secrets.CAEntry, jwtKeys map[string]secrets.JWTKeyEntry, al *audit.Log) (*Server, error) {
 	// Build scope map from secret specs.
 	scopes := make(map[string]string, len(cfg.Secrets))
 	for _, s := range cfg.Secrets {
@@ -108,6 +111,8 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 		caScopes:    caScopes,
 		certCAs:     certCAs,
 		certSpecs:   cfg.Certs,
+		jwtKeys:     jwtKeys,
+		jwtSpecs:    cfg.JWTs,
 		logger:      logger,
 		mux:         http.NewServeMux(),
 		verifier:    attestpkg.NewVerifier(ekValidator),
@@ -186,14 +191,16 @@ func (s *Server) withTrustedProxies(next http.Handler) http.Handler {
 }
 
 type claimRequest struct {
-	Token string `json:"token"`
-	Scope string `json:"scope"`
+	Token   string `json:"token"`
+	Scope   string `json:"scope"`
+	Subject string `json:"subject"`
 }
 
 // attestRequest is the input for POST /attest (TPM attestation round 1).
 type attestRequest struct {
-	Token    string                       `json:"token"`
-	Scope    string                       `json:"scope"`
+	Token   string                       `json:"token"`
+	Scope   string                       `json:"scope"`
+	Subject string                       `json:"subject"`
 	EKPub    []byte                       `json:"ek_pub"`     // PKIX DER of EK public key
 	EKCert   []byte                       `json:"ek_cert"`    // DER X.509 EK certificate (optional)
 	AKParams attest.AttestationParameters `json:"ak_params"`
@@ -216,6 +223,8 @@ type claimResponse struct {
 	Vars    map[string]string            `json:"vars"`
 	CA      map[string]secrets.CAEntry   `json:"ca,omitempty"`
 	Certs   map[string]secrets.CertEntry `json:"certs,omitempty"`
+	JWTs    map[string]string            `json:"jwts,omitempty"`
+	JWTKeys map[string]string            `json:"jwt_keys,omitempty"`
 }
 
 // handleAttest handles POST /attest — TPM attestation round 1.
@@ -266,6 +275,7 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.verifier.StartAttestation(attestpkg.StartRequest{
 		Token:    req.Token,
 		Scope:    req.Scope,
+		Subject: req.Subject,
 		EKPub:    ekPub,
 		EKCert:   ekCert,
 		AKParams: req.AKParams,
@@ -357,7 +367,7 @@ func (s *Server) handleClaimTokenOnly(w http.ResponseWriter, r *http.Request, ip
 	s.logger.Info("claimed", "ip", ip, "scope", req.Scope)
 	s.audit.Record(audit.Entry{Operation: "claim", IP: ip, Scope: req.Scope, OK: true})
 
-	s.writeClaimResponse(w, req.Scope)
+	s.writeClaimResponse(w, req.Scope, req.Subject)
 }
 
 // handleClaimTPM processes TPM-attested claims (round 2 of attestation flow).
@@ -391,11 +401,11 @@ func (s *Server) handleClaimTPM(w http.ResponseWriter, r *http.Request, ip strin
 	s.logger.Info("claimed (TPM attested)", "ip", ip, "scope", result.Scope, "ek", result.EKHash)
 	s.audit.Record(audit.Entry{Operation: "claim", IP: ip, Scope: result.Scope, OK: true})
 
-	s.writeClaimResponse(w, result.Scope)
+	s.writeClaimResponse(w, result.Scope, result.Subject)
 }
 
 // writeClaimResponse builds and writes the filtered secrets response.
-func (s *Server) writeClaimResponse(w http.ResponseWriter, scope string) {
+func (s *Server) writeClaimResponse(w http.ResponseWriter, scope, subject string) {
 	filteredSecrets := make(map[string]string, len(s.secrets))
 	for name, val := range s.secrets {
 		sc := s.scopes[name]
@@ -426,7 +436,16 @@ func (s *Server) writeClaimResponse(w http.ResponseWriter, scope string) {
 		ca := s.certCAs[cs.CA]
 		serverAuth := cs.ServerAuth != nil && *cs.ServerAuth
 		clientAuth := cs.ClientAuth == nil || *cs.ClientAuth // default true
-		certPEM, keyPEM, err := pki.IssueCert(ca, cs.CN, cs.TTL, serverAuth, clientAuth)
+		cn := cs.CN
+		if cn == "" {
+			cn = subject
+		}
+		if cn == "" {
+			s.logger.Error("cert CN is empty and no subject provided", "cert", cs.Name)
+			s.jsonError(w, "subject is required when cert has no static cn", http.StatusBadRequest)
+			return
+		}
+		certPEM, keyPEM, err := pki.IssueCert(ca, cn, cs.DNSSANs, cs.TTL, serverAuth, clientAuth)
 		if err != nil {
 			s.logger.Error("issue cert failed", "cert", cs.Name, "err", err)
 			s.jsonError(w, "internal error", http.StatusInternalServerError)
@@ -438,8 +457,44 @@ func (s *Server) writeClaimResponse(w http.ResponseWriter, scope string) {
 		certs[cs.Name] = secrets.CertEntry{CertPEM: string(certPEM), KeyPEM: string(keyPEM)}
 	}
 
+	// Sign JWTs for scope-matched specs; collect public keys for all specs.
+	var jwts map[string]string
+	jwtKeys := make(map[string]string, len(s.jwtSpecs))
+	for _, spec := range s.jwtSpecs {
+		key, ok := s.jwtKeys[spec.Name]
+		if !ok {
+			continue
+		}
+		jwtKeys[spec.Name] = key.PublicKeyPEM
+		if spec.Scope == scope {
+			if subject == "" {
+				s.logger.Error("JWT requires subject but none provided", "jwt", spec.Name)
+				s.jsonError(w, "subject is required when JWT scope matches", http.StatusBadRequest)
+				return
+			}
+			signed, err := jwtpkg.Sign(key.PrivateKey, spec.Issuer, spec.Audience, subject, spec.TTL)
+			if err != nil {
+				s.logger.Error("sign JWT failed", "jwt", spec.Name, "err", err)
+				s.jsonError(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			if jwts == nil {
+				jwts = make(map[string]string)
+			}
+			jwts[spec.Name] = signed
+		}
+	}
+
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(claimResponse{Secrets: filteredSecrets, Vars: filteredVars, CA: filteredCAs, Certs: certs})
+	json.NewEncoder(w).Encode(claimResponse{
+		Secrets: filteredSecrets,
+		Vars:    filteredVars,
+		CA:      filteredCAs,
+		Certs:   certs,
+		JWTs:    jwts,
+		JWTKeys: jwtKeys,
+	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

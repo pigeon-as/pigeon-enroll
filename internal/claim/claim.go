@@ -17,12 +17,14 @@ import (
 )
 
 // Response is the JSON structure returned by POST /claim.
-// Format: {"secrets":{...},"vars":{...}} with optional "ca" and "certs" fields.
+// Format: {"secrets":{...},"vars":{...}} with optional "ca", "certs", "jwts", and "jwt_keys" fields.
 type Response struct {
 	Secrets map[string]string            `json:"secrets"`
 	Vars    map[string]string            `json:"vars"`
 	CA      map[string]map[string]string `json:"ca,omitempty"`
 	Certs   map[string]map[string]string `json:"certs,omitempty"`
+	JWTs    map[string]string            `json:"jwts,omitempty"`
+	JWTKeys map[string]string            `json:"jwt_keys,omitempty"`
 	Error   string                       `json:"error,omitempty"`
 }
 
@@ -37,25 +39,28 @@ type attestResponse struct {
 // Set skipTPM to true for dev/testing only (logs WARNING, sends token-only claim).
 // The url parameter can be either the base URL (e.g. https://host:8443) or
 // the full claim URL (e.g. https://host:8443/claim) for backward compatibility.
-func Run(client *http.Client, url, token, scope, outputPath string, skipTPM bool, logger *slog.Logger) (*Response, error) {
+func Run(client *http.Client, url, token, scope, subject, outputPath string, skipTPM bool, logger *slog.Logger) (*Response, error) {
 	baseURL := strings.TrimSuffix(strings.TrimRight(url, "/"), "/claim")
 
 	if skipTPM {
 		logger.Warn("WARNING: --skip-tpm set — TPM attestation disabled, do not use in production")
-		return runTokenOnly(client, baseURL, token, scope, outputPath)
+		return runTokenOnly(client, baseURL, token, scope, subject, outputPath)
 	}
 
-	return runTPM(client, baseURL, token, scope, outputPath, logger)
+	return runTPM(client, baseURL, token, scope, subject, outputPath, logger)
 }
 
 // runTokenOnly performs a token-only claim without TPM attestation.
 // Only used when --skip-tpm is explicitly set (dev/testing).
-func runTokenOnly(client *http.Client, baseURL, token, scope, outputPath string) (*Response, error) {
+func runTokenOnly(client *http.Client, baseURL, token, scope, subject, outputPath string) (*Response, error) {
 	reqBody := map[string]string{
 		"token": token,
 	}
 	if scope != "" {
 		reqBody["scope"] = scope
+	}
+	if subject != "" {
+		reqBody["subject"] = subject
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -66,7 +71,7 @@ func runTokenOnly(client *http.Client, baseURL, token, scope, outputPath string)
 }
 
 // runTPM performs the two-round TPM attestation claim.
-func runTPM(client *http.Client, baseURL, token, scope, outputPath string, logger *slog.Logger) (*Response, error) {
+func runTPM(client *http.Client, baseURL, token, scope, subject, outputPath string, logger *slog.Logger) (*Response, error) {
 	// Step 1: Open TPM and create ephemeral AK.
 	sess, err := tpm.Open()
 	if err != nil {
@@ -94,12 +99,14 @@ func runTPM(client *http.Client, baseURL, token, scope, outputPath string, logge
 	attestReq := struct {
 		Token    string                       `json:"token"`
 		Scope    string                       `json:"scope"`
+		Subject  string                       `json:"subject,omitempty"`
 		EKPub    []byte                       `json:"ek_pub"`
 		EKCert   []byte                       `json:"ek_cert,omitempty"`
 		AKParams attest.AttestationParameters `json:"ak_params"`
 	}{
-		Token:    token,
-		Scope:    scope,
+		Token:   token,
+		Scope:   scope,
+		Subject: subject,
 		EKPub:    ekDER,
 		EKCert:   ekCertDER,
 		AKParams: sess.AKParams(),

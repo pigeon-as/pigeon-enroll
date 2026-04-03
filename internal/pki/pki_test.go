@@ -523,3 +523,46 @@ func TestLoadCA_MismatchedKeyAndCert(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+func TestDeriveJWTKey_Deterministic(t *testing.T) {
+	pub1, priv1, err := DeriveJWTKey(testIKM, "consul_auto_config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub2, priv2, err := DeriveJWTKey(testIKM, "consul_auto_config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pub1.Equal(pub2) {
+		t.Error("same IKM+name should produce identical public keys")
+	}
+	if !priv1.Equal(priv2) {
+		t.Error("same IKM+name should produce identical private keys")
+	}
+}
+
+func TestDeriveJWTKey_DifferentNames(t *testing.T) {
+	pub1, _, err := DeriveJWTKey(testIKM, "key_a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub2, _, err := DeriveJWTKey(testIKM, "key_b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pub1.Equal(pub2) {
+		t.Error("different names should produce different keys")
+	}
+}
+
+func TestDeriveJWTKey_SignVerify(t *testing.T) {
+	pub, priv, err := DeriveJWTKey(testIKM, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := []byte("hello world")
+	sig := ed25519.Sign(priv, msg)
+	if !ed25519.Verify(pub, msg, sig) {
+		t.Error("signature verification failed")
+	}
+}

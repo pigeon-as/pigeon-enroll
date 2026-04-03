@@ -46,7 +46,7 @@ func testServer(t *testing.T) *Server {
 		"secret_c": "dGVzdA==",
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	srv, err := New(logger, cfg, testHMACKey, secrets, nil, nil)
+	srv, err := New(logger, cfg, testHMACKey, secrets, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 		"server_ca": {CertPEM: "server-cert", PrivateKeyPEM: "server-key"},
 		"both_ca":   {CertPEM: "both-cert", PrivateKeyPEM: "both-key"},
 	}
-	srv, err := New(logger, cfg, testHMACKey, nil, cas, nil)
+	srv, err := New(logger, cfg, testHMACKey, nil, cas, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestClaimCertIssuance(t *testing.T) {
 	cas := map[string]secrets.CAEntry{
 		"auth": {CertPEM: string(namedCA.CertPEM), PrivateKeyPEM: string(namedCA.KeyPEM)},
 	}
-	srv, err := New(logger, cfg, testHMACKey, nil, cas, nil)
+	srv, err := New(logger, cfg, testHMACKey, nil, cas, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestClaimRequireTPM(t *testing.T) {
 		TokenWindow: testWindow,
 		RequireTPM:  true,
 	}
-	srv, err := New(logger, cfg, testHMACKey, nil, nil, nil)
+	srv, err := New(logger, cfg, testHMACKey, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

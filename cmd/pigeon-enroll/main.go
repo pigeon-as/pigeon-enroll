@@ -159,7 +159,7 @@ func cmdServer(args []string) int {
 	}
 	logger.Info("enrollment key", "path", cfg.KeyPath)
 
-	derived, cas, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Vars, cfg.SecretsPath, ikm)
+	derived, cas, jwtKeys, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm)
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1
@@ -178,7 +178,7 @@ func cmdServer(args []string) int {
 		logger.Info("audit log", "path", cfg.AuditPath)
 	}
 
-	srv, err := api.New(logger, cfg, hmacKey, derived, cas, al)
+	srv, err := api.New(logger, cfg, hmacKey, derived, cas, jwtKeys, al)
 	if err != nil {
 		logger.Error("create api server", "err", err)
 		return 1
@@ -409,13 +409,14 @@ func cmdClaim(args []string) int {
 	tok := flags.String("token", "", "HMAC claim token")
 	output := flags.String("output", "", "Path to write secrets JSON")
 	scope := flags.String("scope", "", "Scope for secret filtering")
+	subject := flags.String("subject", "", "Subject identity for JWT sub claim (e.g. hostname)")
 	tlsBundle := flags.String("tls", "", "Path to client TLS certificate bundle (PEM)")
 	insecure := flags.Bool("insecure", false, "Skip TLS certificate verification")
 	skipTPM := flags.Bool("skip-tpm", false, "Skip TPM attestation (dev/testing only)")
 	flags.Parse(args)
 
 	if *url == "" || *tok == "" || *output == "" {
-		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<url> -token=<hmac> -output=<path> [-tls=<bundle>] [-scope=<scope>] [-insecure] [-skip-tpm]")
+		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<url> -token=<hmac> -output=<path> [-tls=<bundle>] [-scope=<scope>] [-subject=<identity>] [-insecure] [-skip-tpm]")
 		return 1
 	}
 
@@ -449,7 +450,7 @@ func cmdClaim(args []string) int {
 		}
 	}
 
-	resp, err := claim.Run(client, *url, *tok, *scope, *output, *skipTPM, slog.Default())
+	resp, err := claim.Run(client, *url, *tok, *scope, *subject, *output, *skipTPM, slog.Default())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "claim failed: %v\n", err)
 		return 1
@@ -585,7 +586,7 @@ func cmdRunActions(args []string) int {
 		return 1
 	}
 
-	derived, _, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Vars, cfg.SecretsPath, ikm)
+	derived, _, _, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm)
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1
