@@ -3,7 +3,6 @@ package action
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -102,13 +101,13 @@ func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[st
 		if !pool.AppendCertsFromPEM(caCert) {
 			return fmt.Errorf("ca_cert: no valid certificates found")
 		}
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: pool},
-		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig.RootCAs = pool
+		client.Transport = transport
 	} else if v.cfg.TLSSkipVerify {
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig.InsecureSkipVerify = true
+		client.Transport = transport
 	}
 
 	initURL := v.cfg.Addr + "/v1/sys/init"
