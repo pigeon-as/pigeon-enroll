@@ -414,3 +414,87 @@ func TestResolveMissingCA(t *testing.T) {
 		t.Fatal("expected error for missing CA in persisted file")
 	}
 }
+
+var testJWTs = []config.JWTSpec{
+	{Name: "consul_auto_config", Issuer: "pigeon-enroll", Audience: "consul-auto-config"},
+}
+
+func TestResolveDerivesJWTKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+
+	_, _, jwtKeys, err := Resolve(testSpecs, nil, testJWTs, nil, path, testIKM)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(jwtKeys) != 1 {
+		t.Fatalf("expected 1 JWT key, got %d", len(jwtKeys))
+	}
+	key, ok := jwtKeys["consul_auto_config"]
+	if !ok {
+		t.Fatal("missing JWT key 'consul_auto_config'")
+	}
+	if key.PublicKeyPEM == "" {
+		t.Error("public_key_pem is empty")
+	}
+	if key.PrivateKey == nil {
+		t.Error("private key is nil")
+	}
+
+	// Public key PEM should parse as valid Ed25519.
+	block, _ := pem.Decode([]byte(key.PublicKeyPEM))
+	if block == nil {
+		t.Fatal("failed to decode public key PEM")
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse public key: %v", err)
+	}
+	if _, ok := pub.(ed25519.PublicKey); !ok {
+		t.Errorf("expected Ed25519 public key, got %T", pub)
+	}
+}
+
+func TestResolvePersistedJWTKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+
+	// First resolve: derive + persist.
+	_, _, first, err := Resolve(testSpecs, nil, testJWTs, nil, path, testIKM)
+	if err != nil {
+		t.Fatalf("first resolve: %v", err)
+	}
+
+	// Second resolve: load from disk.
+	_, _, second, err := Resolve(testSpecs, nil, testJWTs, nil, path, testIKM)
+	if err != nil {
+		t.Fatalf("second resolve: %v", err)
+	}
+
+	// Public key PEM should round-trip through persist (newline escaping/unescaping).
+	if first["consul_auto_config"].PublicKeyPEM != second["consul_auto_config"].PublicKeyPEM {
+		t.Errorf("public key PEM changed after round-trip:\n  first:  %q\n  second: %q",
+			first["consul_auto_config"].PublicKeyPEM, second["consul_auto_config"].PublicKeyPEM)
+	}
+
+	// Private key is re-derived from IKM, should match.
+	if !bytes.Equal(first["consul_auto_config"].PrivateKey, second["consul_auto_config"].PrivateKey) {
+		t.Error("private key changed after round-trip")
+	}
+}
+
+func TestResolveMissingJWTKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+
+	// Persist without JWT keys.
+	if _, _, _, err := Resolve(testSpecs, nil, nil, nil, path, testIKM); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now try to load with a JWT requirement — should fail.
+	_, _, _, err := Resolve(testSpecs, nil, testJWTs, nil, path, testIKM)
+	if err == nil {
+		t.Fatal("expected error for missing JWT key in persisted file")
+	}
+}
