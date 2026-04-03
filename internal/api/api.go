@@ -466,7 +466,12 @@ func (s *Server) writeClaimResponse(w http.ResponseWriter, scope, subject string
 			continue
 		}
 		jwtKeys[spec.Name] = key.PublicKeyPEM
-		if spec.Scope == scope && subject != "" {
+		if spec.Scope == scope {
+			if subject == "" {
+				s.logger.Error("JWT requires subject but none provided", "jwt", spec.Name)
+				s.jsonError(w, "subject is required when JWT scope matches", http.StatusBadRequest)
+				return
+			}
 			signed, err := jwtpkg.Sign(key.PrivateKey, spec.Issuer, spec.Audience, subject, spec.TTL)
 			if err != nil {
 				s.logger.Error("sign JWT failed", "jwt", spec.Name, "err", err)
@@ -479,6 +484,7 @@ func (s *Server) writeClaimResponse(w http.ResponseWriter, scope, subject string
 			jwts[spec.Name] = signed
 		}
 	}
+
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(claimResponse{

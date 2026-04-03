@@ -17,12 +17,14 @@ import (
 )
 
 // Response is the JSON structure returned by POST /claim.
-// Format: {"secrets":{...},"vars":{...}} with optional "ca" and "certs" fields.
+// Format: {"secrets":{...},"vars":{...}} with optional "ca", "certs", "jwts", and "jwt_keys" fields.
 type Response struct {
 	Secrets map[string]string            `json:"secrets"`
 	Vars    map[string]string            `json:"vars"`
 	CA      map[string]map[string]string `json:"ca,omitempty"`
 	Certs   map[string]map[string]string `json:"certs,omitempty"`
+	JWTs    map[string]string            `json:"jwts,omitempty"`
+	JWTKeys map[string]string            `json:"jwt_keys,omitempty"`
 	Error   string                       `json:"error,omitempty"`
 }
 

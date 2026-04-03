@@ -145,8 +145,8 @@ func validate(cfg Config) error {
 	if cfg.ServerCertTTL < time.Second {
 		return fmt.Errorf("server_cert_ttl must be at least 1s")
 	}
-	if len(cfg.Vars) == 0 && len(cfg.Secrets) == 0 && len(cfg.CAs) == 0 {
-		return fmt.Errorf("vars, secrets, or ca must not be empty")
+	if len(cfg.Vars) == 0 && len(cfg.Secrets) == 0 && len(cfg.CAs) == 0 && len(cfg.JWTs) == 0 && len(cfg.Certs) == 0 {
+		return fmt.Errorf("config must define at least one of: vars, secret, ca, cert, or jwt")
 	}
 	seen := make(map[string]bool, len(cfg.Secrets)+len(cfg.Vars))
 	for _, s := range cfg.Secrets {
@@ -207,6 +207,11 @@ func validate(cfg Config) error {
 		for _, s := range c.Scope {
 			if s == "" {
 				return fmt.Errorf("cert %q: scope entries must not be empty strings", c.Name)
+			}
+		}
+		for _, d := range c.DNSSANs {
+			if d == "" {
+				return fmt.Errorf("cert %q: dns_sans entries must not be empty strings", c.Name)
 			}
 		}
 		if c.TTL < time.Minute {

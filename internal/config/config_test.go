@@ -498,3 +498,27 @@ func TestValidateJWTDuplicateName(t *testing.T) {
 		t.Error("expected error for duplicate JWT name")
 	}
 }
+
+func TestValidateJWTOnlyConfig(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		JWTs:          []JWTSpec{{Name: "j", Issuer: "i", Audience: "a", Scope: "s", TTL: time.Hour}},
+	}
+	if err := validate(cfg); err != nil {
+		t.Errorf("JWT-only config should be valid: %v", err)
+	}
+}
+
+func TestValidateCertDNSSANsEmpty(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour, DNSSANs: []string{""}}},
+	}
+	if err := validate(cfg); err == nil {
+		t.Error("expected error for cert with empty dns_sans entry")
+	}
+}
