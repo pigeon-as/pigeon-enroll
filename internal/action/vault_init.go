@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
@@ -19,6 +21,7 @@ import (
 // vaultInitConfig holds vault-init action configuration.
 type vaultInitConfig struct {
 	Addr              string             `hcl:"addr,optional"`
+	CACert            string             `hcl:"ca_cert,optional"`
 	TLSSkipVerify     bool               `hcl:"tls_skip_verify,optional"`
 	SecretShares      int                `hcl:"secret_shares,optional"`
 	SecretThreshold   int                `hcl:"secret_threshold,optional"`
@@ -90,7 +93,19 @@ type initResponse struct {
 
 func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[string]string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
-	if v.cfg.TLSSkipVerify {
+	if v.cfg.CACert != "" {
+		caCert, err := os.ReadFile(v.cfg.CACert)
+		if err != nil {
+			return fmt.Errorf("read ca_cert: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caCert) {
+			return fmt.Errorf("ca_cert: no valid certificates found")
+		}
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{RootCAs: pool},
+		}
+	} else if v.cfg.TLSSkipVerify {
 		client.Transport = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}

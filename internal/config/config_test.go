@@ -305,6 +305,45 @@ vars = { k = "v" }
 	}
 }
 
+func TestLoadCertBlockDNSSANs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+ca "mesh" {
+  scope = ["server"]
+}
+
+cert "mesh_worker" {
+  ca          = "mesh"
+  scope       = ["worker"]
+  ttl         = "720h"
+  client_auth = true
+  server_auth = true
+  dns_sans    = ["mesh.pigeon.internal"]
+}
+
+vars = { k = "v" }
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Certs) != 1 {
+		t.Fatalf("certs = %d, want 1", len(cfg.Certs))
+	}
+	c := cfg.Certs[0]
+	if c.Name != "mesh_worker" {
+		t.Errorf("cert name = %q", c.Name)
+	}
+	if c.CN != "" {
+		t.Errorf("cert cn = %q, want empty (subject-derived)", c.CN)
+	}
+	if len(c.DNSSANs) != 1 || c.DNSSANs[0] != "mesh.pigeon.internal" {
+		t.Errorf("cert dns_sans = %v, want [mesh.pigeon.internal]", c.DNSSANs)
+	}
+}
+
 func TestValidateCertMissingCA(t *testing.T) {
 	cfg := Config{
 		TokenWindow:   time.Minute,
@@ -331,7 +370,7 @@ func TestValidateCertEmptyScope(t *testing.T) {
 	}
 }
 
-func TestValidateCertMissingCN(t *testing.T) {
+func TestValidateCertOptionalCN(t *testing.T) {
 	cfg := Config{
 		TokenWindow:   time.Minute,
 		ServerCertTTL: time.Hour,
@@ -339,8 +378,8 @@ func TestValidateCertMissingCN(t *testing.T) {
 		CAs:           []CASpec{{Name: "auth"}},
 		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, TTL: time.Hour}},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for cert with missing CN")
+	if err := validate(cfg); err != nil {
+		t.Errorf("cert with empty CN should be valid (claim subject used at runtime): %v", err)
 	}
 }
 
@@ -367,5 +406,95 @@ func TestValidateCertNameConflictsWithCA(t *testing.T) {
 	}
 	if err := validate(cfg); err == nil {
 		t.Error("expected error for cert name conflicting with CA")
+	}
+}
+
+func TestLoadJWTBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+jwt "consul_auto_config" {
+  issuer   = "pigeon-enroll"
+  audience = "consul-auto-config"
+  ttl      = "24h"
+  scope    = "worker"
+}
+
+vars = { k = "v" }
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.JWTs) != 1 {
+		t.Fatalf("jwts = %d, want 1", len(cfg.JWTs))
+	}
+	j := cfg.JWTs[0]
+	if j.Name != "consul_auto_config" {
+		t.Errorf("jwt name = %q", j.Name)
+	}
+	if j.Issuer != "pigeon-enroll" {
+		t.Errorf("jwt issuer = %q", j.Issuer)
+	}
+	if j.Audience != "consul-auto-config" {
+		t.Errorf("jwt audience = %q", j.Audience)
+	}
+	if j.TTL != 24*time.Hour {
+		t.Errorf("jwt ttl = %v, want 24h", j.TTL)
+	}
+	if j.Scope != "worker" {
+		t.Errorf("jwt scope = %q", j.Scope)
+	}
+}
+
+func TestValidateJWTMissingIssuer(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		JWTs:          []JWTSpec{{Name: "j", Audience: "a", Scope: "s", TTL: time.Hour}},
+	}
+	if err := validate(cfg); err == nil {
+		t.Error("expected error for JWT with missing issuer")
+	}
+}
+
+func TestValidateJWTMissingScope(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		JWTs:          []JWTSpec{{Name: "j", Issuer: "i", Audience: "a", TTL: time.Hour}},
+	}
+	if err := validate(cfg); err == nil {
+		t.Error("expected error for JWT with missing scope")
+	}
+}
+
+func TestValidateJWTTTLTooSmall(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		JWTs:          []JWTSpec{{Name: "j", Issuer: "i", Audience: "a", Scope: "s", TTL: time.Second}},
+	}
+	if err := validate(cfg); err == nil {
+		t.Error("expected error for JWT TTL < 1m")
+	}
+}
+
+func TestValidateJWTDuplicateName(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		JWTs: []JWTSpec{
+			{Name: "j", Issuer: "i", Audience: "a", Scope: "s", TTL: time.Hour},
+			{Name: "j", Issuer: "i2", Audience: "a2", Scope: "s2", TTL: time.Hour},
+		},
+	}
+	if err := validate(cfg); err == nil {
+		t.Error("expected error for duplicate JWT name")
 	}
 }

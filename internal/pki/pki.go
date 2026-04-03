@@ -36,6 +36,11 @@ const (
 	// Full info string: "pigeon-enroll ca <name> key v1".
 	hkdfInfoCAPrefix = "pigeon-enroll ca "
 	hkdfInfoCASuffix = " key v1"
+
+	// hkdfInfoJWTPrefix is the HKDF info prefix for JWT key derivation.
+	// Full info string: "pigeon-enroll jwt <name> key v1".
+	hkdfInfoJWTPrefix = "pigeon-enroll jwt "
+	hkdfInfoJWTSuffix = " key v1"
 )
 
 // CA holds a deterministic CA certificate and private key.
@@ -74,6 +79,20 @@ func DeriveNamedCA(ikm []byte, name string) (*NamedCA, error) {
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	return &NamedCA{CertPEM: ca.CertPEM, KeyPEM: keyPEM}, nil
+}
+
+// DeriveJWTKey produces a deterministic Ed25519 key pair from the enrollment key.
+// The name is used in the HKDF info string for domain separation.
+// Same HKDF pattern as DeriveNamedCA, but returns a raw key pair (no cert wrapping).
+func DeriveJWTKey(ikm []byte, name string) (ed25519.PublicKey, ed25519.PrivateKey, error) {
+	info := hkdfInfoJWTPrefix + name + hkdfInfoJWTSuffix
+	seed := make([]byte, ed25519.SeedSize)
+	r := hkdf.New(sha256.New, ikm, nil, []byte(info))
+	if _, err := io.ReadFull(r, seed); err != nil {
+		return nil, nil, fmt.Errorf("derive JWT key %q: %w", name, err)
+	}
+	key := ed25519.NewKeyFromSeed(seed)
+	return key.Public().(ed25519.PublicKey), key, nil
 }
 
 // deriveCA is the shared implementation for DeriveCA and DeriveNamedCA.
@@ -123,8 +142,9 @@ func GenerateCert(ca *CA, cn string, hosts []string, ttl time.Duration) (certPEM
 }
 
 // IssueCert creates an ephemeral Ed25519 leaf certificate with explicit EKU control.
-// Used by cert blocks to auto-issue leaf certs during claim.
-func IssueCert(ca *CA, cn string, ttl time.Duration, serverAuth, clientAuth bool) (certPEM, keyPEM []byte, err error) {
+// Used by cert blocks to auto-issue leaf certs during claim. dnsSANs are added
+// as DNS subject alternative names on the certificate.
+func IssueCert(ca *CA, cn string, dnsSANs []string, ttl time.Duration, serverAuth, clientAuth bool) (certPEM, keyPEM []byte, err error) {
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate leaf key: %w", err)
@@ -148,6 +168,7 @@ func IssueCert(ca *CA, cn string, ttl time.Duration, serverAuth, clientAuth bool
 		NotAfter:     now.Add(ttl),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  eku,
+		DNSNames:     dnsSANs,
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, key.Public(), ca.Key)
 	if err != nil {

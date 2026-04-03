@@ -28,6 +28,7 @@ type CASpec struct {
 
 // CertSpec describes a leaf certificate to auto-issue during claim.
 // Follows the Vault PKI role pattern: issuance policy separate from CA.
+// When CN is empty, the claim subject (node identity) is used as the cert CN.
 type CertSpec struct {
 	Name       string   `hcl:"name,label"`
 	CA         string   `hcl:"ca"`                   // must reference a ca block name
@@ -36,7 +37,19 @@ type CertSpec struct {
 	TTL        time.Duration
 	ClientAuth *bool    `hcl:"client_auth,optional"`  // default true
 	ServerAuth *bool    `hcl:"server_auth,optional"`  // default false
-	CN         string   `hcl:"cn"`                    // static common name
+	CN         string   `hcl:"cn,optional"`           // static common name (if empty, claim subject is used)
+	DNSSANs    []string `hcl:"dns_sans,optional"`     // DNS subject alternative names
+}
+
+// JWTSpec describes a JWT to sign and include in the claim response.
+// Key pair is derived from the enrollment key via HKDF (same pattern as CAs).
+type JWTSpec struct {
+	Name     string `hcl:"name,label"`
+	Issuer   string `hcl:"issuer"`
+	Audience string `hcl:"audience"`
+	TTLRaw   string `hcl:"ttl"`
+	TTL      time.Duration
+	Scope    string `hcl:"scope"` // who gets the signed JWT (e.g. "worker")
 }
 
 // Config holds the pigeon-enroll configuration.
@@ -53,6 +66,7 @@ type Config struct {
 	Secrets          []SecretSpec      `hcl:"secret,block"`
 	CAs              []CASpec          `hcl:"ca,block"`
 	Certs            []CertSpec        `hcl:"cert,block"`
+	JWTs             []JWTSpec         `hcl:"jwt,block"`
 	SecretsPath      string            `hcl:"secrets_path,optional"`
 	TrustedProxies   []string          `hcl:"trusted_proxies,optional"`
 	Actions          []action.Config   `hcl:"action,block"`
@@ -105,6 +119,17 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("cert %q: parse ttl: %w", c.Name, err)
 		}
 		cfg.Certs[i].TTL = d
+	}
+
+	for i, j := range cfg.JWTs {
+		if j.TTLRaw == "" {
+			return Config{}, fmt.Errorf("jwt %q: ttl is required", j.Name)
+		}
+		d, err := time.ParseDuration(j.TTLRaw)
+		if err != nil {
+			return Config{}, fmt.Errorf("jwt %q: parse ttl: %w", j.Name, err)
+		}
+		cfg.JWTs[i].TTL = d
 	}
 
 	if err := validate(cfg); err != nil {
@@ -184,9 +209,6 @@ func validate(cfg Config) error {
 				return fmt.Errorf("cert %q: scope entries must not be empty strings", c.Name)
 			}
 		}
-		if c.CN == "" {
-			return fmt.Errorf("cert %q: cn is required", c.Name)
-		}
 		if c.TTL < time.Minute {
 			return fmt.Errorf("cert %q: ttl must be at least 1m", c.Name)
 		}
@@ -194,6 +216,29 @@ func validate(cfg Config) error {
 		clientAuth := c.ClientAuth == nil || *c.ClientAuth
 		if !serverAuth && !clientAuth {
 			return fmt.Errorf("cert %q: at least one of client_auth or server_auth must be true", c.Name)
+		}
+	}
+
+	jwtNames := make(map[string]bool, len(cfg.JWTs))
+	for _, j := range cfg.JWTs {
+		if j.Name == "" {
+			return fmt.Errorf("jwt: name is required")
+		}
+		if jwtNames[j.Name] {
+			return fmt.Errorf("jwt %q: duplicate name", j.Name)
+		}
+		jwtNames[j.Name] = true
+		if j.Issuer == "" {
+			return fmt.Errorf("jwt %q: issuer is required", j.Name)
+		}
+		if j.Audience == "" {
+			return fmt.Errorf("jwt %q: audience is required", j.Name)
+		}
+		if j.TTL < time.Minute {
+			return fmt.Errorf("jwt %q: ttl must be at least 1m", j.Name)
+		}
+		if j.Scope == "" {
+			return fmt.Errorf("jwt %q: scope is required", j.Name)
 		}
 	}
 

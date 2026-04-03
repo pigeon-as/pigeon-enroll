@@ -26,9 +26,10 @@ const (
 
 // session holds state for an in-flight attestation between /attest and /claim.
 type session struct {
-	id        string
-	scope     string
-	secret    []byte // expected credential activation response
+	id      string
+	scope   string
+	subject string
+	secret  []byte // expected credential activation response
 	ekHash    string
 	token     string // original HMAC token, consumed on success
 	expiresAt time.Time
@@ -62,9 +63,10 @@ func (v *Verifier) Close() {
 
 // StartRequest is the input for StartAttestation.
 type StartRequest struct {
-	Token    string
-	Scope    string
-	EKPub    crypto.PublicKey
+	Token   string
+	Scope   string
+	Subject string
+	EKPub   crypto.PublicKey
 	EKCert   *x509.Certificate // optional, for CA chain validation
 	AKParams attest.AttestationParameters
 }
@@ -117,6 +119,7 @@ func (v *Verifier) StartAttestation(req StartRequest) (*StartResponse, error) {
 	sess := &session{
 		id:        sessionID,
 		scope:     req.Scope,
+		subject:  req.Subject,
 		secret:    secret,
 		ekHash:    hex.EncodeToString(ekSHA[:]),
 		token:     req.Token,
@@ -141,9 +144,10 @@ type CompleteRequest struct {
 
 // CompleteResult is returned on successful attestation.
 type CompleteResult struct {
-	Scope  string
-	Token  string // original HMAC token for nonce consumption
-	EKHash string // for audit logging
+	Scope   string
+	Subject string
+	Token   string // original HMAC token for nonce consumption
+	EKHash   string // for audit logging
 }
 
 // CompleteAttestation verifies the credential activation response.
@@ -169,9 +173,10 @@ func (v *Verifier) CompleteAttestation(req CompleteRequest) (*CompleteResult, er
 	}
 
 	return &CompleteResult{
-		Scope:  sess.scope,
-		Token:  sess.token,
-		EKHash: sess.ekHash,
+		Scope:    sess.scope,
+		Subject: sess.subject,
+		Token:    sess.token,
+		EKHash:   sess.ekHash,
 	}, nil
 }
 
