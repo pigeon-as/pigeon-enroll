@@ -3,6 +3,7 @@ package action
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -102,10 +103,16 @@ func (v *vaultInit) Run(ctx context.Context, logger *slog.Logger, secrets map[st
 			return fmt.Errorf("ca_cert: no valid certificates found")
 		}
 		transport := http.DefaultTransport.(*http.Transport).Clone()
+		if transport.TLSClientConfig == nil {
+			transport.TLSClientConfig = &tls.Config{}
+		}
 		transport.TLSClientConfig.RootCAs = pool
 		client.Transport = transport
 	} else if v.cfg.TLSSkipVerify {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
+		if transport.TLSClientConfig == nil {
+			transport.TLSClientConfig = &tls.Config{}
+		}
 		transport.TLSClientConfig.InsecureSkipVerify = true
 		client.Transport = transport
 	}
