@@ -7,18 +7,15 @@ import (
 	"testing"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
+	"github.com/shoenig/test/must"
 	"github.com/zclconf/go-cty/cty"
 )
 
 func TestFileSimple(t *testing.T) {
 	tpl := writeTempFile(t, "simple.tpl", `hello ${name}`)
 	got, err := File(tpl, map[string]cty.Value{"name": cty.StringVal("world")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "hello world" {
-		t.Fatalf("got %q, want %q", got, "hello world")
-	}
+	must.NoError(t, err)
+	must.EqOp(t, "hello world", string(got))
 }
 
 func TestFileMultipleVars(t *testing.T) {
@@ -27,26 +24,16 @@ func TestFileMultipleVars(t *testing.T) {
 		"datacenter": cty.StringVal("eu-west-gra"),
 		"gossip_key": cty.StringVal("abc123"),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `dc=eu-west-gra key=abc123`
-	if string(got) != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
+	must.NoError(t, err)
+	must.EqOp(t, "dc=eu-west-gra key=abc123", string(got))
 }
 
 func TestFileGoTemplatePassthrough(t *testing.T) {
 	// {{ }} must pass through as literal text — HCL template engine ignores them.
 	tpl := writeTempFile(t, "passthrough.tpl", `bind_addr = "{{ GetInterfaceIP \"wg0\" }}"`)
 	got, err := File(tpl, map[string]cty.Value{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `bind_addr = "{{ GetInterfaceIP \"wg0\" }}"`
-	if string(got) != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
+	must.NoError(t, err)
+	must.EqOp(t, `bind_addr = "{{ GetInterfaceIP \"wg0\" }}"`, string(got))
 }
 
 func TestFileMixedSyntax(t *testing.T) {
@@ -54,30 +41,21 @@ func TestFileMixedSyntax(t *testing.T) {
 	tpl := writeTempFile(t, "mixed.tpl", `encrypt = "${consul_encrypt}"
 bind_addr = "{{ GetInterfaceIP \"wg0\" }}"`)
 	got, err := File(tpl, map[string]cty.Value{"consul_encrypt": cty.StringVal("secret123")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `encrypt = "secret123"
-bind_addr = "{{ GetInterfaceIP \"wg0\" }}"`
-	if string(got) != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
+	must.NoError(t, err)
+	want := "encrypt = \"secret123\"\nbind_addr = \"{{ GetInterfaceIP \\\"wg0\\\" }}\""
+	must.EqOp(t, want, string(got))
 }
 
 func TestFileUndefinedVar(t *testing.T) {
 	tpl := writeTempFile(t, "undef.tpl", `hello ${missing}`)
 	_, err := File(tpl, map[string]cty.Value{})
-	if err == nil {
-		t.Fatal("expected error for undefined variable")
-	}
+	must.Error(t, err)
 }
 
 func TestFileInvalidSyntax(t *testing.T) {
 	tpl := writeTempFile(t, "invalid.tpl", `hello ${`)
 	_, err := File(tpl, map[string]cty.Value{})
-	if err == nil {
-		t.Fatal("expected error for invalid template syntax")
-	}
+	must.Error(t, err)
 }
 
 func TestFileMultiline(t *testing.T) {
@@ -91,37 +69,27 @@ func TestFileMultiline(t *testing.T) {
 		"gossip_key": cty.StringVal("gk-base64"),
 		"wg_psk":     cty.StringVal("psk-base64"),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	want := `{
   "seeds": ["10.0.0.1", "10.0.0.2"],
   "gossip_key": "gk-base64",
   "wg_psk": "psk-base64"
 }`
-	if string(got) != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
+	must.EqOp(t, want, string(got))
 }
 
 func TestWriteAtomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "output.txt")
-	if err := atomicfile.WriteOwned(path, []byte("content"), 0640, -1, -1); err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, atomicfile.WriteOwned(path, []byte("content"), 0640, -1, -1))
+
 	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "content" {
-		t.Fatalf("got %q, want %q", got, "content")
-	}
+	must.NoError(t, err)
+	must.EqOp(t, "content", string(got))
+
 	if runtime.GOOS != "windows" {
 		info, _ := os.Stat(path)
-		if info.Mode().Perm() != 0640 {
-			t.Fatalf("got perms %04o, want 0640", info.Mode().Perm())
-		}
+		must.EqOp(t, os.FileMode(0640), info.Mode().Perm())
 	}
 }
 
@@ -135,65 +103,41 @@ func TestFileNestedObject(t *testing.T) {
 			"datacenter": cty.StringVal("eu-west-gra"),
 		}),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `key=abc123 dc=eu-west-gra`
-	if string(got) != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
+	must.NoError(t, err)
+	must.EqOp(t, "key=abc123 dc=eu-west-gra", string(got))
 }
 
 func TestParseVarsJSON(t *testing.T) {
 	data := []byte(`{"name": "world", "nested": {"key": "val"}}`)
 	got, err := ParseVarsJSON(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got["name"].AsString() != "world" {
-		t.Fatalf("name: got %q, want %q", got["name"].AsString(), "world")
-	}
-	nested := got["nested"].AsValueMap()
-	if nested["key"].AsString() != "val" {
-		t.Fatalf("nested.key: got %q, want %q", nested["key"].AsString(), "val")
-	}
+	must.NoError(t, err)
+	must.EqOp(t, "world", got["name"].AsString())
+	must.EqOp(t, "val", got["nested"].AsValueMap()["key"].AsString())
 }
 
 func TestParseVarsJSONNotObject(t *testing.T) {
 	_, err := ParseVarsJSON([]byte(`"just a string"`))
-	if err == nil {
-		t.Fatal("expected error for non-object JSON")
-	}
+	must.Error(t, err)
 }
 
 func TestParseVarsFileEmpty(t *testing.T) {
 	path := writeTempFile(t, "empty.json", "")
 	got, err := ParseVarsFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != nil {
-		t.Fatalf("expected nil for empty file, got %v", got)
-	}
+	must.NoError(t, err)
+	must.Nil(t, got)
 }
 
 func writeTempFile(t *testing.T, name, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, os.WriteFile(path, []byte(content), 0644))
 	return path
 }
 
 func TestContentSimple(t *testing.T) {
 	got, err := Content("hello ${name}", map[string]cty.Value{"name": cty.StringVal("world")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "hello world" {
-		t.Fatalf("got %q, want %q", got, "hello world")
-	}
+	must.NoError(t, err)
+	must.EqOp(t, "hello world", string(got))
 }
 
 func TestContentNested(t *testing.T) {
@@ -205,22 +149,14 @@ func TestContentNested(t *testing.T) {
 		}),
 	}
 	got, err := Content("${ca.vault.cert_pem}", vars)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n" {
-		t.Fatalf("got %q", got)
-	}
+	must.NoError(t, err)
+	must.EqOp(t, "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n", string(got))
 }
 
 func TestContentNoVars(t *testing.T) {
 	got, err := Content("static text", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "static text" {
-		t.Fatalf("got %q", got)
-	}
+	must.NoError(t, err)
+	must.EqOp(t, "static text", string(got))
 }
 
 func TestLoadConfigContent(t *testing.T) {
@@ -231,12 +167,8 @@ template {
 }
 `)
 	cfg, err := LoadConfig(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if cfg.Templates[0].Content != "hello" {
-		t.Fatalf("content = %q", cfg.Templates[0].Content)
-	}
+	must.NoError(t, err)
+	must.EqOp(t, "hello", cfg.Templates[0].Content)
 }
 
 func TestLoadConfigSourceAndContent(t *testing.T) {
@@ -248,9 +180,7 @@ template {
 }
 `)
 	_, err := LoadConfig(path)
-	if err == nil {
-		t.Fatal("expected error for source+content")
-	}
+	must.Error(t, err)
 }
 
 func TestLoadConfigNoSourceNoContent(t *testing.T) {
@@ -260,7 +190,5 @@ template {
 }
 `)
 	_, err := LoadConfig(path)
-	if err == nil {
-		t.Fatal("expected error for no source and no content")
-	}
+	must.Error(t, err)
 }

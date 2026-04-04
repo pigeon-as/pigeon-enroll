@@ -9,20 +9,18 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/shoenig/test/must"
 )
 
 var testLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 func TestRun_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Fatalf("expected POST, got %s", r.Method)
-		}
+		must.EqOp(t, http.MethodPost, r.Method)
 		var req map[string]string
 		json.NewDecoder(r.Body).Decode(&req)
-		if req["token"] != "abc123" {
-			t.Fatalf("expected token abc123, got %s", req["token"])
-		}
+		must.EqOp(t, "abc123", req["token"])
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(Response{
 			Secrets: map[string]string{"gossip_key": "secret1", "wg_psk": "secret2"},
@@ -33,29 +31,17 @@ func TestRun_Success(t *testing.T) {
 
 	out := filepath.Join(t.TempDir(), "secrets.json")
 	resp, err := Run(srv.Client(), srv.URL, "abc123", "", "", out, true, testLogger)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.Secrets) != 2 {
-		t.Fatalf("expected 2 secrets, got %d", len(resp.Secrets))
-	}
-	if resp.Secrets["gossip_key"] != "secret1" {
-		t.Fatalf("expected gossip_key=secret1, got %s", resp.Secrets["gossip_key"])
-	}
+	must.NoError(t, err)
+	must.MapLen(t, 2, resp.Secrets)
+	must.EqOp(t, "secret1", resp.Secrets["gossip_key"])
 
 	// Verify file preserves structure.
 	data, err := os.ReadFile(out)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	var fromDisk map[string]map[string]string
 	json.Unmarshal(data, &fromDisk)
-	if fromDisk["secrets"]["wg_psk"] != "secret2" {
-		t.Fatalf("disk: expected secrets.wg_psk=secret2, got %s", fromDisk["secrets"]["wg_psk"])
-	}
-	if fromDisk["vars"]["datacenter"] != "dc1" {
-		t.Fatalf("disk: expected vars.datacenter=dc1, got %s", fromDisk["vars"]["datacenter"])
-	}
+	must.EqOp(t, "secret2", fromDisk["secrets"]["wg_psk"])
+	must.EqOp(t, "dc1", fromDisk["vars"]["datacenter"])
 }
 
 func TestRun_Forbidden(t *testing.T) {
@@ -68,14 +54,11 @@ func TestRun_Forbidden(t *testing.T) {
 
 	out := filepath.Join(t.TempDir(), "secrets.json")
 	_, err := Run(srv.Client(), srv.URL, "bad", "", "", out, true, testLogger)
-	if err == nil {
-		t.Fatal("expected error for 403")
-	}
+	must.Error(t, err)
 
 	// File should not exist.
-	if _, statErr := os.Stat(out); statErr == nil {
-		t.Fatal("file should not exist on failure")
-	}
+	_, statErr := os.Stat(out)
+	must.Error(t, statErr)
 }
 
 func TestRun_ServerError(t *testing.T) {
@@ -88,17 +71,13 @@ func TestRun_ServerError(t *testing.T) {
 
 	out := filepath.Join(t.TempDir(), "secrets.json")
 	_, err := Run(srv.Client(), srv.URL, "tok", "", "", out, true, testLogger)
-	if err == nil {
-		t.Fatal("expected error for 500")
-	}
+	must.Error(t, err)
 }
 
 func TestRun_ConnectionRefused(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "secrets.json")
 	_, err := Run(&http.Client{}, "http://127.0.0.1:1", "tok", "", "", out, true, testLogger)
-	if err == nil {
-		t.Fatal("expected connection error")
-	}
+	must.Error(t, err)
 }
 
 func TestRun_FilePermissions(t *testing.T) {
@@ -114,15 +93,9 @@ func TestRun_FilePermissions(t *testing.T) {
 
 	out := filepath.Join(t.TempDir(), "sub", "secrets.json")
 	_, err := Run(srv.Client(), srv.URL, "tok", "", "", out, true, testLogger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	info, err := os.Stat(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Fatalf("expected 0600 permissions, got %o", info.Mode().Perm())
-	}
+	must.NoError(t, err)
+	must.EqOp(t, os.FileMode(0600), info.Mode().Perm())
 }

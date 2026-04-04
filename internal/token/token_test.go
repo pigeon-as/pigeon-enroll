@@ -3,6 +3,8 @@ package token
 import (
 	"testing"
 	"time"
+
+	"github.com/shoenig/test/must"
 )
 
 var testKey = []byte("test-enrollment-key-32-bytes!!!!")
@@ -13,12 +15,8 @@ func TestGenerateUnique(t *testing.T) {
 
 	t1 := Generate(testKey, now, window, "")
 	t2 := Generate(testKey, now, window, "")
-	if t1 == t2 {
-		t.Error("same inputs should produce different tokens (random nonce)")
-	}
-	if len(t1) != TokenLen {
-		t.Errorf("token length = %d, want %d", len(t1), TokenLen)
-	}
+	must.NotEq(t, t1, t2, must.Sprint("same inputs should produce different tokens (random nonce)"))
+	must.EqOp(t, TokenLen, len(t1))
 }
 
 func TestGenerateVerifySameWindow(t *testing.T) {
@@ -27,9 +25,7 @@ func TestGenerateVerifySameWindow(t *testing.T) {
 	t1 := t0.Add(15 * time.Minute) // same window
 
 	tok := Generate(testKey, t0, window, "")
-	if !Verify(testKey, tok, t1, window, "") {
-		t.Error("token should verify within same window")
-	}
+	must.True(t, Verify(testKey, tok, t1, window, ""))
 }
 
 func TestVerifyCurrentWindow(t *testing.T) {
@@ -37,9 +33,7 @@ func TestVerifyCurrentWindow(t *testing.T) {
 	window := 30 * time.Minute
 	tok := Generate(testKey, now, window, "")
 
-	if !Verify(testKey, tok, now, window, "") {
-		t.Error("token should verify in current window")
-	}
+	must.True(t, Verify(testKey, tok, now, window, ""))
 }
 
 func TestVerifyPreviousWindow(t *testing.T) {
@@ -50,9 +44,7 @@ func TestVerifyPreviousWindow(t *testing.T) {
 
 	// Verified at 12:05 (window floor = 12:00, previous = 11:30)
 	verifyTime := time.Date(2026, 3, 13, 12, 5, 0, 0, time.UTC)
-	if !Verify(testKey, tok, verifyTime, window, "") {
-		t.Error("token from previous window should verify")
-	}
+	must.True(t, Verify(testKey, tok, verifyTime, window, ""))
 }
 
 func TestVerifyExpired(t *testing.T) {
@@ -63,9 +55,7 @@ func TestVerifyExpired(t *testing.T) {
 
 	// Verified at 12:05 — two windows later (current = 12:00, previous = 11:30)
 	verifyTime := time.Date(2026, 3, 13, 12, 5, 0, 0, time.UTC)
-	if Verify(testKey, tok, verifyTime, window, "") {
-		t.Error("token from 2 windows ago should not verify")
-	}
+	must.False(t, Verify(testKey, tok, verifyTime, window, ""))
 }
 
 func TestVerifyWrongKey(t *testing.T) {
@@ -74,18 +64,14 @@ func TestVerifyWrongKey(t *testing.T) {
 	tok := Generate(testKey, now, window, "")
 
 	otherKey := []byte("different-key-32-bytes-different!")
-	if Verify(otherKey, tok, now, window, "") {
-		t.Error("token should not verify with different key")
-	}
+	must.False(t, Verify(otherKey, tok, now, window, ""))
 }
 
 func TestVerifyGarbageToken(t *testing.T) {
 	now := time.Date(2026, 3, 13, 12, 0, 0, 0, time.UTC)
 	window := 30 * time.Minute
 
-	if Verify(testKey, "not-a-valid-token", now, window, "") {
-		t.Error("garbage token should not verify")
-	}
+	must.False(t, Verify(testKey, "not-a-valid-token", now, window, ""))
 }
 
 func TestVerifyWrongLength(t *testing.T) {
@@ -93,9 +79,7 @@ func TestVerifyWrongLength(t *testing.T) {
 	window := 30 * time.Minute
 
 	// Old-format 64 hex char token should fail length check.
-	if Verify(testKey, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", now, window, "") {
-		t.Error("old-format (64 char) token should not verify")
-	}
+	must.False(t, Verify(testKey, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", now, window, ""))
 }
 
 func TestDifferentKeys(t *testing.T) {
@@ -103,10 +87,7 @@ func TestDifferentKeys(t *testing.T) {
 	window := 30 * time.Minute
 
 	tok1 := Generate(testKey, now, window, "")
-	// Token generated with testKey should not verify with a different key.
-	if Verify([]byte("different-key-32-bytes-different!"), tok1, now, window, "") {
-		t.Error("token should not verify with different key")
-	}
+	must.False(t, Verify([]byte("different-key-32-bytes-different!"), tok1, now, window, ""))
 }
 
 func TestScopeBoundToken(t *testing.T) {
@@ -118,29 +99,15 @@ func TestScopeBoundToken(t *testing.T) {
 	tokEmpty := Generate(testKey, now, window, "")
 
 	// Token verifies only with matching scope.
-	if !Verify(testKey, tokWorker, now, window, "worker") {
-		t.Error("worker token should verify with worker scope")
-	}
-	if Verify(testKey, tokWorker, now, window, "server") {
-		t.Error("worker token should NOT verify with server scope")
-	}
-	if Verify(testKey, tokWorker, now, window, "") {
-		t.Error("worker token should NOT verify with empty scope")
-	}
+	must.True(t, Verify(testKey, tokWorker, now, window, "worker"))
+	must.False(t, Verify(testKey, tokWorker, now, window, "server"))
+	must.False(t, Verify(testKey, tokWorker, now, window, ""))
 
 	// Server token verifies only with server scope.
-	if !Verify(testKey, tokServer, now, window, "server") {
-		t.Error("server token should verify with server scope")
-	}
-	if Verify(testKey, tokServer, now, window, "worker") {
-		t.Error("server token should NOT verify with worker scope")
-	}
+	must.True(t, Verify(testKey, tokServer, now, window, "server"))
+	must.False(t, Verify(testKey, tokServer, now, window, "worker"))
 
 	// Empty-scope token only verifies with empty scope.
-	if !Verify(testKey, tokEmpty, now, window, "") {
-		t.Error("empty-scope token should verify with empty scope")
-	}
-	if Verify(testKey, tokEmpty, now, window, "worker") {
-		t.Error("empty-scope token should NOT verify with worker scope")
-	}
+	must.True(t, Verify(testKey, tokEmpty, now, window, ""))
+	must.False(t, Verify(testKey, tokEmpty, now, window, "worker"))
 }

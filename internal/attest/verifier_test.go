@@ -3,6 +3,8 @@ package attest
 import (
 	"testing"
 	"time"
+
+	"github.com/shoenig/test/must"
 )
 
 func TestVerifier_SessionExpiry(t *testing.T) {
@@ -18,9 +20,7 @@ func TestVerifier_SessionExpiry(t *testing.T) {
 	v.mu.Unlock()
 
 	_, err := v.CompleteAttestation(CompleteRequest{SessionID: "expired"})
-	if err == nil {
-		t.Fatal("expected error for expired session")
-	}
+	must.Error(t, err)
 }
 
 func TestVerifier_UnknownSession(t *testing.T) {
@@ -28,9 +28,7 @@ func TestVerifier_UnknownSession(t *testing.T) {
 	defer v.Close()
 
 	_, err := v.CompleteAttestation(CompleteRequest{SessionID: "nonexistent"})
-	if err == nil {
-		t.Fatal("expected error for unknown session")
-	}
+	must.Error(t, err)
 }
 
 func TestVerifier_SessionDeletedAfterLookup(t *testing.T) {
@@ -50,7 +48,5 @@ func TestVerifier_SessionDeletedAfterLookup(t *testing.T) {
 
 	// Second call should fail with "unknown session".
 	_, err := v.CompleteAttestation(CompleteRequest{SessionID: "once"})
-	if err == nil {
-		t.Fatal("expected error: session should be consumed")
-	}
+	must.Error(t, err)
 }
