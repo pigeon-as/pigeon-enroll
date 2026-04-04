@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -106,7 +107,7 @@ func TestFileMultiline(t *testing.T) {
 func TestWriteAtomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "output.txt")
-	if err := WriteAtomic(path, []byte("content"), 0640, -1, -1); err != nil {
+	if err := atomicfile.WriteOwned(path, []byte("content"), 0640, -1, -1); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(path)

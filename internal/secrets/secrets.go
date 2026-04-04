@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -100,7 +101,7 @@ func Resolve(specs []config.SecretSpec, cas []config.CASpec, jwts []config.JWTSp
 			return nil, nil, nil, loadErr
 		}
 		// Re-persist only when vars have changed.
-		if !mapsEqual(diskVars, vars) {
+		if !maps.Equal(diskVars, vars) {
 			if err := persist(loaded, loadedCAs, loadedJWTKeys, vars, path); err != nil {
 				return nil, nil, nil, err
 			}
@@ -172,18 +173,7 @@ func load(data []byte, specs []config.SecretSpec, cas []config.CASpec, jwts []co
 	return filteredSecrets, filteredCAs, jwtKeys, pf.Vars, nil
 }
 
-// mapsEqual reports whether two string maps have identical keys and values.
-func mapsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if bv, ok := b[k]; !ok || bv != v {
-			return false
-		}
-	}
-	return true
-}
+
 
 // deriveAll produces secrets from ikm via HKDF-SHA256, derives CA certs, and derives JWT key pairs.
 func deriveAll(specs []config.SecretSpec, cas []config.CASpec, jwts []config.JWTSpec, ikm []byte) (map[string]string, map[string]CAEntry, map[string]JWTKeyEntry, error) {

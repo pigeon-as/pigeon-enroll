@@ -91,24 +91,17 @@ func Load(path string) (Config, error) {
 	if cfg.NoncePath == "" {
 		cfg.NoncePath = "/var/lib/pigeon-enroll/nonces"
 	}
-	if cfg.TokenWindowRaw == "" {
-		cfg.TokenWindow = 30 * time.Minute
-	} else {
-		d, err := time.ParseDuration(cfg.TokenWindowRaw)
-		if err != nil {
-			return Config{}, fmt.Errorf("parse token_window: %w", err)
-		}
-		cfg.TokenWindow = d
+	d, err := parseDuration(cfg.TokenWindowRaw, 30*time.Minute)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse token_window: %w", err)
 	}
-	if cfg.ServerCertTTLRaw == "" {
-		cfg.ServerCertTTL = 30 * 24 * time.Hour
-	} else {
-		d, err := time.ParseDuration(cfg.ServerCertTTLRaw)
-		if err != nil {
-			return Config{}, fmt.Errorf("parse server_cert_ttl: %w", err)
-		}
-		cfg.ServerCertTTL = d
+	cfg.TokenWindow = d
+
+	d, err = parseDuration(cfg.ServerCertTTLRaw, 30*24*time.Hour)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse server_cert_ttl: %w", err)
 	}
+	cfg.ServerCertTTL = d
 
 	for i, c := range cfg.Certs {
 		if c.TTLRaw == "" {
@@ -136,6 +129,14 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// parseDuration parses a Go duration string, returning defaultVal if raw is empty.
+func parseDuration(raw string, defaultVal time.Duration) (time.Duration, error) {
+	if raw == "" {
+		return defaultVal, nil
+	}
+	return time.ParseDuration(raw)
 }
 
 func validate(cfg Config) error {

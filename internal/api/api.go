@@ -350,17 +350,7 @@ func (s *Server) handleClaimTokenOnly(w http.ResponseWriter, r *http.Request, ip
 		return
 	}
 
-	ok, err := s.nonces.Check(req.Token)
-	if err != nil {
-		s.logger.Error("nonce persistence failed", "ip", ip, "err", err)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "nonce storage error"})
-		s.jsonError(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if !ok {
-		s.logger.Warn("replayed token", "ip", ip)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "token already used"})
-		s.jsonError(w, "token already used", http.StatusForbidden)
+	if !s.consumeNonce(w, ip, req.Token) {
 		return
 	}
 
@@ -383,18 +373,7 @@ func (s *Server) handleClaimTPM(w http.ResponseWriter, r *http.Request, ip strin
 		return
 	}
 
-	// Consume the HMAC token nonce (crash-safe: only consumed on success).
-	ok, err := s.nonces.Check(result.Token)
-	if err != nil {
-		s.logger.Error("nonce persistence failed", "ip", ip, "err", err)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "nonce storage error"})
-		s.jsonError(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if !ok {
-		s.logger.Warn("replayed token", "ip", ip)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "token already used"})
-		s.jsonError(w, "token already used", http.StatusForbidden)
+	if !s.consumeNonce(w, ip, result.Token) {
 		return
 	}
 
@@ -402,6 +381,25 @@ func (s *Server) handleClaimTPM(w http.ResponseWriter, r *http.Request, ip strin
 	s.audit.Record(audit.Entry{Operation: "claim", IP: ip, Scope: result.Scope, OK: true})
 
 	s.writeClaimResponse(w, result.Scope, result.Subject)
+}
+
+// consumeNonce checks and consumes a one-time token nonce. Returns false
+// (and writes an HTTP error) if the nonce is invalid or already used.
+func (s *Server) consumeNonce(w http.ResponseWriter, ip, tok string) bool {
+	ok, err := s.nonces.Check(tok)
+	if err != nil {
+		s.logger.Error("nonce persistence failed", "ip", ip, "err", err)
+		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "nonce storage error"})
+		s.jsonError(w, "internal error", http.StatusInternalServerError)
+		return false
+	}
+	if !ok {
+		s.logger.Warn("replayed token", "ip", ip)
+		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "token already used"})
+		s.jsonError(w, "token already used", http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 // writeClaimResponse builds and writes the filtered secrets response.
@@ -484,7 +482,6 @@ func (s *Server) writeClaimResponse(w http.ResponseWriter, scope, subject string
 			jwts[spec.Name] = signed
 		}
 	}
-
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(claimResponse{

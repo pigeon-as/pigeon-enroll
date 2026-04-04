@@ -7,12 +7,12 @@
 package render
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
-	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 	"github.com/zclconf/go-cty/cty"
 	ctyjson "github.com/zclconf/go-cty/cty/json"
 )
@@ -74,26 +74,9 @@ func ParseVarsFile(path string) (map[string]cty.Value, error) {
 	}
 	// Reject empty files. An empty JSON file is not a valid vars object but
 	// json.Decoder would report a confusing "EOF" error.
-	data = trimJSONWhitespace(data)
+	data = bytes.TrimSpace(data)
 	if len(data) == 0 {
 		return nil, nil
 	}
 	return ParseVarsJSON(data)
-}
-
-func trimJSONWhitespace(b []byte) []byte {
-	for len(b) > 0 && (b[0] == ' ' || b[0] == '\t' || b[0] == '\n' || b[0] == '\r') {
-		b = b[1:]
-	}
-	for len(b) > 0 && (b[len(b)-1] == ' ' || b[len(b)-1] == '\t' || b[len(b)-1] == '\n' || b[len(b)-1] == '\r') {
-		b = b[:len(b)-1]
-	}
-	return b
-}
-
-// WriteAtomic writes data to path atomically via temp file + rename.
-// Ownership is set on the temp file before rename, so the destination
-// appears with correct ownership atomically.
-func WriteAtomic(path string, data []byte, perm os.FileMode, uid, gid int) error {
-	return atomicfile.WriteOwned(path, data, perm, uid, gid)
 }
