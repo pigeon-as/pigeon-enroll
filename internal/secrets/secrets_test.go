@@ -391,8 +391,8 @@ func TestResolveReissuesExpiredCert(t *testing.T) {
 	ca, err := pki.LoadCA(pemData)
 	must.NoError(t, err)
 
-	// Issue a cert that expired 1 hour ago.
-	expiredCert, expiredKey, err := pki.IssueCert(ca, "server.local", nil, nil, time.Millisecond, false, true)
+	// Issue a cert that is already expired so the test does not rely on sleeping.
+	expiredCert, expiredKey, err := pki.IssueCert(ca, "server.local", nil, nil, -time.Hour, false, true)
 	must.NoError(t, err)
 
 	// Read persisted file, replace cert entry, write back.
@@ -404,9 +404,6 @@ func TestResolveReissuesExpiredCert(t *testing.T) {
 	data, err = json.Marshal(pf)
 	must.NoError(t, err)
 	must.NoError(t, os.WriteFile(path, data, 0600))
-
-	// Wait for the cert to definitely expire.
-	time.Sleep(5 * time.Millisecond)
 
 	// Second resolve: should detect expired cert and re-issue.
 	_, _, certs2, _, err := Resolve(testSpecs, testCAs, testCertSpecs, nil, nil, path, testIKM, "server", "server.local")

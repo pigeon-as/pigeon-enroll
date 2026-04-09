@@ -28,7 +28,8 @@ type CASpec struct {
 
 // CertSpec describes a leaf certificate to auto-issue during claim.
 // Follows the Vault PKI role pattern: issuance policy separate from CA.
-// When CN is empty, the claim subject (node identity) is used as the cert CN.
+// If CN is empty, claim issuance uses the claim subject (node identity) as the
+// cert CN, while server-side self-issuance for a non-empty scope uses hostname.
 type CertSpec struct {
 	Name       string   `hcl:"name,label"`
 	CA         string   `hcl:"ca"`                   // must reference a ca block name
@@ -37,7 +38,7 @@ type CertSpec struct {
 	TTL        time.Duration
 	ClientAuth *bool    `hcl:"client_auth,optional"`  // default true
 	ServerAuth *bool    `hcl:"server_auth,optional"`  // default false
-	CN         string   `hcl:"cn,optional"`           // static common name (if empty, claim subject is used)
+	CN         string   `hcl:"cn,optional"`           // static common name; if empty, claim uses subject, server self-issue uses hostname
 	DNSSANs    []string `hcl:"dns_sans,optional"`     // DNS subject alternative names
 	IPSANs     []string `hcl:"ip_sans,optional"`      // IP subject alternative names
 }

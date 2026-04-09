@@ -88,7 +88,8 @@ func TestAtomicfileWriteOwned(t *testing.T) {
 	must.EqOp(t, "content", string(got))
 
 	if runtime.GOOS != "windows" {
-		info, _ := os.Stat(path)
+		info, err := os.Stat(path)
+		must.NoError(t, err)
 		must.EqOp(t, os.FileMode(0640), info.Mode().Perm())
 	}
 }

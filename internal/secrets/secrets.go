@@ -381,7 +381,9 @@ func scopeMatch(specScope []string, scope string) bool {
 
 // persist writes secrets atomically to path via temp file + rename.
 func persist(secrets map[string]string, cas map[string]CAEntry, certs map[string]CertEntry, jwtKeys map[string]JWTKeyEntry, vars map[string]string, path string) error {
-	// Persist only public keys (private keys are re-derived from IKM on load).
+	// Persist secrets, CA entries (including private keys), cert entries
+	// (including leaf private keys), vars, and JWT public keys.
+	// Only JWT private keys are omitted — they are re-derived from IKM on load.
 	// Escape newlines so pigeon-template can interpolate PEM into HCL quoted strings.
 	// HCL v2 unescapes \n back to newlines, giving valid PEM.
 	jwtPubs := make(map[string]string, len(jwtKeys))

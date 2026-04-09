@@ -21,8 +21,7 @@ import (
 )
 
 const (
-	testPort = "19200"
-	testAddr = "127.0.0.1:" + testPort
+	testAddr = "127.0.0.1:19200"
 	testURL  = "http://" + testAddr
 )
 

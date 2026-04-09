@@ -333,6 +333,36 @@ func TestValidateCertNameConflictsWithCA(t *testing.T) {
 	must.Error(t, validate(cfg))
 }
 
+func TestValidateCertIPSANsValid(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs: []CertSpec{{
+			Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour,
+			IPSANs: []string{"10.0.0.1", "::1"},
+		}},
+	}
+	must.NoError(t, validate(cfg))
+}
+
+func TestValidateCertIPSANsInvalid(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs: []CertSpec{{
+			Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour,
+			IPSANs: []string{"not-an-ip"},
+		}},
+	}
+	err := validate(cfg)
+	must.Error(t, err)
+	must.StrContains(t, err.Error(), "ip_sans entry \"not-an-ip\" is not a valid IP address")
+}
+
 func TestLoadJWTBlock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.hcl")
