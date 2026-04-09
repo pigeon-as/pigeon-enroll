@@ -102,17 +102,49 @@ func Resolve(specs []config.SecretSpec, cas []config.CASpec, certs []config.Cert
 
 	data, err := os.ReadFile(path)
 	if err == nil {
-		loaded, loadedCAs, loadedCerts, loadedJWTKeys, diskVars, loadErr := load(data, specs, cas, certs, jwts, ikm, scope)
+		loaded, loadedCAs, allCerts, loadedJWTKeys, diskVars, loadErr := load(data, specs, cas, jwts, ikm)
 		if loadErr != nil {
 			return nil, nil, nil, nil, loadErr
 		}
-		// Re-persist only when vars have changed.
-		if !maps.Equal(diskVars, vars) {
-			if err := persist(loaded, loadedCAs, loadedCerts, loadedJWTKeys, vars, path); err != nil {
+		// Issue any scope-matching certs missing from the persisted file.
+		// This self-heals when new cert blocks are added to config after
+		// the secrets file was already created (Consul auto_config pattern).
+		needPersist := !maps.Equal(diskVars, vars)
+		var myCerts map[string]CertEntry
+		if scope != "" {
+			for _, cs := range certs {
+				if !scopeMatch(cs.Scope, scope) {
+					continue
+				}
+				if entry, ok := allCerts[cs.Name]; ok {
+					if myCerts == nil {
+						myCerts = make(map[string]CertEntry)
+					}
+					myCerts[cs.Name] = entry
+					continue
+				}
+				// Missing cert — issue and cache it.
+				issued, err := issueCert(cs, loadedCAs, hostname)
+				if err != nil {
+					return nil, nil, nil, nil, err
+				}
+				if allCerts == nil {
+					allCerts = make(map[string]CertEntry)
+				}
+				allCerts[cs.Name] = issued
+				if myCerts == nil {
+					myCerts = make(map[string]CertEntry)
+				}
+				myCerts[cs.Name] = issued
+				needPersist = true
+			}
+		}
+		if needPersist {
+			if err := persist(loaded, loadedCAs, allCerts, loadedJWTKeys, vars, path); err != nil {
 				return nil, nil, nil, nil, err
 			}
 		}
-		return loaded, loadedCAs, loadedCerts, loadedJWTKeys, nil
+		return loaded, loadedCAs, myCerts, loadedJWTKeys, nil
 	}
 	if !os.IsNotExist(err) {
 		return nil, nil, nil, nil, fmt.Errorf("read secrets: %w", err)
@@ -136,8 +168,11 @@ type persistedFile struct {
 	JWTKeys map[string]string    `json:"jwt_keys,omitempty"` // name → PEM public key
 }
 
-// load parses persisted secrets and vars, and checks all specs are present.
-func load(data []byte, specs []config.SecretSpec, cas []config.CASpec, certs []config.CertSpec, jwts []config.JWTSpec, ikm []byte, scope string) (map[string]string, map[string]CAEntry, map[string]CertEntry, map[string]JWTKeyEntry, map[string]string, error) {
+// load parses the persisted secrets file and validates that all required
+// specs are present. Returns all persisted certs as-is (no scope filtering) —
+// the caller checks for missing scope-matching certs and issues them
+// (Consul auto_config cache pattern).
+func load(data []byte, specs []config.SecretSpec, cas []config.CASpec, jwts []config.JWTSpec, ikm []byte) (map[string]string, map[string]CAEntry, map[string]CertEntry, map[string]JWTKeyEntry, map[string]string, error) {
 	var pf persistedFile
 	if err := json.Unmarshal(data, &pf); err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf("parse secrets file: %w", err)
@@ -161,21 +196,6 @@ func load(data []byte, specs []config.SecretSpec, cas []config.CASpec, certs []c
 		}
 		filteredCAs[ca.Name] = entry
 	}
-	// Load persisted certs for scope-matching cert blocks.
-	var filteredCerts map[string]CertEntry
-	for _, c := range certs {
-		if scope != "" && !scopeMatch(c.Scope, scope) {
-			continue
-		}
-		entry, ok := pf.Certs[c.Name]
-		if !ok {
-			return nil, nil, nil, nil, nil, fmt.Errorf("secrets file missing cert %q", c.Name)
-		}
-		if filteredCerts == nil {
-			filteredCerts = make(map[string]CertEntry, len(certs))
-		}
-		filteredCerts[c.Name] = entry
-	}
 	// JWT keys: re-derive private keys from IKM (not persisted), load public keys from file.
 	var jwtKeys map[string]JWTKeyEntry
 	for _, j := range jwts {
@@ -192,7 +212,7 @@ func load(data []byte, specs []config.SecretSpec, cas []config.CASpec, certs []c
 		}
 		jwtKeys[j.Name] = JWTKeyEntry{PublicKeyPEM: strings.ReplaceAll(pubPEM, "\\n", "\n"), PrivateKey: privKey}
 	}
-	return filteredSecrets, filteredCAs, filteredCerts, jwtKeys, pf.Vars, nil
+	return filteredSecrets, filteredCAs, pf.Certs, jwtKeys, pf.Vars, nil
 }
 
 
@@ -222,36 +242,14 @@ func deriveAll(specs []config.SecretSpec, cas []config.CASpec, certs []config.Ce
 			if !scopeMatch(cs.Scope, scope) {
 				continue
 			}
-			caEntry, ok := caMap[cs.CA]
-			if !ok {
-				return nil, nil, nil, nil, fmt.Errorf("cert %q references unknown CA %q", cs.Name, cs.CA)
-			}
-			pemData := append([]byte(caEntry.CertPEM), []byte(caEntry.PrivateKeyPEM)...)
-			ca, err := pki.LoadCA(pemData)
+			entry, err := issueCert(cs, caMap, hostname)
 			if err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("load CA %q for cert %q: %w", cs.CA, cs.Name, err)
-			}
-			cn := cs.CN
-			if cn == "" {
-				cn = hostname
-			}
-			if cn == "" {
-				return nil, nil, nil, nil, fmt.Errorf("cert %q: cn is empty and no hostname provided", cs.Name)
-			}
-			serverAuth := cs.ServerAuth != nil && *cs.ServerAuth
-			clientAuth := cs.ClientAuth == nil || *cs.ClientAuth
-			var ipSANs []net.IP
-			for _, raw := range cs.IPSANs {
-				ipSANs = append(ipSANs, net.ParseIP(raw))
-			}
-			certPEM, keyPEM, err := pki.IssueCert(ca, cn, cs.DNSSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
-			if err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("issue cert %q: %w", cs.Name, err)
+				return nil, nil, nil, nil, err
 			}
 			if certMap == nil {
 				certMap = make(map[string]CertEntry, len(certs))
 			}
-			certMap[cs.Name] = CertEntry{CertPEM: string(certPEM), KeyPEM: string(keyPEM)}
+			certMap[cs.Name] = entry
 		}
 	}
 	jwtKeys := make(map[string]JWTKeyEntry, len(jwts))
@@ -296,6 +294,38 @@ func derive(specs []config.SecretSpec, ikm []byte) (map[string]string, error) {
 		}
 	}
 	return secrets, nil
+}
+
+// issueCert issues a leaf certificate from a CA entry for the given cert spec.
+// Used by both deriveAll (initial creation) and Resolve (self-healing on load).
+func issueCert(cs config.CertSpec, caMap map[string]CAEntry, hostname string) (CertEntry, error) {
+	caEntry, ok := caMap[cs.CA]
+	if !ok {
+		return CertEntry{}, fmt.Errorf("cert %q references unknown CA %q", cs.Name, cs.CA)
+	}
+	pemData := append([]byte(caEntry.CertPEM), []byte(caEntry.PrivateKeyPEM)...)
+	ca, err := pki.LoadCA(pemData)
+	if err != nil {
+		return CertEntry{}, fmt.Errorf("load CA %q for cert %q: %w", cs.CA, cs.Name, err)
+	}
+	cn := cs.CN
+	if cn == "" {
+		cn = hostname
+	}
+	if cn == "" {
+		return CertEntry{}, fmt.Errorf("cert %q: cn is empty and no hostname provided", cs.Name)
+	}
+	serverAuth := cs.ServerAuth != nil && *cs.ServerAuth
+	clientAuth := cs.ClientAuth == nil || *cs.ClientAuth
+	var ipSANs []net.IP
+	for _, raw := range cs.IPSANs {
+		ipSANs = append(ipSANs, net.ParseIP(raw))
+	}
+	certPEM, keyPEM, err := pki.IssueCert(ca, cn, cs.DNSSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
+	if err != nil {
+		return CertEntry{}, fmt.Errorf("issue cert %q: %w", cs.Name, err)
+	}
+	return CertEntry{CertPEM: string(certPEM), KeyPEM: string(keyPEM)}, nil
 }
 
 // scopeMatch reports whether a spec's scope list includes the given scope.

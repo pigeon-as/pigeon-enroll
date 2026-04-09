@@ -576,7 +576,13 @@ func cmdRunActions(args []string) int {
 		return 1
 	}
 
-	derived, _, _, _, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm, "server", "")
+	hostname, err := os.Hostname()
+	if err != nil {
+		logger.Error("get hostname", "err", err)
+		return 1
+	}
+
+	derived, _, _, _, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm, "server", hostname)
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1
