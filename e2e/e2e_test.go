@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -43,7 +44,9 @@ func TestMain(m *testing.M) {
 func run(t *testing.T, args ...string) string {
 	t.Helper()
 	t.Logf("RUN '%s %s'", binary, strings.Join(args, " "))
-	cmd := exec.Command(binary, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, args...)
 	b, err := cmd.CombinedOutput()
 	output := strings.TrimSpace(string(b))
 	if err != nil {
@@ -95,9 +98,10 @@ func startServer(t *testing.T, cfgPath string) {
 		}
 	})
 
+	client := &http.Client{Timeout: 2 * time.Second}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(testURL + "/health")
+		resp, err := client.Get(testURL + "/health")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 {

@@ -16,6 +16,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
@@ -116,7 +117,7 @@ func Resolve(specs []config.SecretSpec, cas []config.CASpec, certs []config.Cert
 				if !scopeMatch(cs.Scope, scope) {
 					continue
 				}
-				if entry, ok := allCerts[cs.Name]; ok {
+				if entry, ok := allCerts[cs.Name]; ok && !certExpired(entry) {
 					if myCerts == nil {
 						myCerts = make(map[string]CertEntry)
 					}
@@ -140,7 +141,15 @@ func Resolve(specs []config.SecretSpec, cas []config.CASpec, certs []config.Cert
 			}
 		}
 		if needPersist {
-			if err := persist(loaded, loadedCAs, allCerts, loadedJWTKeys, vars, path); err != nil {
+			// Prune certs no longer in config before persisting.
+			// Disk should mirror config — stale private keys don't linger.
+			pruned := make(map[string]CertEntry, len(certs))
+			for _, cs := range certs {
+				if entry, ok := allCerts[cs.Name]; ok {
+					pruned[cs.Name] = entry
+				}
+			}
+			if err := persist(loaded, loadedCAs, pruned, loadedJWTKeys, vars, path); err != nil {
 				return nil, nil, nil, nil, err
 			}
 		}
@@ -326,6 +335,20 @@ func issueCert(cs config.CertSpec, caMap map[string]CAEntry, hostname string) (C
 		return CertEntry{}, fmt.Errorf("issue cert %q: %w", cs.Name, err)
 	}
 	return CertEntry{CertPEM: string(certPEM), KeyPEM: string(keyPEM)}, nil
+}
+
+// certExpired reports whether a cached cert has expired or is unparseable.
+// Expired certs are treated as missing — the caller will re-issue.
+func certExpired(entry CertEntry) bool {
+	block, _ := pem.Decode([]byte(entry.CertPEM))
+	if block == nil {
+		return true
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return true
+	}
+	return time.Now().After(cert.NotAfter)
 }
 
 // scopeMatch reports whether a spec's scope list includes the given scope.

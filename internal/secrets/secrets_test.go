@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
+	"github.com/pigeon-as/pigeon-enroll/internal/pki"
 	"github.com/shoenig/test/must"
 )
 
@@ -367,4 +369,74 @@ func TestResolveMissingJWTKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing JWT key in persisted file")
 	}
+}
+
+var testCertSpecs = []config.CertSpec{
+	{Name: "mesh_server", CA: "mesh", Scope: []string{"server"}, TTL: 720 * time.Hour, CN: "server.local"},
+}
+
+func TestResolveReissuesExpiredCert(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+
+	// First resolve: derive secrets + CAs + certs.
+	_, cas, certs1, _, err := Resolve(testSpecs, testCAs, testCertSpecs, nil, nil, path, testIKM, "server", "server.local")
+	must.NoError(t, err)
+	must.MapLen(t, 1, certs1)
+	must.MapContainsKey(t, certs1, "mesh_server")
+
+	// Tamper: replace the cert with an already-expired one.
+	caEntry := cas["mesh"]
+	pemData := append([]byte(caEntry.CertPEM), []byte(caEntry.PrivateKeyPEM)...)
+	ca, err := pki.LoadCA(pemData)
+	must.NoError(t, err)
+
+	// Issue a cert that expired 1 hour ago.
+	expiredCert, expiredKey, err := pki.IssueCert(ca, "server.local", nil, nil, time.Millisecond, false, true)
+	must.NoError(t, err)
+
+	// Read persisted file, replace cert entry, write back.
+	data, err := os.ReadFile(path)
+	must.NoError(t, err)
+	var pf persistedFile
+	must.NoError(t, json.Unmarshal(data, &pf))
+	pf.Certs["mesh_server"] = CertEntry{CertPEM: string(expiredCert), KeyPEM: string(expiredKey)}
+	data, err = json.Marshal(pf)
+	must.NoError(t, err)
+	must.NoError(t, os.WriteFile(path, data, 0600))
+
+	// Wait for the cert to definitely expire.
+	time.Sleep(5 * time.Millisecond)
+
+	// Second resolve: should detect expired cert and re-issue.
+	_, _, certs2, _, err := Resolve(testSpecs, testCAs, testCertSpecs, nil, nil, path, testIKM, "server", "server.local")
+	must.NoError(t, err)
+	must.MapLen(t, 1, certs2)
+
+	// Cert PEM should differ (new cert issued).
+	must.NotEq(t, certs1["mesh_server"].CertPEM, certs2["mesh_server"].CertPEM)
+
+	// New cert should not be expired.
+	block, _ := pem.Decode([]byte(certs2["mesh_server"].CertPEM))
+	must.NotNil(t, block)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	must.NoError(t, err)
+	must.True(t, cert.NotAfter.After(time.Now()))
+}
+
+func TestResolveReusesValidCachedCert(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+
+	// First resolve: derive + persist.
+	_, _, certs1, _, err := Resolve(testSpecs, testCAs, testCertSpecs, nil, nil, path, testIKM, "server", "server.local")
+	must.NoError(t, err)
+	must.MapLen(t, 1, certs1)
+
+	// Second resolve: should reuse cached cert (not re-issue).
+	_, _, certs2, _, err := Resolve(testSpecs, testCAs, testCertSpecs, nil, nil, path, testIKM, "server", "server.local")
+	must.NoError(t, err)
+
+	must.EqOp(t, certs1["mesh_server"].CertPEM, certs2["mesh_server"].CertPEM)
+	must.EqOp(t, certs1["mesh_server"].KeyPEM, certs2["mesh_server"].KeyPEM)
 }
