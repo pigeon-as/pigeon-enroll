@@ -440,3 +440,33 @@ func TestResolveReusesValidCachedCert(t *testing.T) {
 	must.EqOp(t, certs1["mesh_server"].CertPEM, certs2["mesh_server"].CertPEM)
 	must.EqOp(t, certs1["mesh_server"].KeyPEM, certs2["mesh_server"].KeyPEM)
 }
+
+func TestResolvePrunesStaleCerts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+
+	// First resolve: derive + persist with a cert.
+	_, _, certs1, _, err := Resolve(testSpecs, testCAs, testCertSpecs, nil, nil, path, testIKM, "server", "server.local")
+	must.NoError(t, err)
+	must.MapLen(t, 1, certs1)
+
+	// Verify the cert is on disk.
+	data, err := os.ReadFile(path)
+	must.NoError(t, err)
+	var pf1 persistedFile
+	must.NoError(t, json.Unmarshal(data, &pf1))
+	must.MapContainsKey(t, pf1.Certs, "mesh_server")
+
+	// Second resolve: remove the cert spec from config (empty certs slice).
+	// Vars unchanged, so only stale-detection triggers re-persist.
+	_, _, certs2, _, err := Resolve(testSpecs, testCAs, nil, nil, nil, path, testIKM, "server", "server.local")
+	must.NoError(t, err)
+	must.Nil(t, certs2)
+
+	// Verify stale cert was pruned from disk.
+	data, err = os.ReadFile(path)
+	must.NoError(t, err)
+	var pf2 persistedFile
+	must.NoError(t, json.Unmarshal(data, &pf2))
+	must.MapEmpty(t, pf2.Certs)
+}
