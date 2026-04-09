@@ -140,6 +140,20 @@ func Resolve(specs []config.SecretSpec, cas []config.CASpec, certs []config.Cert
 				needPersist = true
 			}
 		}
+		// Detect stale persisted cert entries (cert block removed from config).
+		// Without this, needPersist stays false and old private keys linger.
+		if !needPersist && len(allCerts) > 0 {
+			configured := make(map[string]struct{}, len(certs))
+			for _, cs := range certs {
+				configured[cs.Name] = struct{}{}
+			}
+			for name := range allCerts {
+				if _, ok := configured[name]; !ok {
+					needPersist = true
+					break
+				}
+			}
+		}
 		if needPersist {
 			// Prune certs no longer in config before persisting.
 			// Disk should mirror config — stale private keys don't linger.

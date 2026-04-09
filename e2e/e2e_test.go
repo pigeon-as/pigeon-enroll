@@ -169,7 +169,8 @@ secret "test" {
 
 	startServer(t, cfgPath)
 
-	resp, err := http.Get(testURL + "/health")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(testURL + "/health")
 	must.NoError(t, err)
 	defer resp.Body.Close()
 	must.EqOp(t, 200, resp.StatusCode)
