@@ -36,6 +36,10 @@ func WriteOwned(path string, data []byte, perm os.FileMode, uid, gid int) error 
 		f.Close()
 		return fmt.Errorf("atomic write %s: %w", path, err)
 	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("atomic write %s: %w", path, err)
+	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("atomic write %s: %w", path, err)
 	}

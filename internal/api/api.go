@@ -384,7 +384,8 @@ func (s *Server) handleClaimTPM(w http.ResponseWriter, r *http.Request, ip strin
 }
 
 // consumeNonce checks and consumes a one-time token nonce. Returns false
-// (and writes an HTTP error) if the nonce is invalid or already used.
+// (and writes an HTTP error) if the token was already used or nonce
+// persistence fails. Token validity must be verified separately.
 func (s *Server) consumeNonce(w http.ResponseWriter, ip, tok string) bool {
 	ok, err := s.nonces.Check(tok)
 	if err != nil {
@@ -443,7 +444,11 @@ func (s *Server) writeClaimResponse(w http.ResponseWriter, scope, subject string
 			s.jsonError(w, "subject is required when cert has no static cn", http.StatusBadRequest)
 			return
 		}
-		certPEM, keyPEM, err := pki.IssueCert(ca, cn, cs.DNSSANs, cs.TTL, serverAuth, clientAuth)
+		var ipSANs []net.IP
+		for _, raw := range cs.IPSANs {
+			ipSANs = append(ipSANs, net.ParseIP(raw))
+		}
+		certPEM, keyPEM, err := pki.IssueCert(ca, cn, cs.DNSSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
 		if err != nil {
 			s.logger.Error("issue cert failed", "cert", cs.Name, "err", err)
 			s.jsonError(w, "internal error", http.StatusInternalServerError)

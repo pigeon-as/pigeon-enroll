@@ -28,7 +28,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -160,7 +159,13 @@ func cmdServer(args []string) int {
 	}
 	logger.Info("enrollment key", "path", cfg.KeyPath)
 
-	derived, cas, jwtKeys, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm)
+	hostname, err := os.Hostname()
+	if err != nil {
+		logger.Error("get hostname", "err", err)
+		return 1
+	}
+
+	derived, cas, _, jwtKeys, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm, "server", hostname)
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1
@@ -548,12 +553,9 @@ func parsePerms(s string) (os.FileMode, error) {
 	return os.FileMode(p), nil
 }
 
-// writeSecureFile creates parent directories and writes data with mode 0600.
+// writeSecureFile writes data atomically with mode 0600.
 func writeSecureFile(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0600)
+	return atomicfile.Write(path, data, 0600)
 }
 
 func cmdRunActions(args []string) int {
@@ -574,7 +576,7 @@ func cmdRunActions(args []string) int {
 		return 1
 	}
 
-	derived, _, _, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm)
+	derived, _, _, _, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm, "server", "")
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1

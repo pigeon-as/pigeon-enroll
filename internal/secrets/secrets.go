@@ -9,10 +9,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"maps"
 	"encoding/pem"
 	"fmt"
 	"io"
+	"maps"
+	"net"
 	"os"
 	"strings"
 
@@ -77,11 +78,16 @@ type JWTKeyEntry struct {
 
 // Resolve loads persisted secrets from path, or derives them from ikm
 // via HKDF-SHA256 and persists atomically. If path is empty, derives fresh.
-// The persisted format is {"secrets":{...},"vars":{...}} with optional "ca" and "jwt_keys" fields.
-// Returns secrets, CAs, and JWT keys as separate maps.
-func Resolve(specs []config.SecretSpec, cas []config.CASpec, jwts []config.JWTSpec, vars map[string]string, path string, ikm []byte) (map[string]string, map[string]CAEntry, map[string]JWTKeyEntry, error) {
-	if len(specs) == 0 && len(cas) == 0 && len(jwts) == 0 {
-		return nil, nil, nil, nil
+// The persisted format is {"secrets":{...},"vars":{...}} with optional "ca", "certs", and "jwt_keys" fields.
+// Returns secrets, CAs, certs, and JWT keys as separate maps.
+//
+// When scope is non-empty, cert blocks matching that scope are issued locally
+// using hostname as the default CN (when the cert spec has no static CN).
+// This allows servers to self-issue leaf certs from HKDF-derived CAs without
+// going through the claim API.
+func Resolve(specs []config.SecretSpec, cas []config.CASpec, certs []config.CertSpec, jwts []config.JWTSpec, vars map[string]string, path string, ikm []byte, scope, hostname string) (map[string]string, map[string]CAEntry, map[string]CertEntry, map[string]JWTKeyEntry, error) {
+	if len(specs) == 0 && len(cas) == 0 && len(certs) == 0 && len(jwts) == 0 {
+		return nil, nil, nil, nil, nil
 	}
 
 	// Normalize so persisted JSON uses {} instead of null.
@@ -91,55 +97,56 @@ func Resolve(specs []config.SecretSpec, cas []config.CASpec, jwts []config.JWTSp
 
 	if path == "" {
 		// No persistence path — derive fresh.
-		return deriveAll(specs, cas, jwts, ikm)
+		return deriveAll(specs, cas, certs, jwts, ikm, scope, hostname)
 	}
 
 	data, err := os.ReadFile(path)
 	if err == nil {
-		loaded, loadedCAs, loadedJWTKeys, diskVars, loadErr := load(data, specs, cas, jwts, ikm)
+		loaded, loadedCAs, loadedCerts, loadedJWTKeys, diskVars, loadErr := load(data, specs, cas, certs, jwts, ikm, scope)
 		if loadErr != nil {
-			return nil, nil, nil, loadErr
+			return nil, nil, nil, nil, loadErr
 		}
 		// Re-persist only when vars have changed.
 		if !maps.Equal(diskVars, vars) {
-			if err := persist(loaded, loadedCAs, loadedJWTKeys, vars, path); err != nil {
-				return nil, nil, nil, err
+			if err := persist(loaded, loadedCAs, loadedCerts, loadedJWTKeys, vars, path); err != nil {
+				return nil, nil, nil, nil, err
 			}
 		}
-		return loaded, loadedCAs, loadedJWTKeys, nil
+		return loaded, loadedCAs, loadedCerts, loadedJWTKeys, nil
 	}
 	if !os.IsNotExist(err) {
-		return nil, nil, nil, fmt.Errorf("read secrets: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("read secrets: %w", err)
 	}
-	secrets, derivedCAs, jwtKeys, err := deriveAll(specs, cas, jwts, ikm)
+	secrets, derivedCAs, derivedCerts, jwtKeys, err := deriveAll(specs, cas, certs, jwts, ikm, scope, hostname)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	if err := persist(secrets, derivedCAs, jwtKeys, vars, path); err != nil {
-		return nil, nil, nil, err
+	if err := persist(secrets, derivedCAs, derivedCerts, jwtKeys, vars, path); err != nil {
+		return nil, nil, nil, nil, err
 	}
-	return secrets, derivedCAs, jwtKeys, nil
+	return secrets, derivedCAs, derivedCerts, jwtKeys, nil
 }
 
-// persistedFile is the on-disk format: {"secrets":{...},"vars":{...}} with optional "ca" and "jwt_keys" fields.
+// persistedFile is the on-disk format: {"secrets":{...},"vars":{...}} with optional "ca", "certs", and "jwt_keys" fields.
 type persistedFile struct {
-	Secrets map[string]string  `json:"secrets"`
-	Vars    map[string]string  `json:"vars"`
-	CA      map[string]CAEntry `json:"ca,omitempty"`
-	JWTKeys map[string]string  `json:"jwt_keys,omitempty"` // name → PEM public key
+	Secrets map[string]string    `json:"secrets"`
+	Vars    map[string]string    `json:"vars"`
+	CA      map[string]CAEntry   `json:"ca,omitempty"`
+	Certs   map[string]CertEntry `json:"certs,omitempty"`
+	JWTKeys map[string]string    `json:"jwt_keys,omitempty"` // name → PEM public key
 }
 
 // load parses persisted secrets and vars, and checks all specs are present.
-func load(data []byte, specs []config.SecretSpec, cas []config.CASpec, jwts []config.JWTSpec, ikm []byte) (map[string]string, map[string]CAEntry, map[string]JWTKeyEntry, map[string]string, error) {
+func load(data []byte, specs []config.SecretSpec, cas []config.CASpec, certs []config.CertSpec, jwts []config.JWTSpec, ikm []byte, scope string) (map[string]string, map[string]CAEntry, map[string]CertEntry, map[string]JWTKeyEntry, map[string]string, error) {
 	var pf persistedFile
 	if err := json.Unmarshal(data, &pf); err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("parse secrets file: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("parse secrets file: %w", err)
 	}
 	filteredSecrets := make(map[string]string, len(specs))
 	for _, s := range specs {
 		v, ok := pf.Secrets[s.Name]
 		if !ok {
-			return nil, nil, nil, nil, fmt.Errorf("secrets file missing key %q", s.Name)
+			return nil, nil, nil, nil, nil, fmt.Errorf("secrets file missing key %q", s.Name)
 		}
 		filteredSecrets[s.Name] = v
 	}
@@ -147,65 +154,120 @@ func load(data []byte, specs []config.SecretSpec, cas []config.CASpec, jwts []co
 	for _, ca := range cas {
 		entry, ok := pf.CA[ca.Name]
 		if !ok {
-			return nil, nil, nil, nil, fmt.Errorf("secrets file missing CA %q", ca.Name)
+			return nil, nil, nil, nil, nil, fmt.Errorf("secrets file missing CA %q", ca.Name)
 		}
 		if filteredCAs == nil {
 			filteredCAs = make(map[string]CAEntry, len(cas))
 		}
 		filteredCAs[ca.Name] = entry
 	}
+	// Load persisted certs for scope-matching cert blocks.
+	var filteredCerts map[string]CertEntry
+	for _, c := range certs {
+		if scope != "" && !scopeMatch(c.Scope, scope) {
+			continue
+		}
+		entry, ok := pf.Certs[c.Name]
+		if !ok {
+			return nil, nil, nil, nil, nil, fmt.Errorf("secrets file missing cert %q", c.Name)
+		}
+		if filteredCerts == nil {
+			filteredCerts = make(map[string]CertEntry, len(certs))
+		}
+		filteredCerts[c.Name] = entry
+	}
 	// JWT keys: re-derive private keys from IKM (not persisted), load public keys from file.
 	var jwtKeys map[string]JWTKeyEntry
 	for _, j := range jwts {
 		pubPEM, ok := pf.JWTKeys[j.Name]
 		if !ok {
-			return nil, nil, nil, nil, fmt.Errorf("secrets file missing JWT key %q", j.Name)
+			return nil, nil, nil, nil, nil, fmt.Errorf("secrets file missing JWT key %q", j.Name)
 		}
 		_, privKey, err := pki.DeriveJWTKey(ikm, j.Name)
 		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("re-derive JWT key %q: %w", j.Name, err)
+			return nil, nil, nil, nil, nil, fmt.Errorf("re-derive JWT key %q: %w", j.Name, err)
 		}
 		if jwtKeys == nil {
 			jwtKeys = make(map[string]JWTKeyEntry, len(jwts))
 		}
 		jwtKeys[j.Name] = JWTKeyEntry{PublicKeyPEM: strings.ReplaceAll(pubPEM, "\\n", "\n"), PrivateKey: privKey}
 	}
-	return filteredSecrets, filteredCAs, jwtKeys, pf.Vars, nil
+	return filteredSecrets, filteredCAs, filteredCerts, jwtKeys, pf.Vars, nil
 }
 
 
 
-// deriveAll produces secrets from ikm via HKDF-SHA256, derives CA certs, and derives JWT key pairs.
-func deriveAll(specs []config.SecretSpec, cas []config.CASpec, jwts []config.JWTSpec, ikm []byte) (map[string]string, map[string]CAEntry, map[string]JWTKeyEntry, error) {
+// deriveAll produces secrets from ikm via HKDF-SHA256, derives CA certs,
+// issues leaf certs for scope-matching cert blocks, and derives JWT key pairs.
+func deriveAll(specs []config.SecretSpec, cas []config.CASpec, certs []config.CertSpec, jwts []config.JWTSpec, ikm []byte, scope, hostname string) (map[string]string, map[string]CAEntry, map[string]CertEntry, map[string]JWTKeyEntry, error) {
 	secrets, err := derive(specs, ikm)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	caMap := make(map[string]CAEntry, len(cas))
 	for _, ca := range cas {
 		derived, err := pki.DeriveNamedCA(ikm, ca.Name)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("derive CA %q: %w", ca.Name, err)
+			return nil, nil, nil, nil, fmt.Errorf("derive CA %q: %w", ca.Name, err)
 		}
 		caMap[ca.Name] = CAEntry{
 			CertPEM:       string(derived.CertPEM),
 			PrivateKeyPEM: string(derived.KeyPEM),
 		}
 	}
+	// Issue leaf certs for scope-matching cert blocks.
+	var certMap map[string]CertEntry
+	if scope != "" {
+		for _, cs := range certs {
+			if !scopeMatch(cs.Scope, scope) {
+				continue
+			}
+			caEntry, ok := caMap[cs.CA]
+			if !ok {
+				return nil, nil, nil, nil, fmt.Errorf("cert %q references unknown CA %q", cs.Name, cs.CA)
+			}
+			pemData := append([]byte(caEntry.CertPEM), []byte(caEntry.PrivateKeyPEM)...)
+			ca, err := pki.LoadCA(pemData)
+			if err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("load CA %q for cert %q: %w", cs.CA, cs.Name, err)
+			}
+			cn := cs.CN
+			if cn == "" {
+				cn = hostname
+			}
+			if cn == "" {
+				return nil, nil, nil, nil, fmt.Errorf("cert %q: cn is empty and no hostname provided", cs.Name)
+			}
+			serverAuth := cs.ServerAuth != nil && *cs.ServerAuth
+			clientAuth := cs.ClientAuth == nil || *cs.ClientAuth
+			var ipSANs []net.IP
+			for _, raw := range cs.IPSANs {
+				ipSANs = append(ipSANs, net.ParseIP(raw))
+			}
+			certPEM, keyPEM, err := pki.IssueCert(ca, cn, cs.DNSSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
+			if err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("issue cert %q: %w", cs.Name, err)
+			}
+			if certMap == nil {
+				certMap = make(map[string]CertEntry, len(certs))
+			}
+			certMap[cs.Name] = CertEntry{CertPEM: string(certPEM), KeyPEM: string(keyPEM)}
+		}
+	}
 	jwtKeys := make(map[string]JWTKeyEntry, len(jwts))
 	for _, j := range jwts {
 		pubKey, privKey, err := pki.DeriveJWTKey(ikm, j.Name)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("derive JWT key %q: %w", j.Name, err)
+			return nil, nil, nil, nil, fmt.Errorf("derive JWT key %q: %w", j.Name, err)
 		}
 		pubDER, err := x509.MarshalPKIXPublicKey(pubKey)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("marshal JWT public key %q: %w", j.Name, err)
+			return nil, nil, nil, nil, fmt.Errorf("marshal JWT public key %q: %w", j.Name, err)
 		}
 		pubPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER}))
 		jwtKeys[j.Name] = JWTKeyEntry{PublicKeyPEM: pubPEM, PrivateKey: privKey}
 	}
-	return secrets, caMap, jwtKeys, nil
+	return secrets, caMap, certMap, jwtKeys, nil
 }
 
 // derive produces secrets from ikm via HKDF-SHA256.
@@ -236,8 +298,22 @@ func derive(specs []config.SecretSpec, ikm []byte) (map[string]string, error) {
 	return secrets, nil
 }
 
+// scopeMatch reports whether a spec's scope list includes the given scope.
+// An empty spec scope matches everything (unscoped).
+func scopeMatch(specScope []string, scope string) bool {
+	if len(specScope) == 0 {
+		return true
+	}
+	for _, s := range specScope {
+		if s == scope {
+			return true
+		}
+	}
+	return false
+}
+
 // persist writes secrets atomically to path via temp file + rename.
-func persist(secrets map[string]string, cas map[string]CAEntry, jwtKeys map[string]JWTKeyEntry, vars map[string]string, path string) error {
+func persist(secrets map[string]string, cas map[string]CAEntry, certs map[string]CertEntry, jwtKeys map[string]JWTKeyEntry, vars map[string]string, path string) error {
 	// Persist only public keys (private keys are re-derived from IKM on load).
 	// Escape newlines so pigeon-template can interpolate PEM into HCL quoted strings.
 	// HCL v2 unescapes \n back to newlines, giving valid PEM.
@@ -245,7 +321,7 @@ func persist(secrets map[string]string, cas map[string]CAEntry, jwtKeys map[stri
 	for name, entry := range jwtKeys {
 		jwtPubs[name] = strings.ReplaceAll(entry.PublicKeyPEM, "\n", "\\n")
 	}
-	data, err := json.Marshal(persistedFile{Secrets: secrets, CA: cas, JWTKeys: jwtPubs, Vars: vars})
+	data, err := json.Marshal(persistedFile{Secrets: secrets, CA: cas, Certs: certs, JWTKeys: jwtPubs, Vars: vars})
 	if err != nil {
 		return fmt.Errorf("marshal secrets: %w", err)
 	}

@@ -30,7 +30,7 @@ func TestResolveDerives(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.json")
 
-	secrets, _, _, err := Resolve(testSpecs, nil, nil, nil, path, testIKM)
+	secrets, _, _, _, err := Resolve(testSpecs, nil, nil, nil, nil, path, testIKM, "", "")
 	must.NoError(t, err)
 	must.MapLen(t, 4, secrets)
 
@@ -58,9 +58,9 @@ func TestResolveDeterministic(t *testing.T) {
 	dir1 := t.TempDir()
 	dir2 := t.TempDir()
 
-	s1, _, _, err := Resolve(testSpecs, nil, nil, nil, filepath.Join(dir1, "s.json"), testIKM)
+	s1, _, _, _, err := Resolve(testSpecs, nil, nil, nil, nil, filepath.Join(dir1, "s.json"), testIKM, "", "")
 	must.NoError(t, err)
-	s2, _, _, err := Resolve(testSpecs, nil, nil, nil, filepath.Join(dir2, "s.json"), testIKM)
+	s2, _, _, _, err := Resolve(testSpecs, nil, nil, nil, nil, filepath.Join(dir2, "s.json"), testIKM, "", "")
 	must.NoError(t, err)
 
 	for k, v := range s1 {
@@ -74,9 +74,9 @@ func TestResolveDifferentIKM(t *testing.T) {
 	ikm2 := make([]byte, 32)
 	ikm2[0] = 1 // one bit different
 
-	s1, _, _, err := Resolve(testSpecs, nil, nil, nil, filepath.Join(dir1, "s.json"), testIKM)
+	s1, _, _, _, err := Resolve(testSpecs, nil, nil, nil, nil, filepath.Join(dir1, "s.json"), testIKM, "", "")
 	must.NoError(t, err)
-	s2, _, _, err := Resolve(testSpecs, nil, nil, nil, filepath.Join(dir2, "s.json"), ikm2)
+	s2, _, _, _, err := Resolve(testSpecs, nil, nil, nil, nil, filepath.Join(dir2, "s.json"), ikm2, "", "")
 	must.NoError(t, err)
 
 	for k := range s1 {
@@ -88,10 +88,10 @@ func TestResolveLoadsExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.json")
 
-	first, _, _, err := Resolve(testSpecs, nil, nil, nil, path, testIKM)
+	first, _, _, _, err := Resolve(testSpecs, nil, nil, nil, nil, path, testIKM, "", "")
 	must.NoError(t, err)
 
-	second, _, _, err := Resolve(testSpecs, nil, nil, nil, path, testIKM)
+	second, _, _, _, err := Resolve(testSpecs, nil, nil, nil, nil, path, testIKM, "", "")
 	must.NoError(t, err)
 
 	for k, v := range first {
@@ -100,13 +100,13 @@ func TestResolveLoadsExisting(t *testing.T) {
 }
 
 func TestResolveEmptySpecs(t *testing.T) {
-	secrets, _, _, err := Resolve(nil, nil, nil, nil, "", nil)
+	secrets, _, _, _, err := Resolve(nil, nil, nil, nil, nil, "", nil, "", "")
 	must.NoError(t, err)
 	must.Nil(t, secrets)
 }
 
 func TestResolveEmptyPath(t *testing.T) {
-	secrets, _, _, err := Resolve(testSpecs, nil, nil, nil, "", testIKM)
+	secrets, _, _, _, err := Resolve(testSpecs, nil, nil, nil, nil, "", testIKM, "", "")
 	must.NoError(t, err)
 	must.MapLen(t, 4, secrets)
 }
@@ -118,7 +118,7 @@ func TestResolveMissingKey(t *testing.T) {
 	data, _ := json.Marshal(persistedFile{Secrets: map[string]string{"gossip_key": "abc"}})
 	os.WriteFile(path, data, 0600)
 
-	_, _, _, err := Resolve(testSpecs, nil, nil, nil, path, testIKM)
+	_, _, _, _, err := Resolve(testSpecs, nil, nil, nil, nil, path, testIKM, "", "")
 	must.Error(t, err)
 }
 
@@ -126,7 +126,7 @@ func TestResolveCreatesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "deep", "secrets.json")
 
-	secrets, _, _, err := Resolve(testSpecs, nil, nil, nil, path, testIKM)
+	secrets, _, _, _, err := Resolve(testSpecs, nil, nil, nil, nil, path, testIKM, "", "")
 	must.NoError(t, err)
 	must.MapLen(t, 4, secrets)
 }
@@ -158,7 +158,7 @@ func TestResolveRepersistsOnVarsChange(t *testing.T) {
 	path := filepath.Join(dir, "secrets.json")
 	oldVars := map[string]string{"dc": "eu-west"}
 
-	first, _, _, err := Resolve(testSpecs, nil, nil, oldVars, path, testIKM)
+	first, _, _, _, err := Resolve(testSpecs, nil, nil, nil, oldVars, path, testIKM, "", "")
 	must.NoError(t, err)
 
 	data, _ := os.ReadFile(path)
@@ -168,7 +168,7 @@ func TestResolveRepersistsOnVarsChange(t *testing.T) {
 
 	// Second resolve with updated vars.
 	newVars := map[string]string{"dc": "us-east", "extra": "val"}
-	second, _, _, err := Resolve(testSpecs, nil, nil, newVars, path, testIKM)
+	second, _, _, _, err := Resolve(testSpecs, nil, nil, nil, newVars, path, testIKM, "", "")
 	must.NoError(t, err)
 
 	// Secrets should be unchanged.
@@ -189,13 +189,13 @@ func TestResolveSkipsRepersistWhenVarsUnchanged(t *testing.T) {
 	path := filepath.Join(dir, "secrets.json")
 	vars := map[string]string{"dc": "eu-west"}
 
-	_, _, _, err := Resolve(testSpecs, nil, nil, vars, path, testIKM)
+	_, _, _, _, err := Resolve(testSpecs, nil, nil, nil, vars, path, testIKM, "", "")
 	must.NoError(t, err)
 
 	infoBefore, err := os.Stat(path)
 	must.NoError(t, err)
 
-	_, _, _, err = Resolve(testSpecs, nil, nil, vars, path, testIKM)
+	_, _, _, _, err = Resolve(testSpecs, nil, nil, nil, vars, path, testIKM, "", "")
 	must.NoError(t, err)
 
 	infoAfter, err := os.Stat(path)
@@ -211,7 +211,7 @@ func TestResolveDerivesCA(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.json")
 
-	_, cas, _, err := Resolve(testSpecs, testCAs, nil, nil, path, testIKM)
+	_, cas, _, _, err := Resolve(testSpecs, testCAs, nil, nil, nil, path, testIKM, "", "")
 	must.NoError(t, err)
 	must.MapLen(t, 1, cas)
 	must.MapContainsKey(t, cas, "mesh")
@@ -224,7 +224,7 @@ func TestResolveDerivesCA(t *testing.T) {
 func TestResolveCAValid(t *testing.T) {
 	dir := t.TempDir()
 
-	_, cas, _, err := Resolve(testSpecs, testCAs, nil, nil, filepath.Join(dir, "s.json"), testIKM)
+	_, cas, _, _, err := Resolve(testSpecs, testCAs, nil, nil, nil, filepath.Join(dir, "s.json"), testIKM, "", "")
 	must.NoError(t, err)
 	ca := cas["mesh"]
 
@@ -246,9 +246,9 @@ func TestResolveCADeterministic(t *testing.T) {
 	dir1 := t.TempDir()
 	dir2 := t.TempDir()
 
-	_, cas1, _, err := Resolve(testSpecs, testCAs, nil, nil, filepath.Join(dir1, "s.json"), testIKM)
+	_, cas1, _, _, err := Resolve(testSpecs, testCAs, nil, nil, nil, filepath.Join(dir1, "s.json"), testIKM, "", "")
 	must.NoError(t, err)
-	_, cas2, _, err := Resolve(testSpecs, testCAs, nil, nil, filepath.Join(dir2, "s.json"), testIKM)
+	_, cas2, _, _, err := Resolve(testSpecs, testCAs, nil, nil, nil, filepath.Join(dir2, "s.json"), testIKM, "", "")
 	must.NoError(t, err)
 
 	must.EqOp(t, cas1["mesh"].CertPEM, cas2["mesh"].CertPEM)
@@ -259,10 +259,10 @@ func TestResolvePersistedCA(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.json")
 
-	_, first, _, err := Resolve(testSpecs, testCAs, nil, nil, path, testIKM)
+	_, first, _, _, err := Resolve(testSpecs, testCAs, nil, nil, nil, path, testIKM, "", "")
 	must.NoError(t, err)
 
-	_, second, _, err := Resolve(testSpecs, testCAs, nil, nil, path, testIKM)
+	_, second, _, _, err := Resolve(testSpecs, testCAs, nil, nil, nil, path, testIKM, "", "")
 	must.NoError(t, err)
 
 	must.EqOp(t, first["mesh"].CertPEM, second["mesh"].CertPEM)
@@ -274,12 +274,12 @@ func TestResolveMissingCA(t *testing.T) {
 	path := filepath.Join(dir, "secrets.json")
 
 	// Persist without CAs.
-	if _, _, _, err := Resolve(testSpecs, nil, nil, nil, path, testIKM); err != nil {
+	if _, _, _, _, err := Resolve(testSpecs, nil, nil, nil, nil, path, testIKM, "", ""); err != nil {
 		t.Fatal(err)
 	}
 
 	// Now try to load with a CA requirement — should fail.
-	_, _, _, err := Resolve(testSpecs, testCAs, nil, nil, path, testIKM)
+	_, _, _, _, err := Resolve(testSpecs, testCAs, nil, nil, nil, path, testIKM, "", "")
 	if err == nil {
 		t.Fatal("expected error for missing CA in persisted file")
 	}
@@ -293,7 +293,7 @@ func TestResolveDerivesJWTKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.json")
 
-	_, _, jwtKeys, err := Resolve(testSpecs, nil, testJWTs, nil, path, testIKM)
+	_, _, _, jwtKeys, err := Resolve(testSpecs, nil, nil, testJWTs, nil, path, testIKM, "", "")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -330,13 +330,13 @@ func TestResolvePersistedJWTKey(t *testing.T) {
 	path := filepath.Join(dir, "secrets.json")
 
 	// First resolve: derive + persist.
-	_, _, first, err := Resolve(testSpecs, nil, testJWTs, nil, path, testIKM)
+	_, _, _, first, err := Resolve(testSpecs, nil, nil, testJWTs, nil, path, testIKM, "", "")
 	if err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
 
 	// Second resolve: load from disk.
-	_, _, second, err := Resolve(testSpecs, nil, testJWTs, nil, path, testIKM)
+	_, _, _, second, err := Resolve(testSpecs, nil, nil, testJWTs, nil, path, testIKM, "", "")
 	if err != nil {
 		t.Fatalf("second resolve: %v", err)
 	}
@@ -358,12 +358,12 @@ func TestResolveMissingJWTKey(t *testing.T) {
 	path := filepath.Join(dir, "secrets.json")
 
 	// Persist without JWT keys.
-	if _, _, _, err := Resolve(testSpecs, nil, nil, nil, path, testIKM); err != nil {
+	if _, _, _, _, err := Resolve(testSpecs, nil, nil, nil, nil, path, testIKM, "", ""); err != nil {
 		t.Fatal(err)
 	}
 
 	// Now try to load with a JWT requirement — should fail.
-	_, _, _, err := Resolve(testSpecs, nil, testJWTs, nil, path, testIKM)
+	_, _, _, _, err := Resolve(testSpecs, nil, nil, testJWTs, nil, path, testIKM, "", "")
 	if err == nil {
 		t.Fatal("expected error for missing JWT key in persisted file")
 	}

@@ -143,8 +143,8 @@ func GenerateCert(ca *CA, cn string, hosts []string, ttl time.Duration) (certPEM
 
 // IssueCert creates an ephemeral Ed25519 leaf certificate with explicit EKU control.
 // Used by cert blocks to auto-issue leaf certs during claim. dnsSANs are added
-// as DNS subject alternative names on the certificate.
-func IssueCert(ca *CA, cn string, dnsSANs []string, ttl time.Duration, serverAuth, clientAuth bool) (certPEM, keyPEM []byte, err error) {
+// as DNS subject alternative names and ipSANs as IP subject alternative names.
+func IssueCert(ca *CA, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, serverAuth, clientAuth bool) (certPEM, keyPEM []byte, err error) {
 	var eku []x509.ExtKeyUsage
 	if serverAuth {
 		eku = append(eku, x509.ExtKeyUsageServerAuth)
@@ -160,6 +160,7 @@ func IssueCert(ca *CA, cn string, dnsSANs []string, ttl time.Duration, serverAut
 		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: eku,
 		DNSNames:    dnsSANs,
+		IPAddresses: ipSANs,
 	}
 	return signLeaf(ca, tmpl)
 }

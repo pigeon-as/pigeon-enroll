@@ -78,7 +78,7 @@ func TestFileMultiline(t *testing.T) {
 	must.EqOp(t, want, string(got))
 }
 
-func TestWriteAtomic(t *testing.T) {
+func TestAtomicfileWriteOwned(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "output.txt")
 	must.NoError(t, atomicfile.WriteOwned(path, []byte("content"), 0640, -1, -1))

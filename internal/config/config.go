@@ -39,6 +39,7 @@ type CertSpec struct {
 	ServerAuth *bool    `hcl:"server_auth,optional"`  // default false
 	CN         string   `hcl:"cn,optional"`           // static common name (if empty, claim subject is used)
 	DNSSANs    []string `hcl:"dns_sans,optional"`     // DNS subject alternative names
+	IPSANs     []string `hcl:"ip_sans,optional"`      // IP subject alternative names
 }
 
 // JWTSpec describes a JWT to sign and include in the claim response.
@@ -213,6 +214,11 @@ func validate(cfg Config) error {
 		for _, d := range c.DNSSANs {
 			if d == "" {
 				return fmt.Errorf("cert %q: dns_sans entries must not be empty strings", c.Name)
+			}
+		}
+		for _, ip := range c.IPSANs {
+			if net.ParseIP(ip) == nil {
+				return fmt.Errorf("cert %q: ip_sans entry %q is not a valid IP address", c.Name, ip)
 			}
 		}
 		if c.TTL < time.Minute {
