@@ -1,7 +1,7 @@
 BINARY := pigeon-enroll
 OUTDIR := build
 
-.PHONY: build clean test vet
+.PHONY: build clean test vet e2e
 
 build:
 	mkdir -p $(OUTDIR)
@@ -15,3 +15,6 @@ test:
 
 vet:
 	go vet ./...
+
+e2e: build
+	go test -tags=e2e ./e2e -v

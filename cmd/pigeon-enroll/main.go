@@ -28,13 +28,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/action"
 	"github.com/pigeon-as/pigeon-enroll/internal/api"
+	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 	"github.com/pigeon-as/pigeon-enroll/internal/audit"
 	"github.com/pigeon-as/pigeon-enroll/internal/claim"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
@@ -159,7 +159,13 @@ func cmdServer(args []string) int {
 	}
 	logger.Info("enrollment key", "path", cfg.KeyPath)
 
-	derived, cas, jwtKeys, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm)
+	hostname, err := os.Hostname()
+	if err != nil {
+		logger.Error("get hostname", "err", err)
+		return 1
+	}
+
+	derived, cas, _, jwtKeys, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm, "server", hostname)
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1
@@ -357,11 +363,7 @@ func cmdGenerateCert(args []string) int {
 				return 1
 			}
 		} else {
-			if err := os.MkdirAll(filepath.Dir(*bundlePath), 0700); err != nil {
-				fmt.Fprintf(os.Stderr, "create directory: %v\n", err)
-				return 1
-			}
-			if err := os.WriteFile(*bundlePath, bundle, 0600); err != nil {
+			if err := writeSecureFile(*bundlePath, bundle); err != nil {
 				fmt.Fprintf(os.Stderr, "write bundle: %v\n", err)
 				return 1
 			}
@@ -369,33 +371,16 @@ func cmdGenerateCert(args []string) int {
 	}
 
 	// Write individual files.
-	if *certPath != "" {
-		if err := os.MkdirAll(filepath.Dir(*certPath), 0700); err != nil {
-			fmt.Fprintf(os.Stderr, "create directory: %v\n", err)
-			return 1
+	for _, f := range []struct{ path string; data []byte }{
+		{*certPath, certPEM},
+		{*keyPath, keyPEM},
+		{*caPath, ca.CertPEM},
+	} {
+		if f.path == "" {
+			continue
 		}
-		if err := os.WriteFile(*certPath, certPEM, 0600); err != nil {
-			fmt.Fprintf(os.Stderr, "write cert: %v\n", err)
-			return 1
-		}
-	}
-	if *keyPath != "" {
-		if err := os.MkdirAll(filepath.Dir(*keyPath), 0700); err != nil {
-			fmt.Fprintf(os.Stderr, "create directory: %v\n", err)
-			return 1
-		}
-		if err := os.WriteFile(*keyPath, keyPEM, 0600); err != nil {
-			fmt.Fprintf(os.Stderr, "write key: %v\n", err)
-			return 1
-		}
-	}
-	if *caPath != "" {
-		if err := os.MkdirAll(filepath.Dir(*caPath), 0700); err != nil {
-			fmt.Fprintf(os.Stderr, "create directory: %v\n", err)
-			return 1
-		}
-		if err := os.WriteFile(*caPath, ca.CertPEM, 0600); err != nil {
-			fmt.Fprintf(os.Stderr, "write CA cert: %v\n", err)
+		if err := writeSecureFile(f.path, f.data); err != nil {
+			fmt.Fprintf(os.Stderr, "write %s: %v\n", f.path, err)
 			return 1
 		}
 	}
@@ -542,7 +527,7 @@ func cmdRender(args []string) int {
 			return 1
 		}
 
-		if err := render.WriteAtomic(tpl.Destination, rendered, perm, uid, gid); err != nil {
+		if err := atomicfile.WriteOwned(tpl.Destination, rendered, perm, uid, gid); err != nil {
 			fmt.Fprintf(os.Stderr, "write %s: %v\n", tpl.Destination, err)
 			return 1
 		}
@@ -568,6 +553,11 @@ func parsePerms(s string) (os.FileMode, error) {
 	return os.FileMode(p), nil
 }
 
+// writeSecureFile writes data atomically with mode 0600.
+func writeSecureFile(path string, data []byte) error {
+	return atomicfile.Write(path, data, 0600)
+}
+
 func cmdRunActions(args []string) int {
 	flags := flag.NewFlagSet("run-actions", flag.ExitOnError)
 	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
@@ -586,7 +576,8 @@ func cmdRunActions(args []string) int {
 		return 1
 	}
 
-	derived, _, _, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm)
+	// Empty scope — run-actions only needs derived secrets, not certs.
+	derived, _, _, _, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm, "", "")
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1
@@ -607,14 +598,9 @@ func cmdRunActions(args []string) int {
 }
 
 func parseLevel(s string) slog.Level {
-	switch s {
-	case "debug":
-		return slog.LevelDebug
-	case "warn":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
+	var lvl slog.Level
+	if err := lvl.UnmarshalText([]byte(s)); err != nil {
 		return slog.LevelInfo
 	}
+	return lvl
 }

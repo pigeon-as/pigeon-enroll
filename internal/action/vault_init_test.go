@@ -13,6 +13,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	hcljson "github.com/hashicorp/hcl/v2/json"
+	"github.com/shoenig/test/must"
 )
 
 func jsonToBody(t *testing.T, data []byte) hcl.Body {
@@ -43,13 +44,8 @@ func TestVaultInit_AlreadyInitialized(t *testing.T) {
 	})
 
 	a, err := newVaultInit(jsonToBody(t, cfgJSON))
-	if err != nil {
-		t.Fatalf("newVaultInit: %v", err)
-	}
-
-	if err := a.Run(context.Background(), slog.Default(), nil); err != nil {
-		t.Fatalf("expected no error for already-initialized Vault, got: %v", err)
-	}
+	must.NoError(t, err)
+	must.NoError(t, a.Run(context.Background(), slog.Default(), nil))
 }
 
 func TestVaultInit_AlreadyInitialized_SkipsMissingSecret(t *testing.T) {
@@ -74,14 +70,10 @@ func TestVaultInit_AlreadyInitialized_SkipsMissingSecret(t *testing.T) {
 	})
 
 	a, err := newVaultInit(jsonToBody(t, cfgJSON))
-	if err != nil {
-		t.Fatalf("newVaultInit: %v", err)
-	}
+	must.NoError(t, err)
 
 	// Should skip cleanly — tokenID resolution is deferred past the initialized check.
-	if err := a.Run(context.Background(), slog.Default(), map[string]string{}); err != nil {
-		t.Fatalf("expected skip for already-initialized Vault, got: %v", err)
-	}
+	must.NoError(t, a.Run(context.Background(), slog.Default(), map[string]string{}))
 }
 
 func TestVaultInit_RevokeRootWithoutManagementToken(t *testing.T) {
@@ -100,8 +92,6 @@ func TestVaultInit_RevokeRootWithoutManagementToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// token.id references a missing secret — management token won't be created,
-	// so revoke_root should be blocked.
 	cfgJSON, _ := json.Marshal(map[string]interface{}{
 		"addr":             srv.URL,
 		"secret_shares":    1,
@@ -114,14 +104,10 @@ func TestVaultInit_RevokeRootWithoutManagementToken(t *testing.T) {
 	})
 
 	a, err := newVaultInit(jsonToBody(t, cfgJSON))
-	if err != nil {
-		t.Fatalf("newVaultInit: %v", err)
-	}
+	must.NoError(t, err)
 
 	err = a.Run(context.Background(), slog.Default(), map[string]string{})
-	if err == nil {
-		t.Fatal("expected error for missing secret with revoke_root, got nil")
-	}
+	must.Error(t, err)
 }
 
 func TestVaultInit_InitAndCreateToken(t *testing.T) {
@@ -140,21 +126,15 @@ func TestVaultInit_InitAndCreateToken(t *testing.T) {
 			})
 
 		case r.URL.Path == "/v1/auth/token/create" && r.Method == http.MethodPost:
-			if r.Header.Get("X-Vault-Token") != "s.root-token-123" {
-				t.Error("expected root token in X-Vault-Token header")
-			}
+			must.EqOp(t, "s.root-token-123", r.Header.Get("X-Vault-Token"))
 			var body map[string]interface{}
 			json.NewDecoder(r.Body).Decode(&body)
-			if body["id"] != "my-management-token" {
-				t.Errorf("expected token id 'my-management-token', got %v", body["id"])
-			}
+			must.EqOp(t, "my-management-token", body["id"])
 			tokenCreated.Store(true)
 			json.NewEncoder(w).Encode(map[string]interface{}{"auth": map[string]interface{}{"client_token": "my-management-token"}})
 
 		case r.URL.Path == "/v1/auth/token/revoke-self" && r.Method == http.MethodPost:
-			if r.Header.Get("X-Vault-Token") != "s.root-token-123" {
-				t.Error("expected root token for revoke-self")
-			}
+			must.EqOp(t, "s.root-token-123", r.Header.Get("X-Vault-Token"))
 			rootRevoked.Store(true)
 			w.WriteHeader(http.StatusNoContent)
 
@@ -180,36 +160,20 @@ func TestVaultInit_InitAndCreateToken(t *testing.T) {
 	})
 
 	a, err := newVaultInit(jsonToBody(t, cfgJSON))
-	if err != nil {
-		t.Fatalf("newVaultInit: %v", err)
-	}
+	must.NoError(t, err)
 
 	secrets := map[string]string{
 		"vault_management_token": "my-management-token",
 	}
-
-	if err := a.Run(context.Background(), slog.Default(), secrets); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !tokenCreated.Load() {
-		t.Error("management token was not created")
-	}
-	if !rootRevoked.Load() {
-		t.Error("root token was not revoked")
-	}
+	must.NoError(t, a.Run(context.Background(), slog.Default(), secrets))
+	must.True(t, tokenCreated.Load())
+	must.True(t, rootRevoked.Load())
 
 	data, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatalf("read output: %v", err)
-	}
+	must.NoError(t, err)
 	var resp initResponse
-	if err := json.Unmarshal(data, &resp); err != nil {
-		t.Fatalf("parse output: %v", err)
-	}
-	if resp.RootToken != "<revoked>" {
-		t.Errorf("expected redacted root token '<revoked>', got %q", resp.RootToken)
-	}
+	must.NoError(t, json.Unmarshal(data, &resp))
+	must.EqOp(t, "<revoked>", resp.RootToken)
 }
 
 func TestVaultInit_InitWithoutToken(t *testing.T) {
@@ -239,25 +203,14 @@ func TestVaultInit_InitWithoutToken(t *testing.T) {
 	})
 
 	a, err := newVaultInit(jsonToBody(t, cfgJSON))
-	if err != nil {
-		t.Fatalf("newVaultInit: %v", err)
-	}
-
-	if err := a.Run(context.Background(), slog.Default(), nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	must.NoError(t, err)
+	must.NoError(t, a.Run(context.Background(), slog.Default(), nil))
 
 	data, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatalf("read output: %v", err)
-	}
+	must.NoError(t, err)
 	var resp initResponse
-	if err := json.Unmarshal(data, &resp); err != nil {
-		t.Fatalf("parse output: %v", err)
-	}
-	if resp.RootToken != "s.root-token-abc" {
-		t.Errorf("expected root token 's.root-token-abc', got %q", resp.RootToken)
-	}
+	must.NoError(t, json.Unmarshal(data, &resp))
+	must.EqOp(t, "s.root-token-abc", resp.RootToken)
 }
 
 func TestVaultInit_MissingSecretForTokenID(t *testing.T) {
@@ -288,14 +241,10 @@ func TestVaultInit_MissingSecretForTokenID(t *testing.T) {
 	})
 
 	a, err := newVaultInit(jsonToBody(t, cfgJSON))
-	if err != nil {
-		t.Fatalf("newVaultInit: %v", err)
-	}
+	must.NoError(t, err)
 
 	err = a.Run(context.Background(), slog.Default(), map[string]string{})
-	if err == nil {
-		t.Fatal("expected error for missing secret, got nil")
-	}
+	must.Error(t, err)
 }
 
 func TestRun_UnknownActionType(t *testing.T) {

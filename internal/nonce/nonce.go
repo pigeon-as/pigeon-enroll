@@ -131,8 +131,10 @@ func (s *Store) appendEntry(hash string, t time.Time) (err error) {
 			}
 		}
 	}()
-	_, err = fmt.Fprintf(f, "%s %d\n", hash, t.UnixNano())
-	return err
+	if _, err = fmt.Fprintf(f, "%s %d\n", hash, t.UnixNano()); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 // purge removes expired entries from memory and rewrites the file.

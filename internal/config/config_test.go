@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	hcljson "github.com/hashicorp/hcl/v2/json"
 	"github.com/pigeon-as/pigeon-enroll/internal/action"
+	"github.com/shoenig/test/must"
 )
 
 func testBody(t *testing.T, jsonStr string) hcl.Body {
@@ -26,21 +27,11 @@ func TestLoadDefaults(t *testing.T) {
 	os.WriteFile(path, []byte(`vars = { k = "v" }`), 0644)
 
 	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if cfg.Listen != ":8443" {
-		t.Errorf("listen = %q, want :8443", cfg.Listen)
-	}
-	if cfg.KeyPath != "/etc/pigeon/enrollment-key" {
-		t.Errorf("key_path = %q", cfg.KeyPath)
-	}
-	if cfg.TokenWindow != 30*time.Minute {
-		t.Errorf("token_window = %v, want 30m", cfg.TokenWindow)
-	}
-	if cfg.ServerCertTTL != 720*time.Hour {
-		t.Errorf("server_cert_ttl = %v, want 720h", cfg.ServerCertTTL)
-	}
+	must.NoError(t, err)
+	must.EqOp(t, ":8443", cfg.Listen)
+	must.EqOp(t, "/etc/pigeon/enrollment-key", cfg.KeyPath)
+	must.EqOp(t, 30*time.Minute, cfg.TokenWindow)
+	must.EqOp(t, 720*time.Hour, cfg.ServerCertTTL)
 }
 
 func TestLoadTokenWindow(t *testing.T) {
@@ -52,12 +43,8 @@ token_window = "15m"
 `), 0644)
 
 	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if cfg.TokenWindow != 15*time.Minute {
-		t.Errorf("token_window = %v, want 15m", cfg.TokenWindow)
-	}
+	must.NoError(t, err)
+	must.EqOp(t, 15*time.Minute, cfg.TokenWindow)
 }
 
 func TestLoadTokenWindowInvalid(t *testing.T) {
@@ -69,9 +56,7 @@ token_window = "bogus"
 `), 0644)
 
 	_, err := Load(path)
-	if err == nil {
-		t.Error("expected error for invalid token_window")
-	}
+	must.Error(t, err)
 }
 
 func TestLoadTokenWindowTooSmall(t *testing.T) {
@@ -83,9 +68,7 @@ token_window = "500ms"
 `), 0644)
 
 	_, err := Load(path)
-	if err == nil {
-		t.Error("expected error for sub-second token_window")
-	}
+	must.Error(t, err)
 }
 
 func TestLoadCertTTL(t *testing.T) {
@@ -97,12 +80,8 @@ server_cert_ttl = "48h"
 `), 0644)
 
 	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if cfg.ServerCertTTL != 48*time.Hour {
-		t.Errorf("server_cert_ttl = %v, want 48h", cfg.ServerCertTTL)
-	}
+	must.NoError(t, err)
+	must.EqOp(t, 48*time.Hour, cfg.ServerCertTTL)
 }
 
 func TestLoadCertTTLInvalid(t *testing.T) {
@@ -113,9 +92,8 @@ func TestLoadCertTTLInvalid(t *testing.T) {
 vars = { k = "v" }
 server_cert_ttl = "bogus"
 `), 0644)
-	if _, err := Load(path); err == nil {
-		t.Error("expected error for invalid server_cert_ttl")
-	}
+	_, err := Load(path)
+	must.Error(t, err)
 }
 
 func TestLoadCertTTLTooSmall(t *testing.T) {
@@ -126,17 +104,13 @@ func TestLoadCertTTLTooSmall(t *testing.T) {
 vars = { k = "v" }
 server_cert_ttl = "100ms"
 `), 0644)
-	if _, err := Load(path); err == nil {
-		t.Error("expected error for sub-second server_cert_ttl")
-	}
+	_, err := Load(path)
+	must.Error(t, err)
 }
 
 func TestValidateSecretsOrVars(t *testing.T) {
-	// Neither vars nor secrets → error.
 	err := validate(Config{TokenWindow: time.Minute, ServerCertTTL: time.Hour})
-	if err == nil {
-		t.Error("expected error for empty vars and secrets")
-	}
+	must.Error(t, err)
 }
 
 func TestValidateSecretSpec(t *testing.T) {
@@ -160,11 +134,10 @@ func TestValidateSecretSpec(t *testing.T) {
 				Secrets:       []SecretSpec{tt.spec},
 			}
 			err := validate(cfg)
-			if tt.ok && err != nil {
-				t.Errorf("unexpected error: %v", err)
-			}
-			if !tt.ok && err == nil {
-				t.Error("expected validation error")
+			if tt.ok {
+				must.NoError(t, err)
+			} else {
+				must.Error(t, err)
 			}
 		})
 	}
@@ -179,9 +152,7 @@ func TestValidateDuplicateSecretName(t *testing.T) {
 			{Name: "k", Length: 16, Encoding: "hex"},
 		},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for duplicate secret name")
-	}
+	must.Error(t, validate(cfg))
 }
 
 func TestValidateNameConflict(t *testing.T) {
@@ -191,9 +162,7 @@ func TestValidateNameConflict(t *testing.T) {
 		Secrets:       []SecretSpec{{Name: "k", Length: 32, Encoding: "base64"}},
 		Vars:          map[string]string{"k": "v"},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for name conflict")
-	}
+	must.Error(t, validate(cfg))
 }
 
 func TestValidateVaultTokenRefersToSecret(t *testing.T) {
@@ -203,9 +172,7 @@ func TestValidateVaultTokenRefersToSecret(t *testing.T) {
 		Secrets:       []SecretSpec{{Name: "vault_token", Length: 32, Encoding: "hex"}},
 		Actions:       []action.Config{{Type: "vault-init", Body: testBody(t, `{"token": {"id": "vault_token"}}`)}},
 	}
-	if err := validate(cfg); err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
+	must.NoError(t, validate(cfg))
 }
 
 func TestValidateVaultTokenRefersToMissingSecret(t *testing.T) {
@@ -215,9 +182,7 @@ func TestValidateVaultTokenRefersToMissingSecret(t *testing.T) {
 		Secrets:       []SecretSpec{{Name: "other", Length: 32, Encoding: "hex"}},
 		Actions:       []action.Config{{Type: "vault-init", Body: testBody(t, `{"token": {"id": "nonexistent"}}`)}},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for vault.token.id referencing missing secret")
-	}
+	must.Error(t, validate(cfg))
 }
 
 func TestLoadActionConfig(t *testing.T) {
@@ -237,31 +202,19 @@ action "vault-init" {
 `), 0644)
 
 	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(cfg.Actions) != 1 {
-		t.Fatalf("actions = %d, want 1", len(cfg.Actions))
-	}
-	if cfg.Actions[0].Type != "vault-init" {
-		t.Errorf("action type = %q, want vault-init", cfg.Actions[0].Type)
-	}
+	must.NoError(t, err)
+	must.SliceLen(t, 1, cfg.Actions)
+	must.EqOp(t, "vault-init", cfg.Actions[0].Type)
 }
 
 func TestCheckKeyFile(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "enrollment-key")
 
-	// Missing file should error.
-	if err := CheckKeyFile(keyPath); err == nil {
-		t.Fatal("expected error for missing key file")
-	}
+	must.Error(t, CheckKeyFile(keyPath))
 
-	// Create a key file — CheckKeyFile only verifies existence.
 	os.WriteFile(keyPath, []byte("0123456789abcdef0123456789abcdef"), 0600)
-	if err := CheckKeyFile(keyPath); err != nil {
-		t.Fatalf("valid key: %v", err)
-	}
+	must.NoError(t, CheckKeyFile(keyPath))
 }
 
 func TestLoadCertBlock(t *testing.T) {
@@ -284,25 +237,14 @@ vars = { k = "v" }
 `), 0644)
 
 	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(cfg.Certs) != 1 {
-		t.Fatalf("certs = %d, want 1", len(cfg.Certs))
-	}
+	must.NoError(t, err)
+	must.SliceLen(t, 1, cfg.Certs)
+
 	c := cfg.Certs[0]
-	if c.Name != "auth_worker" {
-		t.Errorf("cert name = %q", c.Name)
-	}
-	if c.CA != "auth" {
-		t.Errorf("cert ca = %q", c.CA)
-	}
-	if c.TTL != 720*time.Hour {
-		t.Errorf("cert ttl = %v", c.TTL)
-	}
-	if c.CN != "worker" {
-		t.Errorf("cert cn = %q", c.CN)
-	}
+	must.EqOp(t, "auth_worker", c.Name)
+	must.EqOp(t, "auth", c.CA)
+	must.EqOp(t, 720*time.Hour, c.TTL)
+	must.EqOp(t, "worker", c.CN)
 }
 
 func TestLoadCertBlockDNSSANs(t *testing.T) {
@@ -326,22 +268,14 @@ vars = { k = "v" }
 `), 0644)
 
 	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(cfg.Certs) != 1 {
-		t.Fatalf("certs = %d, want 1", len(cfg.Certs))
-	}
+	must.NoError(t, err)
+	must.SliceLen(t, 1, cfg.Certs)
+
 	c := cfg.Certs[0]
-	if c.Name != "mesh_worker" {
-		t.Errorf("cert name = %q", c.Name)
-	}
-	if c.CN != "" {
-		t.Errorf("cert cn = %q, want empty (subject-derived)", c.CN)
-	}
-	if len(c.DNSSANs) != 1 || c.DNSSANs[0] != "mesh.pigeon.internal" {
-		t.Errorf("cert dns_sans = %v, want [mesh.pigeon.internal]", c.DNSSANs)
-	}
+	must.EqOp(t, "mesh_worker", c.Name)
+	must.EqOp(t, "", c.CN)
+	must.SliceLen(t, 1, c.DNSSANs)
+	must.EqOp(t, "mesh.pigeon.internal", c.DNSSANs[0])
 }
 
 func TestValidateCertMissingCA(t *testing.T) {
@@ -352,9 +286,7 @@ func TestValidateCertMissingCA(t *testing.T) {
 		CAs:           []CASpec{{Name: "auth"}},
 		Certs:         []CertSpec{{Name: "c", CA: "nonexistent", Scope: []string{"worker"}, CN: "w", TTL: time.Hour}},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for cert referencing missing CA")
-	}
+	must.Error(t, validate(cfg))
 }
 
 func TestValidateCertEmptyScope(t *testing.T) {
@@ -365,9 +297,7 @@ func TestValidateCertEmptyScope(t *testing.T) {
 		CAs:           []CASpec{{Name: "auth"}},
 		Certs:         []CertSpec{{Name: "c", CA: "auth", CN: "w", TTL: time.Hour}},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for cert with empty scope")
-	}
+	must.Error(t, validate(cfg))
 }
 
 func TestValidateCertOptionalCN(t *testing.T) {
@@ -378,9 +308,7 @@ func TestValidateCertOptionalCN(t *testing.T) {
 		CAs:           []CASpec{{Name: "auth"}},
 		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, TTL: time.Hour}},
 	}
-	if err := validate(cfg); err != nil {
-		t.Errorf("cert with empty CN should be valid (claim subject used at runtime): %v", err)
-	}
+	must.NoError(t, validate(cfg))
 }
 
 func TestValidateCertTTLTooSmall(t *testing.T) {
@@ -391,9 +319,7 @@ func TestValidateCertTTLTooSmall(t *testing.T) {
 		CAs:           []CASpec{{Name: "auth"}},
 		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Second}},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for cert TTL < 1m")
-	}
+	must.Error(t, validate(cfg))
 }
 
 func TestValidateCertNameConflictsWithCA(t *testing.T) {
@@ -404,9 +330,37 @@ func TestValidateCertNameConflictsWithCA(t *testing.T) {
 		CAs:           []CASpec{{Name: "auth"}},
 		Certs:         []CertSpec{{Name: "auth", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour}},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for cert name conflicting with CA")
+	must.Error(t, validate(cfg))
+}
+
+func TestValidateCertIPSANsValid(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs: []CertSpec{{
+			Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour,
+			IPSANs: []string{"10.0.0.1", "::1"},
+		}},
 	}
+	must.NoError(t, validate(cfg))
+}
+
+func TestValidateCertIPSANsInvalid(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs: []CertSpec{{
+			Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour,
+			IPSANs: []string{"not-an-ip"},
+		}},
+	}
+	err := validate(cfg)
+	must.Error(t, err)
+	must.StrContains(t, err.Error(), "ip_sans entry \"not-an-ip\" is not a valid IP address")
 }
 
 func TestLoadJWTBlock(t *testing.T) {
@@ -424,28 +378,15 @@ vars = { k = "v" }
 `), 0644)
 
 	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if len(cfg.JWTs) != 1 {
-		t.Fatalf("jwts = %d, want 1", len(cfg.JWTs))
-	}
+	must.NoError(t, err)
+	must.SliceLen(t, 1, cfg.JWTs)
+
 	j := cfg.JWTs[0]
-	if j.Name != "consul_auto_config" {
-		t.Errorf("jwt name = %q", j.Name)
-	}
-	if j.Issuer != "pigeon-enroll" {
-		t.Errorf("jwt issuer = %q", j.Issuer)
-	}
-	if j.Audience != "consul-auto-config" {
-		t.Errorf("jwt audience = %q", j.Audience)
-	}
-	if j.TTL != 24*time.Hour {
-		t.Errorf("jwt ttl = %v, want 24h", j.TTL)
-	}
-	if j.Scope != "worker" {
-		t.Errorf("jwt scope = %q", j.Scope)
-	}
+	must.EqOp(t, "consul_auto_config", j.Name)
+	must.EqOp(t, "pigeon-enroll", j.Issuer)
+	must.EqOp(t, "consul-auto-config", j.Audience)
+	must.EqOp(t, 24*time.Hour, j.TTL)
+	must.EqOp(t, "worker", j.Scope)
 }
 
 func TestValidateJWTMissingIssuer(t *testing.T) {
@@ -455,9 +396,7 @@ func TestValidateJWTMissingIssuer(t *testing.T) {
 		Vars:          map[string]string{"k": "v"},
 		JWTs:          []JWTSpec{{Name: "j", Audience: "a", Scope: "s", TTL: time.Hour}},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for JWT with missing issuer")
-	}
+	must.Error(t, validate(cfg))
 }
 
 func TestValidateJWTMissingScope(t *testing.T) {
@@ -467,9 +406,7 @@ func TestValidateJWTMissingScope(t *testing.T) {
 		Vars:          map[string]string{"k": "v"},
 		JWTs:          []JWTSpec{{Name: "j", Issuer: "i", Audience: "a", TTL: time.Hour}},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for JWT with missing scope")
-	}
+	must.Error(t, validate(cfg))
 }
 
 func TestValidateJWTTTLTooSmall(t *testing.T) {
@@ -479,9 +416,7 @@ func TestValidateJWTTTLTooSmall(t *testing.T) {
 		Vars:          map[string]string{"k": "v"},
 		JWTs:          []JWTSpec{{Name: "j", Issuer: "i", Audience: "a", Scope: "s", TTL: time.Second}},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for JWT TTL < 1m")
-	}
+	must.Error(t, validate(cfg))
 }
 
 func TestValidateJWTDuplicateName(t *testing.T) {
@@ -494,9 +429,7 @@ func TestValidateJWTDuplicateName(t *testing.T) {
 			{Name: "j", Issuer: "i2", Audience: "a2", Scope: "s2", TTL: time.Hour},
 		},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for duplicate JWT name")
-	}
+	must.Error(t, validate(cfg))
 }
 
 func TestValidateJWTOnlyConfig(t *testing.T) {
@@ -505,9 +438,7 @@ func TestValidateJWTOnlyConfig(t *testing.T) {
 		ServerCertTTL: time.Hour,
 		JWTs:          []JWTSpec{{Name: "j", Issuer: "i", Audience: "a", Scope: "s", TTL: time.Hour}},
 	}
-	if err := validate(cfg); err != nil {
-		t.Errorf("JWT-only config should be valid: %v", err)
-	}
+	must.NoError(t, validate(cfg))
 }
 
 func TestValidateCertDNSSANsEmpty(t *testing.T) {
@@ -518,7 +449,5 @@ func TestValidateCertDNSSANsEmpty(t *testing.T) {
 		CAs:           []CASpec{{Name: "auth"}},
 		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour, DNSSANs: []string{""}}},
 	}
-	if err := validate(cfg); err == nil {
-		t.Error("expected error for cert with empty dns_sans entry")
-	}
+	must.Error(t, validate(cfg))
 }

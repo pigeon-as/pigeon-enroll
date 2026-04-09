@@ -6,9 +6,10 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"net"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/shoenig/test/must"
 )
 
 // testIKM is a fixed 32-byte key for tests.
@@ -21,20 +22,12 @@ var testIKM = []byte{
 
 func TestDeriveCA_Deterministic(t *testing.T) {
 	ca1, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	ca2, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	if string(ca1.CertPEM) != string(ca2.CertPEM) {
-		t.Error("same IKM should produce identical CA certs")
-	}
-	if !ca1.Key.Equal(ca2.Key) {
-		t.Error("same IKM should produce identical CA keys")
-	}
+	must.EqOp(t, string(ca1.CertPEM), string(ca2.CertPEM))
+	must.True(t, ca1.Key.Equal(ca2.Key))
 }
 
 func TestDeriveCA_DifferentIKM(t *testing.T) {
@@ -43,127 +36,80 @@ func TestDeriveCA_DifferentIKM(t *testing.T) {
 	otherIKM[0] ^= 0xff
 
 	ca1, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	ca2, err := DeriveCA(otherIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	if string(ca1.CertPEM) == string(ca2.CertPEM) {
-		t.Error("different IKMs should produce different CA certs")
-	}
+	must.NotEq(t, string(ca1.CertPEM), string(ca2.CertPEM))
 }
 
 func TestDeriveCA_IsCA(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ca.Cert.IsCA {
-		t.Error("CA cert should have IsCA=true")
-	}
-	if ca.Cert.MaxPathLen != 0 || !ca.Cert.MaxPathLenZero {
-		t.Error("CA should have MaxPathLen=0")
-	}
+	must.NoError(t, err)
+	must.True(t, ca.Cert.IsCA)
+	must.EqOp(t, 0, ca.Cert.MaxPathLen)
+	must.True(t, ca.Cert.MaxPathLenZero)
 }
 
 func TestGenerateServerCert(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	certPEM, keyPEM, err := GenerateCert(ca, "enroll.internal", []string{"127.0.0.1", "enroll.internal"}, 30*24*time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	// Parse and verify
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		t.Fatal("X509KeyPair:", err)
-	}
+	must.NoError(t, err)
 
 	leaf, err := x509.ParseCertificate(tlsCert.Certificate[0])
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	if len(leaf.IPAddresses) != 1 || leaf.IPAddresses[0].String() != "127.0.0.1" {
-		t.Error("expected 127.0.0.1 in IPAddresses")
-	}
-	if len(leaf.DNSNames) != 1 || leaf.DNSNames[0] != "enroll.internal" {
-		t.Error("expected enroll.internal in DNSNames")
-	}
-	if leaf.Subject.CommonName != "enroll.internal" {
-		t.Errorf("expected CN=enroll.internal, got %q", leaf.Subject.CommonName)
-	}
+	must.SliceLen(t, 1, leaf.IPAddresses)
+	must.EqOp(t, "127.0.0.1", leaf.IPAddresses[0].String())
+	must.SliceLen(t, 1, leaf.DNSNames)
+	must.EqOp(t, "enroll.internal", leaf.DNSNames[0])
+	must.EqOp(t, "enroll.internal", leaf.Subject.CommonName)
+
 	// With SANs: dual EKU (ServerAuth + ClientAuth)
-	if len(leaf.ExtKeyUsage) != 2 {
-		t.Fatalf("expected 2 EKUs, got %d", len(leaf.ExtKeyUsage))
-	}
-	if leaf.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
-		t.Error("expected ServerAuth as first EKU")
-	}
-	if leaf.ExtKeyUsage[1] != x509.ExtKeyUsageClientAuth {
-		t.Error("expected ClientAuth as second EKU")
-	}
+	must.SliceLen(t, 2, leaf.ExtKeyUsage)
+	must.EqOp(t, x509.ExtKeyUsageServerAuth, leaf.ExtKeyUsage[0])
+	must.EqOp(t, x509.ExtKeyUsageClientAuth, leaf.ExtKeyUsage[1])
 
-	// Verify chain
 	pool := x509.NewCertPool()
 	pool.AddCert(ca.Cert)
-	if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool}); err != nil {
-		t.Error("server cert should verify against CA:", err)
-	}
+	_, err = leaf.Verify(x509.VerifyOptions{Roots: pool})
+	must.NoError(t, err)
 }
 
 func TestGenerateClientCert_Bundle(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	bundle, err := GenerateClientCert(ca, 1*time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	key, cert, pool, err := LoadClientBundle(bundle)
-	if err != nil {
-		t.Fatal("LoadClientBundle:", err)
-	}
+	must.NoError(t, err)
 
-	if _, ok := key.Public().(ed25519.PublicKey); !ok {
-		t.Errorf("expected Ed25519 key, got %T", key)
-	}
+	_, ok := key.Public().(ed25519.PublicKey)
+	must.True(t, ok)
 
-	if len(cert.ExtKeyUsage) != 1 || cert.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
-		t.Error("expected ClientAuth ext key usage")
-	}
+	must.SliceLen(t, 1, cert.ExtKeyUsage)
+	must.EqOp(t, x509.ExtKeyUsageClientAuth, cert.ExtKeyUsage[0])
 
-	// Verify chain using the CA from the bundle
-	if _, err := cert.Verify(x509.VerifyOptions{Roots: pool, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
-		t.Error("client cert should verify against bundled CA:", err)
-	}
+	_, err = cert.Verify(x509.VerifyOptions{Roots: pool, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}})
+	must.NoError(t, err)
 }
 
 func TestRoundTrip_mTLS(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	// Server side
 	serverCertPEM, serverKeyPEM, err := GenerateCert(ca, "pigeon-enroll", []string{"127.0.0.1"}, 30*24*time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	serverCert, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	caPool := x509.NewCertPool()
 	caPool.AddCert(ca.Cert)
@@ -177,13 +123,9 @@ func TestRoundTrip_mTLS(t *testing.T) {
 
 	// Client side
 	clientBundle, err := GenerateClientCert(ca, 1*time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	clientKey, clientCert, clientCAPool, err := LoadClientBundle(clientBundle)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	clientTLSCert := tls.Certificate{
 		Certificate: [][]byte{clientCert.Raw},
@@ -221,120 +163,72 @@ func TestRoundTrip_mTLS(t *testing.T) {
 	}()
 
 	for i := 0; i < 2; i++ {
-		if err := <-errCh; err != nil {
-			t.Fatal("TLS handshake failed:", err)
-		}
+		must.NoError(t, <-errCh)
 	}
 }
 
 func TestLoadClientBundle_BadInput(t *testing.T) {
 	_, _, _, err := LoadClientBundle([]byte("not pem"))
-	if err == nil {
-		t.Error("expected error for invalid PEM")
-	}
+	must.Error(t, err)
 }
 
 func TestCertRotator_CachesAndRenews(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	rotator := NewCertRotator(ca, []string{"pigeon-enroll"}, 1*time.Hour)
 
-	// First call generates a cert.
 	cert1, err := rotator.GetCertificate(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cert1 == nil {
-		t.Fatal("expected non-nil cert")
-	}
+	must.NoError(t, err)
+	must.NotNil(t, cert1)
 
-	// Second call returns cached cert.
 	cert2, err := rotator.GetCertificate(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cert1 != cert2 {
-		t.Error("expected same cached cert pointer")
-	}
+	must.NoError(t, err)
+	must.EqOp(t, cert1, cert2, must.Sprint("expected same cached cert pointer"))
 }
 
 func TestGenerateClientCert_NoSANs(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	certPEM, keyPEM, err := GenerateCert(ca, "vault-agent", nil, 1*time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	// Parse cert
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		t.Fatal("X509KeyPair:", err)
-	}
+	must.NoError(t, err)
 	leaf, err := x509.ParseCertificate(tlsCert.Certificate[0])
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	if leaf.Subject.CommonName != "vault-agent" {
-		t.Errorf("CN = %q, want %q", leaf.Subject.CommonName, "vault-agent")
-	}
-	if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
-		t.Error("expected ClientAuth ext key usage")
-	}
-	if len(leaf.IPAddresses) != 0 {
-		t.Errorf("expected no IP SANs, got %v", leaf.IPAddresses)
-	}
-	if len(leaf.DNSNames) != 0 {
-		t.Errorf("expected no DNS SANs, got %v", leaf.DNSNames)
-	}
+	must.EqOp(t, "vault-agent", leaf.Subject.CommonName)
+	must.SliceLen(t, 1, leaf.ExtKeyUsage)
+	must.EqOp(t, x509.ExtKeyUsageClientAuth, leaf.ExtKeyUsage[0])
+	must.SliceLen(t, 0, leaf.IPAddresses)
+	must.SliceLen(t, 0, leaf.DNSNames)
 
-	// Verify chain
 	pool := x509.NewCertPool()
 	pool.AddCert(ca.Cert)
-	if _, err := leaf.Verify(x509.VerifyOptions{
-		Roots:     pool,
-		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}); err != nil {
-		t.Error("client cert should verify against CA:", err)
-	}
+	_, err = leaf.Verify(x509.VerifyOptions{Roots: pool, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}})
+	must.NoError(t, err)
 }
 
 func TestGenerateServerCert_CustomCN(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	certPEM, keyPEM, err := GenerateCert(ca, "pigeon", []string{"localhost", "10.0.0.1"}, 24*time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		t.Fatal("X509KeyPair:", err)
-	}
+	must.NoError(t, err)
 	leaf, err := x509.ParseCertificate(tlsCert.Certificate[0])
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	if leaf.Subject.CommonName != "pigeon" {
-		t.Errorf("CN = %q, want %q", leaf.Subject.CommonName, "pigeon")
-	}
-	if len(leaf.DNSNames) != 1 || leaf.DNSNames[0] != "localhost" {
-		t.Errorf("DNSNames = %v, want [localhost]", leaf.DNSNames)
-	}
-	if len(leaf.IPAddresses) != 1 || leaf.IPAddresses[0].String() != "10.0.0.1" {
-		t.Errorf("IPAddresses = %v, want [10.0.0.1]", leaf.IPAddresses)
-	}
+	must.EqOp(t, "pigeon", leaf.Subject.CommonName)
+	must.SliceLen(t, 1, leaf.DNSNames)
+	must.EqOp(t, "localhost", leaf.DNSNames[0])
+	must.SliceLen(t, 1, leaf.IPAddresses)
+	must.EqOp(t, "10.0.0.1", leaf.IPAddresses[0].String())
+
 	hasServer, hasClient := false, false
 	for _, eku := range leaf.ExtKeyUsage {
 		if eku == x509.ExtKeyUsageServerAuth {
@@ -344,225 +238,139 @@ func TestGenerateServerCert_CustomCN(t *testing.T) {
 			hasClient = true
 		}
 	}
-	if !hasServer || !hasClient {
-		t.Errorf("ExtKeyUsage = %v, want ServerAuth+ClientAuth", leaf.ExtKeyUsage)
-	}
+	must.True(t, hasServer, must.Sprint("expected ServerAuth EKU"))
+	must.True(t, hasClient, must.Sprint("expected ClientAuth EKU"))
 }
 
 func TestDeriveNamedCA_Deterministic(t *testing.T) {
 	ca1, err := DeriveNamedCA(testIKM, "mesh")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	ca2, err := DeriveNamedCA(testIKM, "mesh")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	if string(ca1.CertPEM) != string(ca2.CertPEM) {
-		t.Error("same IKM+name should produce identical CA certs")
-	}
-	if string(ca1.KeyPEM) != string(ca2.KeyPEM) {
-		t.Error("same IKM+name should produce identical CA keys")
-	}
+	must.EqOp(t, string(ca1.CertPEM), string(ca2.CertPEM))
+	must.EqOp(t, string(ca1.KeyPEM), string(ca2.KeyPEM))
 }
 
 func TestDeriveNamedCA_DifferentNames(t *testing.T) {
 	ca1, err := DeriveNamedCA(testIKM, "mesh")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	ca2, err := DeriveNamedCA(testIKM, "other")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	if string(ca1.KeyPEM) == string(ca2.KeyPEM) {
-		t.Error("different names should produce different CA keys")
-	}
+	must.NotEq(t, string(ca1.KeyPEM), string(ca2.KeyPEM))
 }
 
 func TestDeriveNamedCA_IsCA(t *testing.T) {
 	ca, err := DeriveNamedCA(testIKM, "mesh")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	block, _ := pem.Decode(ca.CertPEM)
-	if block == nil {
-		t.Fatal("no PEM block in cert")
-	}
+	must.NotNil(t, block)
 	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cert.IsCA {
-		t.Error("expected IsCA=true")
-	}
-	if cert.Subject.CommonName != "mesh" {
-		t.Errorf("CN = %q, want %q", cert.Subject.CommonName, "mesh")
-	}
+	must.NoError(t, err)
+	must.True(t, cert.IsCA)
+	must.EqOp(t, "mesh", cert.Subject.CommonName)
 }
 
 func TestLoadCA_RoundTrip(t *testing.T) {
-	// Derive a CA and export it as PEM, then load it back.
 	ca, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	keyDER, err := x509.MarshalPKCS8PrivateKey(ca.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
-	// Concatenated PEM: cert + key
 	var bundle []byte
 	bundle = append(bundle, ca.CertPEM...)
 	bundle = append(bundle, keyPEM...)
 
 	loaded, err := LoadCA(bundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !loaded.Cert.Equal(ca.Cert) {
-		t.Error("loaded cert should match original")
-	}
-	if !loaded.Key.Equal(ca.Key) {
-		t.Error("loaded key should match original")
-	}
+	must.NoError(t, err)
+	must.True(t, loaded.Cert.Equal(ca.Cert))
+	must.True(t, loaded.Key.Equal(ca.Key))
 
 	// Verify the loaded CA can sign certs.
 	certPEM, _, err := GenerateCert(loaded, "test", []string{"localhost"}, time.Hour)
-	if err != nil {
-		t.Fatalf("GenerateCert with loaded CA: %v", err)
-	}
+	must.NoError(t, err)
 	block, _ := pem.Decode(certPEM)
-	if block == nil {
-		t.Fatal("no PEM block in generated cert")
-	}
+	must.NotNil(t, block)
 	leaf, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	pool := x509.NewCertPool()
 	pool.AddCert(loaded.Cert)
-	if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool}); err != nil {
-		t.Fatalf("leaf cert should verify against loaded CA: %v", err)
-	}
+	_, err = leaf.Verify(x509.VerifyOptions{Roots: pool})
+	must.NoError(t, err)
 }
 
 func TestLoadCA_NotCA(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Generate a leaf cert and try to load it as a CA.
+	must.NoError(t, err)
 	certPEM, keyPEM, err := GenerateCert(ca, "leaf", nil, time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	var bundle []byte
 	bundle = append(bundle, certPEM...)
 	bundle = append(bundle, keyPEM...)
 
 	_, err = LoadCA(bundle)
-	if err == nil {
-		t.Fatal("LoadCA should reject non-CA certificate")
-	}
+	must.Error(t, err)
 }
 
 func TestLoadCA_MissingParts(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	// Cert only — no key.
 	_, err = LoadCA(ca.CertPEM)
-	if err == nil {
-		t.Error("LoadCA should fail with cert-only PEM")
-	}
+	must.Error(t, err)
 
 	// Key only — no cert.
 	keyDER, _ := x509.MarshalPKCS8PrivateKey(ca.Key)
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	_, err = LoadCA(keyPEM)
-	if err == nil {
-		t.Error("LoadCA should fail with key-only PEM")
-	}
+	must.Error(t, err)
 }
 
 func TestLoadCA_MismatchedKeyAndCert(t *testing.T) {
 	ca1, err := DeriveCA(testIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	// Derive a different CA by using a different IKM.
 	otherIKM := make([]byte, 32)
 	copy(otherIKM, testIKM)
 	otherIKM[0] ^= 0xff
 	ca2, err := DeriveCA(otherIKM)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	// Combine cert from ca1 with key from ca2.
 	keyDER, _ := x509.MarshalPKCS8PrivateKey(ca2.Key)
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	mixed := append(ca1.CertPEM, keyPEM...)
 
 	_, err = LoadCA(mixed)
-	if err == nil {
-		t.Fatal("LoadCA should fail with mismatched cert and key")
-	}
-	if !strings.Contains(err.Error(), "do not match") {
-		t.Errorf("unexpected error: %v", err)
-	}
+	must.Error(t, err)
+	must.StrContains(t, err.Error(), "do not match")
 }
 
 func TestDeriveJWTKey_Deterministic(t *testing.T) {
 	pub1, priv1, err := DeriveJWTKey(testIKM, "consul_auto_config")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	pub2, priv2, err := DeriveJWTKey(testIKM, "consul_auto_config")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !pub1.Equal(pub2) {
-		t.Error("same IKM+name should produce identical public keys")
-	}
-	if !priv1.Equal(priv2) {
-		t.Error("same IKM+name should produce identical private keys")
-	}
+	must.NoError(t, err)
+	must.True(t, pub1.Equal(pub2))
+	must.True(t, priv1.Equal(priv2))
 }
 
 func TestDeriveJWTKey_DifferentNames(t *testing.T) {
 	pub1, _, err := DeriveJWTKey(testIKM, "key_a")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	pub2, _, err := DeriveJWTKey(testIKM, "key_b")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pub1.Equal(pub2) {
-		t.Error("different names should produce different keys")
-	}
+	must.NoError(t, err)
+	must.False(t, pub1.Equal(pub2))
 }
 
 func TestDeriveJWTKey_SignVerify(t *testing.T) {
 	pub, priv, err := DeriveJWTKey(testIKM, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	msg := []byte("hello world")
 	sig := ed25519.Sign(priv, msg)
-	if !ed25519.Verify(pub, msg, sig) {
-		t.Error("signature verification failed")
-	}
+	must.True(t, ed25519.Verify(pub, msg, sig))
 }

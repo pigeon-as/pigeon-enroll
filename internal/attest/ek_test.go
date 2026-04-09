@@ -14,90 +14,61 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/shoenig/test/must"
 )
 
 func TestLoadHashFile(t *testing.T) {
-	// Create a temp hash file.
 	dir := t.TempDir()
 	hashPath := filepath.Join(dir, "hashes")
 	content := "# EK hashes\nabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\n\n# another\n1111111111111111111111111111111111111111111111111111111111111111\n"
-	if err := os.WriteFile(hashPath, []byte(content), 0600); err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, os.WriteFile(hashPath, []byte(content), 0600))
 
 	hashes, err := loadHashFile(hashPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hashes) != 2 {
-		t.Fatalf("expected 2 hashes, got %d", len(hashes))
-	}
-	if !hashes["abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"] {
-		t.Fatal("expected hash not found")
-	}
+	must.NoError(t, err)
+	must.MapLen(t, 2, hashes)
+	must.MapContainsKey(t, hashes, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
 }
 
 func TestLoadHashFile_InvalidHex(t *testing.T) {
 	dir := t.TempDir()
 	hashPath := filepath.Join(dir, "hashes")
-	if err := os.WriteFile(hashPath, []byte("not-hex\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, os.WriteFile(hashPath, []byte("not-hex\n"), 0600))
 
 	_, err := loadHashFile(hashPath)
-	if err == nil {
-		t.Fatal("expected error for invalid hex")
-	}
+	must.Error(t, err)
 }
 
 func TestLoadHashFile_WrongLength(t *testing.T) {
 	dir := t.TempDir()
 	hashPath := filepath.Join(dir, "hashes")
 	// Valid hex but not SHA-256 length (only 16 bytes / 32 hex chars).
-	if err := os.WriteFile(hashPath, []byte("abcdef0123456789abcdef0123456789\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, os.WriteFile(hashPath, []byte("abcdef0123456789abcdef0123456789\n"), 0600))
 
 	_, err := loadHashFile(hashPath)
-	if err == nil {
-		t.Fatal("expected error for wrong-length hash")
-	}
+	must.Error(t, err)
 }
 
 func TestEKValidator_HashMatch(t *testing.T) {
-	// Generate a test key.
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	// Compute the hash.
 	ekDER, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
 	h := sha256.Sum256(ekDER)
 	hash := hex.EncodeToString(h[:])
 
-	// Create hash file.
 	dir := t.TempDir()
 	hashPath := filepath.Join(dir, "hashes")
-	if err := os.WriteFile(hashPath, []byte(hash+"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, os.WriteFile(hashPath, []byte(hash+"\n"), 0600))
 
 	v, err := NewEKValidator("", hashPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
-	// Should pass.
-	if err := v.Validate(&key.PublicKey, nil); err != nil {
-		t.Fatalf("expected valid, got: %v", err)
-	}
+	must.NoError(t, v.Validate(&key.PublicKey, nil))
 
 	// Different key should fail.
 	key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err := v.Validate(&key2.PublicKey, nil); err == nil {
-		t.Fatal("expected error for unknown key")
-	}
+	must.Error(t, v.Validate(&key2.PublicKey, nil))
 }
 
 func TestEKValidator_CertChain(t *testing.T) {
@@ -113,9 +84,7 @@ func TestEKValidator_CertChain(t *testing.T) {
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
 	caCertDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	caCert, _ := x509.ParseCertificate(caCertDER)
 
 	// Create EK cert signed by CA.
@@ -127,55 +96,37 @@ func TestEKValidator_CertChain(t *testing.T) {
 		NotAfter:     time.Now().Add(time.Hour),
 	}
 	ekCertDER, err := x509.CreateCertificate(rand.Reader, ekTemplate, caCert, &ekKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	ekCert, _ := x509.ParseCertificate(ekCertDER)
 
 	// Write CA cert to directory as PEM.
 	caDir := t.TempDir()
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCertDER})
-	if err := os.WriteFile(filepath.Join(caDir, "ca.pem"), caPEM, 0600); err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, os.WriteFile(filepath.Join(caDir, "ca.pem"), caPEM, 0600))
 
 	v, err := NewEKValidator(caDir, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	// Valid cert chain should pass.
-	if err := v.Validate(&ekKey.PublicKey, ekCert); err != nil {
-		t.Fatalf("expected valid, got: %v", err)
-	}
+	must.NoError(t, v.Validate(&ekKey.PublicKey, ekCert))
 
 	// Cert without matching pubkey should fail.
 	otherKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err := v.Validate(&otherKey.PublicKey, ekCert); err == nil {
-		t.Fatal("expected error for mismatched pubkey")
-	}
+	must.Error(t, v.Validate(&otherKey.PublicKey, ekCert))
 
 	// Nil cert with CA-only validator should fail.
-	if err := v.Validate(&ekKey.PublicKey, nil); err == nil {
-		t.Fatal("expected error for nil cert with CA-only validator")
-	}
+	must.Error(t, v.Validate(&ekKey.PublicKey, nil))
 }
 
 func TestEKValidator_EmptyCADir(t *testing.T) {
 	dir := t.TempDir()
 	_, err := NewEKValidator(dir, "")
-	if err == nil {
-		t.Fatal("expected error for empty CA directory")
-	}
+	must.Error(t, err)
 }
 
 func TestEKValidator_UnparseableCAFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "garbage.txt"), []byte("not a cert"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, os.WriteFile(filepath.Join(dir, "garbage.txt"), []byte("not a cert"), 0600))
 	_, err := NewEKValidator(dir, "")
-	if err == nil {
-		t.Fatal("expected error for unparseable file in CA directory")
-	}
+	must.Error(t, err)
 }

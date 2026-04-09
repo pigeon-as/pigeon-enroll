@@ -16,6 +16,7 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/pki"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
+	"github.com/shoenig/test/must"
 )
 
 var (
@@ -47,9 +48,7 @@ func testServer(t *testing.T) *Server {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	srv, err := New(logger, cfg, testHMACKey, secrets, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -70,26 +69,14 @@ func TestClaimSuccess(t *testing.T) {
 
 	srv.Handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
-	}
+	must.EqOp(t, http.StatusOK, w.Code)
 
 	var resp claimResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(resp.Secrets) != 3 {
-		t.Errorf("expected 3 secrets, got %d", len(resp.Secrets))
-	}
-	if resp.Secrets["secret_a"] != "dGVzdA==" {
-		t.Errorf("secret_a = %q", resp.Secrets["secret_a"])
-	}
-	if len(resp.Vars) != 1 {
-		t.Errorf("expected 1 var, got %d", len(resp.Vars))
-	}
-	if resp.Vars["datacenter"] != "dc1" {
-		t.Errorf("datacenter = %q", resp.Vars["datacenter"])
-	}
+	must.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	must.MapLen(t, 3, resp.Secrets)
+	must.EqOp(t, "dGVzdA==", resp.Secrets["secret_a"])
+	must.MapLen(t, 1, resp.Vars)
+	must.EqOp(t, "dc1", resp.Vars["datacenter"])
 }
 
 func TestClaimInvalidToken(t *testing.T) {
@@ -104,15 +91,12 @@ func TestClaimInvalidToken(t *testing.T) {
 
 	srv.Handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", w.Code)
-	}
+	must.EqOp(t, http.StatusForbidden, w.Code)
 }
 
 func TestClaimExpiredToken(t *testing.T) {
 	srv := testServer(t)
 
-	// Token from 2 windows ago — outside current + previous check.
 	expired := token.Generate(testHMACKey, time.Now().Add(-2*testWindow-time.Second), testWindow, "")
 	body, _ := json.Marshal(claimRequest{
 		Token: expired,
@@ -123,9 +107,7 @@ func TestClaimExpiredToken(t *testing.T) {
 
 	srv.Handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", w.Code)
-	}
+	must.EqOp(t, http.StatusForbidden, w.Code)
 }
 
 func TestClaimOneTimeToken(t *testing.T) {
@@ -138,9 +120,7 @@ func TestClaimOneTimeToken(t *testing.T) {
 	req.RemoteAddr = "192.168.1.100:12345"
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("first claim: status = %d, want 200", w.Code)
-	}
+	must.EqOp(t, http.StatusOK, w.Code)
 
 	// Second use of same token should be rejected (nonce replay).
 	body2, _ := json.Marshal(claimRequest{Token: tok})
@@ -148,9 +128,7 @@ func TestClaimOneTimeToken(t *testing.T) {
 	req2.RemoteAddr = "192.168.1.100:12345"
 	w2 := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w2, req2)
-	if w2.Code != http.StatusForbidden {
-		t.Fatalf("replay claim: status = %d, want 403", w2.Code)
-	}
+	must.EqOp(t, http.StatusForbidden, w2.Code)
 }
 
 func TestHealth(t *testing.T) {
@@ -160,33 +138,26 @@ func TestHealth(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d", w.Code)
-	}
+	must.EqOp(t, http.StatusOK, w.Code)
 }
 
 func TestClaimScopeMismatch(t *testing.T) {
 	srv := testServer(t)
 
-	// Generate a worker-scoped token.
 	workerTok := token.Generate(testHMACKey, time.Now(), testWindow, "worker")
 
-	// Try to claim with server scope — should fail because HMAC won't match.
 	body, _ := json.Marshal(claimRequest{Token: workerTok, Scope: "server"})
 	req := httptest.NewRequest("POST", "/claim", bytes.NewReader(body))
 	req.RemoteAddr = "192.168.1.100:12345"
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("scope mismatch: status = %d, want 403", w.Code)
-	}
+	must.EqOp(t, http.StatusForbidden, w.Code)
 }
 
 func TestClaimScopeMatch(t *testing.T) {
 	srv := testServer(t)
 
-	// Generate a worker-scoped token and claim with matching scope.
 	workerTok := token.Generate(testHMACKey, time.Now(), testWindow, "worker")
 
 	body, _ := json.Marshal(claimRequest{Token: workerTok, Scope: "worker"})
@@ -195,15 +166,12 @@ func TestClaimScopeMatch(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("scope match: status = %d, want 200, body = %s", w.Code, w.Body.String())
-	}
+	must.EqOp(t, http.StatusOK, w.Code)
 }
 
 func TestClaimRateLimited(t *testing.T) {
 	srv := testServer(t)
 
-	// Send burst+1 requests to trigger rate limiting.
 	for i := 0; i < 6; i++ {
 		body, _ := json.Marshal(claimRequest{Token: "deadbeefdeadbeefdeadbeefdeadbeef" + "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"})
 		req := httptest.NewRequest("POST", "/claim", bytes.NewReader(body))
@@ -212,14 +180,9 @@ func TestClaimRateLimited(t *testing.T) {
 		srv.Handler().ServeHTTP(w, req)
 
 		if i < 5 {
-			// First 5 should not be rate limited (burst=5).
-			if w.Code == http.StatusTooManyRequests {
-				t.Fatalf("request %d should not be rate limited", i)
-			}
+			must.NotEq(t, http.StatusTooManyRequests, w.Code, must.Sprintf("request %d should not be rate limited", i))
 		} else {
-			if w.Code != http.StatusTooManyRequests {
-				t.Fatalf("request %d: status = %d, want 429", i, w.Code)
-			}
+			must.EqOp(t, http.StatusTooManyRequests, w.Code)
 		}
 	}
 }
@@ -230,9 +193,9 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 		TokenWindow: testWindow,
 		Vars:        map[string]string{"k": "v"},
 		CAs: []config.CASpec{
-			{Name: "shared"},                                        // empty scope = public only
-			{Name: "server_ca", Scope: []string{"server"}},         // server gets private key
-			{Name: "both_ca", Scope: []string{"server", "worker"}}, // both get private key
+			{Name: "shared"},
+			{Name: "server_ca", Scope: []string{"server"}},
+			{Name: "both_ca", Scope: []string{"server", "worker"}},
 		},
 	}
 	cas := map[string]secrets.CAEntry{
@@ -241,12 +204,10 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 		"both_ca":   {CertPEM: "both-cert", PrivateKeyPEM: "both-key"},
 	}
 	srv, err := New(logger, cfg, testHMACKey, nil, cas, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	t.Cleanup(srv.Close)
 
-	// Claim with worker scope — shared has no key (empty scope), server_ca has no key, both_ca has key.
+	// Worker scope: shared no key (empty scope), server_ca no key, both_ca has key.
 	workerTok := token.Generate(testHMACKey, time.Now(), testWindow, "worker")
 	body, _ := json.Marshal(claimRequest{Token: workerTok, Scope: "worker"})
 	req := httptest.NewRequest("POST", "/claim", bytes.NewReader(body))
@@ -254,33 +215,18 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
-	}
+	must.EqOp(t, http.StatusOK, w.Code)
 	var resp claimResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.CA) != 3 {
-		t.Fatalf("expected 3 CAs for worker scope, got %d: %v", len(resp.CA), resp.CA)
-	}
-	if resp.CA["shared"].CertPEM != "shared-cert" {
-		t.Error("unscoped CA 'shared' should have cert_pem")
-	}
-	if resp.CA["shared"].PrivateKeyPEM != "" {
-		t.Error("unscoped CA 'shared' should NOT have private_key_pem (empty scope = public only)")
-	}
-	if resp.CA["server_ca"].CertPEM != "server-cert" {
-		t.Error("server-scoped CA should have cert_pem for worker scope")
-	}
-	if resp.CA["server_ca"].PrivateKeyPEM != "" {
-		t.Error("server-scoped CA should NOT have private_key_pem for worker scope")
-	}
-	if resp.CA["both_ca"].CertPEM != "both-cert" || resp.CA["both_ca"].PrivateKeyPEM != "both-key" {
-		t.Error("both-scoped CA should have cert and key for worker scope")
-	}
+	must.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	must.MapLen(t, 3, resp.CA)
+	must.EqOp(t, "shared-cert", resp.CA["shared"].CertPEM)
+	must.EqOp(t, "", resp.CA["shared"].PrivateKeyPEM)
+	must.EqOp(t, "server-cert", resp.CA["server_ca"].CertPEM)
+	must.EqOp(t, "", resp.CA["server_ca"].PrivateKeyPEM)
+	must.EqOp(t, "both-cert", resp.CA["both_ca"].CertPEM)
+	must.EqOp(t, "both-key", resp.CA["both_ca"].PrivateKeyPEM)
 
-	// Claim with server scope — shared still no key, server_ca has key, both_ca has key.
+	// Server scope: shared still no key, server_ca has key, both_ca has key.
 	serverTok := token.Generate(testHMACKey, time.Now(), testWindow, "server")
 	body2, _ := json.Marshal(claimRequest{Token: serverTok, Scope: "server"})
 	req2 := httptest.NewRequest("POST", "/claim", bytes.NewReader(body2))
@@ -288,35 +234,20 @@ func TestClaimCAScopeFiltering(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w2, req2)
 
-	if w2.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", w2.Code, w2.Body.String())
-	}
+	must.EqOp(t, http.StatusOK, w2.Code)
 	var resp2 claimResponse
-	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
-		t.Fatal(err)
-	}
-	if len(resp2.CA) != 3 {
-		t.Fatalf("expected 3 CAs for server scope, got %d", len(resp2.CA))
-	}
-	if resp2.CA["shared"].PrivateKeyPEM != "" {
-		t.Error("unscoped CA 'shared' should NOT have private_key_pem even for server scope")
-	}
-	if resp2.CA["server_ca"].PrivateKeyPEM != "server-key" {
-		t.Error("server-scoped CA should have private_key_pem for server scope")
-	}
-	if resp2.CA["both_ca"].PrivateKeyPEM != "both-key" {
-		t.Error("both-scoped CA should have private_key_pem for server scope")
-	}
+	must.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+	must.MapLen(t, 3, resp2.CA)
+	must.EqOp(t, "", resp2.CA["shared"].PrivateKeyPEM)
+	must.EqOp(t, "server-key", resp2.CA["server_ca"].PrivateKeyPEM)
+	must.EqOp(t, "both-key", resp2.CA["both_ca"].PrivateKeyPEM)
 }
 
 func TestClaimCertIssuance(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	// Derive a real CA so LoadCA works in New().
 	namedCA, err := pki.DeriveNamedCA(testKey, "auth")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 
 	cfg := config.Config{
 		TokenWindow: testWindow,
@@ -338,12 +269,10 @@ func TestClaimCertIssuance(t *testing.T) {
 		"auth": {CertPEM: string(namedCA.CertPEM), PrivateKeyPEM: string(namedCA.KeyPEM)},
 	}
 	srv, err := New(logger, cfg, testHMACKey, nil, cas, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	t.Cleanup(srv.Close)
 
-	// Worker claim — should get cert issued, no CA private key.
+	// Worker claim: cert issued, no CA private key.
 	workerTok := token.Generate(testHMACKey, time.Now(), testWindow, "worker")
 	body, _ := json.Marshal(claimRequest{Token: workerTok, Scope: "worker"})
 	req := httptest.NewRequest("POST", "/claim", bytes.NewReader(body))
@@ -351,35 +280,19 @@ func TestClaimCertIssuance(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
-	}
+	must.EqOp(t, http.StatusOK, w.Code)
 	var resp claimResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 
-	// CA: cert_pem only, no private_key_pem (scope=server, claim=worker).
-	if resp.CA["auth"].CertPEM == "" {
-		t.Error("auth CA should have cert_pem")
-	}
-	if resp.CA["auth"].PrivateKeyPEM != "" {
-		t.Error("auth CA should NOT have private_key_pem for worker scope")
-	}
+	must.NotEq(t, "", resp.CA["auth"].CertPEM)
+	must.EqOp(t, "", resp.CA["auth"].PrivateKeyPEM)
 
-	// Cert: should be issued.
-	if len(resp.Certs) != 1 {
-		t.Fatalf("expected 1 cert, got %d", len(resp.Certs))
-	}
+	must.MapLen(t, 1, resp.Certs)
 	cert := resp.Certs["auth_worker"]
-	if cert.CertPEM == "" {
-		t.Error("auth_worker cert should have cert_pem")
-	}
-	if cert.KeyPEM == "" {
-		t.Error("auth_worker cert should have key_pem")
-	}
+	must.NotEq(t, "", cert.CertPEM)
+	must.NotEq(t, "", cert.KeyPEM)
 
-	// Server claim — should get CA private key, no cert (scope mismatch).
+	// Server claim: CA private key, no cert (scope mismatch).
 	serverTok := token.Generate(testHMACKey, time.Now(), testWindow, "server")
 	body2, _ := json.Marshal(claimRequest{Token: serverTok, Scope: "server"})
 	req2 := httptest.NewRequest("POST", "/claim", bytes.NewReader(body2))
@@ -387,19 +300,11 @@ func TestClaimCertIssuance(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w2, req2)
 
-	if w2.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", w2.Code, w2.Body.String())
-	}
+	must.EqOp(t, http.StatusOK, w2.Code)
 	var resp2 claimResponse
-	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
-		t.Fatal(err)
-	}
-	if resp2.CA["auth"].PrivateKeyPEM == "" {
-		t.Error("auth CA should have private_key_pem for server scope")
-	}
-	if len(resp2.Certs) != 0 {
-		t.Errorf("expected 0 certs for server scope, got %d", len(resp2.Certs))
-	}
+	must.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+	must.NotEq(t, "", resp2.CA["auth"].PrivateKeyPEM)
+	must.MapLen(t, 0, resp2.Certs)
 }
 
 func TestClaimRequireTPM(t *testing.T) {
@@ -409,9 +314,7 @@ func TestClaimRequireTPM(t *testing.T) {
 		RequireTPM:  true,
 	}
 	srv, err := New(logger, cfg, testHMACKey, nil, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	t.Cleanup(srv.Close)
 
 	tok := token.Generate(testHMACKey, time.Now(), testWindow, "")
@@ -421,12 +324,8 @@ func TestClaimRequireTPM(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("require_tpm: status = %d, want 403", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "TPM attestation required") {
-		t.Fatalf("require_tpm: unexpected body: %s", w.Body.String())
-	}
+	must.EqOp(t, http.StatusForbidden, w.Code)
+	must.StrContains(t, w.Body.String(), "TPM attestation required")
 }
 
 func TestClaimLargeBody(t *testing.T) {
@@ -438,7 +337,5 @@ func TestClaimLargeBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("large body: status = %d, want 400", w.Code)
-	}
+	must.EqOp(t, http.StatusBadRequest, w.Code)
 }

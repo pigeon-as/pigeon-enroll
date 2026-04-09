@@ -143,16 +143,8 @@ func GenerateCert(ca *CA, cn string, hosts []string, ttl time.Duration) (certPEM
 
 // IssueCert creates an ephemeral Ed25519 leaf certificate with explicit EKU control.
 // Used by cert blocks to auto-issue leaf certs during claim. dnsSANs are added
-// as DNS subject alternative names on the certificate.
-func IssueCert(ca *CA, cn string, dnsSANs []string, ttl time.Duration, serverAuth, clientAuth bool) (certPEM, keyPEM []byte, err error) {
-	_, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate leaf key: %w", err)
-	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate serial: %w", err)
-	}
+// as DNS subject alternative names and ipSANs as IP subject alternative names.
+func IssueCert(ca *CA, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, serverAuth, clientAuth bool) (certPEM, keyPEM []byte, err error) {
 	var eku []x509.ExtKeyUsage
 	if serverAuth {
 		eku = append(eku, x509.ExtKeyUsageServerAuth)
@@ -162,25 +154,15 @@ func IssueCert(ca *CA, cn string, dnsSANs []string, ttl time.Duration, serverAut
 	}
 	now := time.Now()
 	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: cn},
-		NotBefore:    now.Add(-5 * time.Minute),
-		NotAfter:     now.Add(ttl),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  eku,
-		DNSNames:     dnsSANs,
+		Subject:     pkix.Name{CommonName: cn},
+		NotBefore:   now.Add(-5 * time.Minute),
+		NotAfter:    now.Add(ttl),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: eku,
+		DNSNames:    dnsSANs,
+		IPAddresses: ipSANs,
 	}
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, key.Public(), ca.Key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("sign leaf cert: %w", err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("marshal leaf key: %w", err)
-	}
-	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	return certPEM, keyPEM, nil
+	return signLeaf(ca, tmpl)
 }
 
 // GenerateClientCert creates an ephemeral Ed25519 client certificate bundle
@@ -343,16 +325,6 @@ func parsePrivateKey(der []byte, pemType string) (crypto.Signer, error) {
 }
 
 func generateLeaf(ca *CA, cn string, hosts []string, validity time.Duration) (certPEM, keyPEM []byte, err error) {
-	_, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate leaf key: %w", err)
-	}
-
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate serial: %w", err)
-	}
-
 	// Infer EKU from inputs: SANs present → server+client, otherwise client-only.
 	eku := []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
 	if len(hosts) > 0 {
@@ -361,12 +333,11 @@ func generateLeaf(ca *CA, cn string, hosts []string, validity time.Duration) (ce
 
 	now := time.Now()
 	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: cn},
-		NotBefore:    now.Add(-5 * time.Minute),
-		NotAfter:     now.Add(validity),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  eku,
+		Subject:     pkix.Name{CommonName: cn},
+		NotBefore:   now.Add(-5 * time.Minute),
+		NotAfter:    now.Add(validity),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: eku,
 	}
 
 	for _, h := range hosts {
@@ -376,6 +347,23 @@ func generateLeaf(ca *CA, cn string, hosts []string, validity time.Duration) (ce
 			tmpl.DNSNames = append(tmpl.DNSNames, h)
 		}
 	}
+
+	return signLeaf(ca, tmpl)
+}
+
+// signLeaf generates an ephemeral Ed25519 key, assigns a random serial, and
+// signs the certificate template with the CA. Returns PEM-encoded cert and key.
+func signLeaf(ca *CA, tmpl *x509.Certificate) (certPEM, keyPEM []byte, err error) {
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate leaf key: %w", err)
+	}
+
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate serial: %w", err)
+	}
+	tmpl.SerialNumber = serial
 
 	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, key.Public(), ca.Key)
 	if err != nil {

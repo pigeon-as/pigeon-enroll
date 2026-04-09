@@ -28,7 +28,8 @@ type CASpec struct {
 
 // CertSpec describes a leaf certificate to auto-issue during claim.
 // Follows the Vault PKI role pattern: issuance policy separate from CA.
-// When CN is empty, the claim subject (node identity) is used as the cert CN.
+// If CN is empty, claim issuance uses the claim subject (node identity) as the
+// cert CN, while server-side self-issuance for a non-empty scope uses hostname.
 type CertSpec struct {
 	Name       string   `hcl:"name,label"`
 	CA         string   `hcl:"ca"`                   // must reference a ca block name
@@ -37,8 +38,9 @@ type CertSpec struct {
 	TTL        time.Duration
 	ClientAuth *bool    `hcl:"client_auth,optional"`  // default true
 	ServerAuth *bool    `hcl:"server_auth,optional"`  // default false
-	CN         string   `hcl:"cn,optional"`           // static common name (if empty, claim subject is used)
+	CN         string   `hcl:"cn,optional"`           // static common name; if empty, claim uses subject, server self-issue uses hostname
 	DNSSANs    []string `hcl:"dns_sans,optional"`     // DNS subject alternative names
+	IPSANs     []string `hcl:"ip_sans,optional"`      // IP subject alternative names
 }
 
 // JWTSpec describes a JWT to sign and include in the claim response.
@@ -91,24 +93,17 @@ func Load(path string) (Config, error) {
 	if cfg.NoncePath == "" {
 		cfg.NoncePath = "/var/lib/pigeon-enroll/nonces"
 	}
-	if cfg.TokenWindowRaw == "" {
-		cfg.TokenWindow = 30 * time.Minute
-	} else {
-		d, err := time.ParseDuration(cfg.TokenWindowRaw)
-		if err != nil {
-			return Config{}, fmt.Errorf("parse token_window: %w", err)
-		}
-		cfg.TokenWindow = d
+	d, err := parseDuration(cfg.TokenWindowRaw, 30*time.Minute)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse token_window: %w", err)
 	}
-	if cfg.ServerCertTTLRaw == "" {
-		cfg.ServerCertTTL = 30 * 24 * time.Hour
-	} else {
-		d, err := time.ParseDuration(cfg.ServerCertTTLRaw)
-		if err != nil {
-			return Config{}, fmt.Errorf("parse server_cert_ttl: %w", err)
-		}
-		cfg.ServerCertTTL = d
+	cfg.TokenWindow = d
+
+	d, err = parseDuration(cfg.ServerCertTTLRaw, 30*24*time.Hour)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse server_cert_ttl: %w", err)
 	}
+	cfg.ServerCertTTL = d
 
 	for i, c := range cfg.Certs {
 		if c.TTLRaw == "" {
@@ -136,6 +131,14 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// parseDuration parses a Go duration string, returning defaultVal if raw is empty.
+func parseDuration(raw string, defaultVal time.Duration) (time.Duration, error) {
+	if raw == "" {
+		return defaultVal, nil
+	}
+	return time.ParseDuration(raw)
 }
 
 func validate(cfg Config) error {
@@ -212,6 +215,11 @@ func validate(cfg Config) error {
 		for _, d := range c.DNSSANs {
 			if d == "" {
 				return fmt.Errorf("cert %q: dns_sans entries must not be empty strings", c.Name)
+			}
+		}
+		for _, ip := range c.IPSANs {
+			if net.ParseIP(ip) == nil {
+				return fmt.Errorf("cert %q: ip_sans entry %q is not a valid IP address", c.Name, ip)
 			}
 		}
 		if c.TTL < time.Minute {
