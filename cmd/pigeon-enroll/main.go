@@ -16,33 +16,17 @@
 package main
 
 import (
-	"context"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/hex"
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
-	"os/signal"
-	"strconv"
 	"strings"
-	"time"
 
-	"github.com/pigeon-as/pigeon-enroll/internal/action"
-	"github.com/pigeon-as/pigeon-enroll/internal/api"
 	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
-	"github.com/pigeon-as/pigeon-enroll/internal/audit"
-	"github.com/pigeon-as/pigeon-enroll/internal/claim"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
-	"github.com/pigeon-as/pigeon-enroll/internal/pki"
-	"github.com/pigeon-as/pigeon-enroll/internal/render"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
-	"github.com/pigeon-as/pigeon-enroll/internal/token"
-	"github.com/pigeon-as/pigeon-enroll/internal/tpm"
+	"github.com/pigeon-as/pigeon-enroll/internal/tpmseal"
 )
 
 const (
@@ -81,6 +65,8 @@ func main() {
 		os.Exit(cmdClaim(args))
 	case "ek-hash":
 		os.Exit(cmdEKHash(args))
+	case "seal-key":
+		os.Exit(cmdSealKey(args))
 	case "render":
 		os.Exit(cmdRender(args))
 	case "run-actions":
@@ -103,16 +89,26 @@ Commands:
   generate-cert   Generate a TLS certificate
   claim           Claim secrets from an enrollment server
   ek-hash         Print EK public key hash (for ek_hash_path allowlist)
+  seal-key        Seal enrollment key to TPM (for key_source = "tpm")
   render          Render HCL templates with variables
   run-actions     Run post-claim lifecycle actions
   version         Print version`)
 }
 
-// loadConfig loads the HCL config, reads the enrollment key, and derives
-// the HMAC signing key.
+// newFlagSet creates a flag.FlagSet with ExitOnError for a subcommand.
+func newFlagSet(name string) *flag.FlagSet {
+	return flag.NewFlagSet(name, flag.ExitOnError)
+}
+
+// loadConfig loads the HCL config, reads the enrollment key (from file or TPM),
+// and derives the HMAC signing key.
 func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byte, []byte, error) {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(logLevel)); err != nil {
+		return nil, config.Config{}, nil, nil, fmt.Errorf("invalid log-level %q: %w", logLevel, err)
+	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: parseLevel(logLevel),
+		Level: level,
 	}))
 
 	cfg, err := config.Load(configPath)
@@ -120,17 +116,25 @@ func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byt
 		return logger, config.Config{}, nil, nil, fmt.Errorf("load config: %w", err)
 	}
 
-	if err := config.CheckKeyFile(cfg.KeyPath); err != nil {
-		return logger, config.Config{}, nil, nil, err
-	}
-
-	enrollmentKeyHex, err := os.ReadFile(cfg.KeyPath)
-	if err != nil {
-		return logger, config.Config{}, nil, nil, fmt.Errorf("read enrollment key: %w", err)
-	}
-	ikm, err := hex.DecodeString(strings.TrimSpace(string(enrollmentKeyHex)))
-	if err != nil {
-		return logger, config.Config{}, nil, nil, fmt.Errorf("decode enrollment key: %w", err)
+	var ikm []byte
+	switch cfg.KeySource {
+	case "tpm":
+		ikm, err = tpmseal.Unseal(cfg.KeyPath)
+		if err != nil {
+			return logger, config.Config{}, nil, nil, fmt.Errorf("unseal enrollment key from TPM: %w", err)
+		}
+	default: // "file"
+		if err := config.CheckKeyFile(cfg.KeyPath); err != nil {
+			return logger, config.Config{}, nil, nil, err
+		}
+		enrollmentKeyHex, err := os.ReadFile(cfg.KeyPath)
+		if err != nil {
+			return logger, config.Config{}, nil, nil, fmt.Errorf("read enrollment key: %w", err)
+		}
+		ikm, err = hex.DecodeString(strings.TrimSpace(string(enrollmentKeyHex)))
+		if err != nil {
+			return logger, config.Config{}, nil, nil, fmt.Errorf("decode enrollment key: %w", err)
+		}
 	}
 
 	if err := secrets.ValidateIKM(ikm); err != nil {
@@ -145,462 +149,7 @@ func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byt
 	return logger, cfg, ikm, hmacKey, nil
 }
 
-func cmdServer(args []string) int {
-	flags := flag.NewFlagSet("server", flag.ExitOnError)
-	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
-	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
-	skipTLS := flags.Bool("skip-tls", false, "Allow plain HTTP (no TLS)")
-	flags.Parse(args)
-
-	logger, cfg, ikm, hmacKey, err := loadConfig(*configPath, *logLevel)
-	if err != nil {
-		logger.Error(err.Error())
-		return 1
-	}
-	logger.Info("enrollment key", "path", cfg.KeyPath)
-
-	hostname, err := os.Hostname()
-	if err != nil {
-		logger.Error("get hostname", "err", err)
-		return 1
-	}
-
-	derived, cas, _, jwtKeys, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm, "server", hostname)
-	if err != nil {
-		logger.Error("resolve secrets", "err", err)
-		return 1
-	}
-	if derived != nil {
-		logger.Info("secrets resolved", "count", len(derived), "path", cfg.SecretsPath)
-	}
-
-	al, err := audit.Open(cfg.AuditPath)
-	if err != nil {
-		logger.Error("open audit log", "err", err)
-		return 1
-	}
-	defer al.Close()
-	if cfg.AuditPath != "" {
-		logger.Info("audit log", "path", cfg.AuditPath)
-	}
-
-	srv, err := api.New(logger, cfg, hmacKey, derived, cas, jwtKeys, al)
-	if err != nil {
-		logger.Error("create api server", "err", err)
-		return 1
-	}
-
-	httpServer := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	go func() {
-		<-ctx.Done()
-		logger.Info("shutting down")
-		srv.Close()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		httpServer.Shutdown(shutCtx)
-	}()
-
-	if !*skipTLS {
-		// Auto-TLS with mTLS: derive CA, rotate server cert automatically.
-		ca, err := pki.DeriveCA(ikm)
-		if err != nil {
-			logger.Error("derive CA", "err", err)
-			return 1
-		}
-		caPool := x509.NewCertPool()
-		caPool.AddCert(ca.Cert)
-		rotator := pki.NewCertRotator(ca, []string{"pigeon-enroll"}, cfg.ServerCertTTL)
-		httpServer.TLSConfig = &tls.Config{
-			MinVersion:     tls.VersionTLS12,
-			GetCertificate: rotator.GetCertificate,
-			ClientAuth:     tls.RequireAndVerifyClientCert,
-			ClientCAs:      caPool,
-		}
-		logger.Info("listening (mTLS)", "addr", cfg.Listen, "server_cert_ttl", cfg.ServerCertTTL)
-		if err := httpServer.ListenAndServeTLS("", ""); err != http.ErrServerClosed {
-			logger.Error("listen", "err", err)
-			return 1
-		}
-	} else {
-		logger.Warn("listening without TLS (-skip-tls)", "addr", cfg.Listen)
-		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
-			logger.Error("listen", "err", err)
-			return 1
-		}
-	}
-
-	return 0
-}
-
-func cmdGenerateToken(args []string) int {
-	flags := flag.NewFlagSet("generate-token", flag.ExitOnError)
-	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
-	scope := flags.String("scope", "", "Scope for token generation")
-	flags.Parse(args)
-
-	_, cfg, _, hmacKey, err := loadConfig(*configPath, "info")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
-	fmt.Print(token.Generate(hmacKey, time.Now(), cfg.TokenWindow, *scope))
-	return 0
-}
-
-func cmdGenerateCert(args []string) int {
-	flags := flag.NewFlagSet("generate-cert", flag.ExitOnError)
-	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
-	fromCA := flags.String("from-ca", "", "PEM file with CA cert+key (alternative to -config)")
-	cn := flags.String("cn", "", "Certificate CommonName (default: pigeon-enroll)")
-	ttl := flags.String("ttl", "24h", "Certificate validity duration")
-	bundlePath := flags.String("bundle", "", "Write PEM bundle (cert+key+ca) to file, or - for stdout")
-	certPath := flags.String("cert", "", "Write certificate PEM to file")
-	keyPath := flags.String("key", "", "Write private key PEM to file")
-	caPath := flags.String("ca", "", "Write CA certificate PEM to file")
-	encodeBase64 := flags.Bool("base64", false, "Base64-encode bundle output (requires -bundle)")
-	var dnsNames, ipAddrs stringSlice
-	flags.Var(&dnsNames, "dns", "DNS SAN (repeatable)")
-	flags.Var(&ipAddrs, "ip", "IP SAN (repeatable)")
-	flags.Parse(args)
-
-	// Validate: at least one output flag required.
-	if *bundlePath == "" && *certPath == "" && *keyPath == "" && *caPath == "" {
-		fmt.Fprintln(os.Stderr, "error: at least one output flag required (-bundle, -cert, -key, -ca)")
-		return 1
-	}
-
-	// Validate: -base64 only with -bundle.
-	if *encodeBase64 && *bundlePath == "" {
-		fmt.Fprintln(os.Stderr, "error: -base64 requires -bundle")
-		return 1
-	}
-
-	// Validate: -ip values must be valid IPs.
-	for _, ip := range ipAddrs {
-		if net.ParseIP(ip) == nil {
-			fmt.Fprintf(os.Stderr, "invalid IP address: %s\n", ip)
-			return 1
-		}
-	}
-
-	// Parse TTL.
-	certTTL, err := time.ParseDuration(*ttl)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "invalid -ttl: %v\n", err)
-		return 1
-	}
-	if certTTL < time.Second {
-		fmt.Fprintln(os.Stderr, "error: -ttl must be at least 1s")
-		return 1
-	}
-
-	// Load CA: either from explicit PEM file (-from-ca) or derived from enrollment key (-config).
-	var ca *pki.CA
-	if *fromCA != "" {
-		caPEM, err := os.ReadFile(*fromCA)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "read CA file: %v\n", err)
-			return 1
-		}
-		ca, err = pki.LoadCA(caPEM)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "load CA: %v\n", err)
-			return 1
-		}
-	} else {
-		_, _, ikm, _, err := loadConfig(*configPath, "error")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			return 1
-		}
-		ca, err = pki.DeriveCA(ikm)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "derive CA: %v\n", err)
-			return 1
-		}
-	}
-
-	certCN := *cn
-	if certCN == "" {
-		certCN = "pigeon-enroll"
-	}
-
-	var hosts []string
-	hosts = append(hosts, dnsNames...)
-	hosts = append(hosts, ipAddrs...)
-
-	certPEM, keyPEM, err := pki.GenerateCert(ca, certCN, hosts, certTTL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "generate cert: %v\n", err)
-		return 1
-	}
-
-	// Write bundle.
-	if *bundlePath != "" {
-		var bundle []byte
-		bundle = append(bundle, certPEM...)
-		bundle = append(bundle, keyPEM...)
-		bundle = append(bundle, ca.CertPEM...)
-
-		if *encodeBase64 {
-			bundle = []byte(base64.StdEncoding.EncodeToString(bundle))
-		}
-
-		if *bundlePath == "-" {
-			if _, err := os.Stdout.Write(bundle); err != nil {
-				fmt.Fprintf(os.Stderr, "write bundle: %v\n", err)
-				return 1
-			}
-		} else {
-			if err := writeSecureFile(*bundlePath, bundle); err != nil {
-				fmt.Fprintf(os.Stderr, "write bundle: %v\n", err)
-				return 1
-			}
-		}
-	}
-
-	// Write individual files.
-	for _, f := range []struct{ path string; data []byte }{
-		{*certPath, certPEM},
-		{*keyPath, keyPEM},
-		{*caPath, ca.CertPEM},
-	} {
-		if f.path == "" {
-			continue
-		}
-		if err := writeSecureFile(f.path, f.data); err != nil {
-			fmt.Fprintf(os.Stderr, "write %s: %v\n", f.path, err)
-			return 1
-		}
-	}
-
-	return 0
-}
-
-func cmdClaim(args []string) int {
-	flags := flag.NewFlagSet("claim", flag.ExitOnError)
-	url := flags.String("url", "", "Enrollment server URL")
-	tok := flags.String("token", "", "HMAC claim token")
-	output := flags.String("output", "", "Path to write secrets JSON")
-	scope := flags.String("scope", "", "Scope for secret filtering")
-	subject := flags.String("subject", "", "Subject identity for JWT sub claim (e.g. hostname)")
-	tlsBundle := flags.String("tls", "", "Path to client TLS certificate bundle (PEM)")
-	insecure := flags.Bool("insecure", false, "Skip TLS certificate verification")
-	skipTPM := flags.Bool("skip-tpm", false, "Skip TPM attestation (dev/testing only)")
-	flags.Parse(args)
-
-	if *url == "" || *tok == "" || *output == "" {
-		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<url> -token=<hmac> -output=<path> [-tls=<bundle>] [-scope=<scope>] [-subject=<identity>] [-insecure] [-skip-tpm]")
-		return 1
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	if *tlsBundle != "" {
-		bundlePEM, err := os.ReadFile(*tlsBundle)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "read TLS bundle: %v\n", err)
-			return 1
-		}
-		key, cert, caPool, err := pki.LoadClientBundle(bundlePEM)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "load TLS bundle: %v\n", err)
-			return 1
-		}
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-				Certificates: []tls.Certificate{{
-					Certificate: [][]byte{cert.Raw},
-					PrivateKey:  key,
-				}},
-				RootCAs:    caPool,
-				ServerName: "pigeon-enroll",
-			},
-		}
-	} else if *insecure {
-		fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled — do not use in production")
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-	}
-
-	resp, err := claim.Run(client, *url, *tok, *scope, *subject, *output, *skipTPM, slog.Default())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "claim failed: %v\n", err)
-		return 1
-	}
-
-	fmt.Fprintf(os.Stderr, "claimed %d secrets → %s\n", len(resp.Secrets), *output)
-	return 0
-}
-
-func cmdEKHash(args []string) int {
-	flag.NewFlagSet("ek-hash", flag.ExitOnError).Parse(args)
-
-	if !tpm.Available() {
-		fmt.Fprintln(os.Stderr, "error: no TPM available on this host")
-		return 1
-	}
-
-	sess, err := tpm.Open()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "open TPM: %v\n", err)
-		return 1
-	}
-	defer sess.Close()
-
-	ekHash, err := sess.EKHash()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "compute EK hash: %v\n", err)
-		return 1
-	}
-
-	// Print hash to stdout for use in ek_hash_path file.
-	fmt.Println(ekHash)
-	return 0
-}
-
-func cmdRender(args []string) int {
-	flags := flag.NewFlagSet("render", flag.ExitOnError)
-	configPath := flags.String("config", "", "Path to render HCL config")
-	varsPath := flags.String("vars", "/encrypted/pigeon/enroll.json", "Path to template variables JSON")
-	flags.Parse(args)
-
-	if *configPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll render -config=<path> [-vars=<path>]")
-		return 1
-	}
-
-	cfg, err := render.LoadConfig(*configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "load render config: %v\n", err)
-		return 1
-	}
-
-	vars, err := render.ParseVarsFile(*varsPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "parse vars: %v\n", err)
-		return 1
-	}
-
-	for _, tpl := range cfg.Templates {
-		perms := tpl.Perms
-		if perms == "" {
-			perms = "0640"
-		}
-		perm, err := parsePerms(perms)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid perms for %s: %v\n", tpl.Destination, err)
-			return 1
-		}
-
-		var rendered []byte
-		if tpl.Content != "" {
-			rendered, err = render.Content(tpl.Content, vars)
-		} else {
-			rendered, err = render.File(tpl.Source, vars)
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "render %s: %v\n", tpl.Destination, err)
-			return 1
-		}
-
-		uid, err := render.LookupUser(tpl.User)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", tpl.Destination, err)
-			return 1
-		}
-		gid, err := render.LookupGroup(tpl.Group)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", tpl.Destination, err)
-			return 1
-		}
-
-		if err := atomicfile.WriteOwned(tpl.Destination, rendered, perm, uid, gid); err != nil {
-			fmt.Fprintf(os.Stderr, "write %s: %v\n", tpl.Destination, err)
-			return 1
-		}
-
-		if tpl.Source != "" {
-			fmt.Fprintf(os.Stderr, "rendered %s → %s\n", tpl.Source, tpl.Destination)
-		} else {
-			fmt.Fprintf(os.Stderr, "rendered → %s\n", tpl.Destination)
-		}
-	}
-
-	return 0
-}
-
-func parsePerms(s string) (os.FileMode, error) {
-	p, err := strconv.ParseUint(s, 8, 32)
-	if err != nil {
-		return 0, fmt.Errorf("parse perms %q: %w", s, err)
-	}
-	if p > 0o777 {
-		return 0, fmt.Errorf("invalid perms %q: must be between 0000 and 0777", s)
-	}
-	return os.FileMode(p), nil
-}
-
 // writeSecureFile writes data atomically with mode 0600.
 func writeSecureFile(path string, data []byte) error {
 	return atomicfile.Write(path, data, 0600)
-}
-
-func cmdRunActions(args []string) int {
-	flags := flag.NewFlagSet("run-actions", flag.ExitOnError)
-	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
-	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
-	actionType := flags.String("type", "", "Run a specific action type (default: all)")
-	flags.Parse(args)
-
-	logger, cfg, ikm, _, err := loadConfig(*configPath, *logLevel)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
-
-	if len(cfg.Actions) == 0 {
-		logger.Error("no actions configured")
-		return 1
-	}
-
-	// Empty scope — run-actions only needs derived secrets, not certs.
-	derived, _, _, _, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm, "", "")
-	if err != nil {
-		logger.Error("resolve secrets", "err", err)
-		return 1
-	}
-	if derived == nil {
-		derived = make(map[string]string)
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	if err := action.Run(ctx, logger, cfg.Actions, derived, *actionType); err != nil {
-		logger.Error("action failed", "err", err)
-		return 1
-	}
-
-	return 0
-}
-
-func parseLevel(s string) slog.Level {
-	var lvl slog.Level
-	if err := lvl.UnmarshalText([]byte(s)); err != nil {
-		return slog.LevelInfo
-	}
-	return lvl
 }

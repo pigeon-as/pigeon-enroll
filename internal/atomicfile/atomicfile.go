@@ -1,4 +1,9 @@
 // Package atomicfile provides atomic file writes via temp file + rename.
+// Follows the Calico CNI install / Flannel WriteSubnetFile pattern:
+// create temp file in same directory, write, fsync, rename.
+// References:
+//   - Calico CNI install: https://github.com/projectcalico/calico/blob/master/cni-plugin/pkg/install/install.go
+//   - Flannel subnet file: https://github.com/flannel-io/flannel/blob/master/pkg/subnet/subnet.go
 package atomicfile
 
 import (

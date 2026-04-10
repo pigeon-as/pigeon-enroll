@@ -2,12 +2,18 @@
 // ephemeral TLS certificates for mTLS between the enrollment server and
 // claim clients.
 //
-// The CA key is derived via HKDF-SHA256 from the enrollment key (IKM).
-// Every server with the same enrollment key independently produces the same
-// CA — no coordination needed.
+// Follows the Vault PKI secrets engine pattern: deterministic CA with
+// ephemeral leaf certificate issuance. The CA key is derived via HKDF-SHA256
+// from the enrollment key (IKM) with nil salt per RFC 5869 §3.1 (IKM is
+// uniformly random). Every server with the same enrollment key independently
+// produces the same CA — no coordination needed.
 //
 // Ed25519 is used for all keys (CA and leaf). CA keys are deterministic via
 // NewKeyFromSeed; leaf keys are ephemeral via GenerateKey.
+//
+// References:
+//   - Vault PKI secrets engine: https://developer.hashicorp.com/vault/docs/secrets/pki
+//   - RFC 5869 (HKDF): https://datatracker.ietf.org/doc/html/rfc5869
 package pki
 
 import (

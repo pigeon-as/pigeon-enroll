@@ -1,4 +1,7 @@
 // Package audit provides append-only JSONL audit logging.
+// Follows the Vault audit log pattern: one JSON object per line, synced to
+// disk after each write.
+// Reference: https://developer.hashicorp.com/vault/docs/audit
 package audit
 
 import (

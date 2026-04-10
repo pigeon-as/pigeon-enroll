@@ -1,5 +1,14 @@
 // Package secrets resolves derived secrets: loads from disk on restart,
 // derives and optionally persists on first start.
+//
+// Key derivation uses HKDF-SHA256 with nil salt per RFC 5869 §3.1 (IKM is
+// uniformly random). Unique info strings per secret provide domain separation
+// per NIST SP 800-108 §7.4. A dedicated HMAC signing key is derived from the
+// enrollment key — the raw key is never used directly for HMAC.
+//
+// References:
+//   - RFC 5869 (HKDF): https://datatracker.ietf.org/doc/html/rfc5869
+//   - NIST SP 800-108 (KDF in Counter Mode): https://csrc.nist.gov/pubs/sp/800/108/r1/final
 package secrets
 
 import (

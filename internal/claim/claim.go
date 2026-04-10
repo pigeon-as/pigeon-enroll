@@ -1,4 +1,8 @@
 // Package claim implements the client-side enrollment claim flow.
+// Follows the SPIRE node attestation pattern: two-round TPM credential
+// activation (POST /attest → POST /claim) proves the AK is resident on
+// the same TPM as the EK.
+// Reference: https://github.com/spiffe/spire/tree/main/pkg/agent/attestor/node
 package claim
 
 import (

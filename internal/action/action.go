@@ -1,4 +1,6 @@
 // Package action provides pluggable post-claim lifecycle actions.
+// vault-init follows the Vault /sys/init + /auth/token/create-orphan API pattern.
+// luks-recovery follows the cryptsetup luksAddKey + dmsetup table --showkeys pattern.
 package action
 
 import (
