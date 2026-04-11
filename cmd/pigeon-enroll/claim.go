@@ -14,7 +14,6 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/pki"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 func cmdClaim(args []string) int {
@@ -68,7 +67,11 @@ func cmdClaim(args []string) int {
 
 	case *insecureFlag:
 		fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled — do not use in production")
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		tlsCfg := &tls.Config{
+			MinVersion:         tls.VersionTLS13,
+			InsecureSkipVerify: true,
+		}
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 
 	default:
 		// No bundle, not insecure — use system CA pool.

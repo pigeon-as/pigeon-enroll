@@ -176,7 +176,7 @@ func (s *Server) Claim(stream pb.EnrollmentService_ClaimServer) error {
 	if err != nil {
 		s.logger.Error("build result failed", "ip", ip, "err", err)
 		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, Scope: params.Scope, OK: false, Error: err.Error()})
-		return status.Error(codes.Internal, "internal error")
+		return status.Errorf(codes.InvalidArgument, "invalid claim request: %v", err)
 	}
 
 	s.logger.Info("claimed", "ip", ip, "scope", params.Scope, "subject", params.Subject, "ek", ekHash, "tpm", params.Tpm != nil)
