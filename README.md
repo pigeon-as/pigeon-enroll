@@ -19,13 +19,13 @@ pigeon-enroll generate-token [-scope=worker]
 pigeon-enroll generate-cert -bundle /tmp/enroll-cert.pem
 
 # Claim (worker side, with mTLS + TPM attestation)
-pigeon-enroll claim -url https://enroll:8443/claim \
+pigeon-enroll claim -url enroll:8443 \
   -token <hmac> -tls /tmp/enroll-cert.pem \
   -scope worker \
   -output /encrypted/pigeon/enroll.json
 
 # Claim (dev/testing only, no TPM)
-pigeon-enroll claim -url https://enroll:8443/claim \
+pigeon-enroll claim -url enroll:8443 \
   -token <hmac> -tls /tmp/enroll-cert.pem \
   -skip-tpm \
   -output /encrypted/pigeon/enroll.json
@@ -48,16 +48,17 @@ mTLS is enabled by default — the CA is derived deterministically from the enro
 
 `generate-cert` outputs are explicit: `-bundle FILE` writes a PEM bundle (cert+key+ca), `-cert`/`-key`/`-ca` write individual files. `-bundle -` writes to stdout. EKU is inferred from SANs: `-dns`/`-ip` present → ServerAuth + ClientAuth, no SANs → ClientAuth only. `-ttl` sets validity (default 24h). `-base64` base64-encodes bundle output.
 
-Use `-skip-tls` for testing without TLS.
+Use `-insecure` for testing without TLS verification.
 
 ## TPM Attestation
 
-Claim always performs two-round TPM attestation (SPIRE community plugin pattern):
+Claim performs TPM attestation via a bidirectional gRPC stream (SPIRE community plugin pattern):
 
 1. Client opens TPM, reads EK, creates ephemeral AK
-2. `POST /attest` — sends HMAC token + EK pub + EK cert (optional) + AK params → server validates EK identity, returns credential activation challenge
-3. Client activates credential (proves AK is on the same TPM as EK)
-4. `POST /claim` — sends session ID + activated secret → server verifies and returns secrets
+2. Client opens gRPC Claim stream and sends ClaimRequest with HMAC token + EK pub + EK cert (optional) + AK params
+3. Server validates EK identity, returns credential activation challenge
+4. Client activates credential (proves AK is on the same TPM as EK)
+5. Client sends ClaimRequest with activated secret → server verifies and returns secrets
 
 EK identity is validated via `ek_ca_path` (manufacturer CA cert chain) and/or `ek_hash_path` (SHA-256 pubkey hash allowlist). At least one must be configured when `require_tpm = true`.
 
@@ -71,7 +72,6 @@ key_path     = "/encrypted/pigeon/enrollment-key"
 token_window = "30m"
 server_cert_ttl = "720h"
 audit_path   = "/var/log/pigeon-enroll/audit.jsonl"
-trusted_proxies = ["10.0.0.0/8"]
 require_tpm  = true
 
 # EK identity validation (SPIRE community TPM plugin pattern).
@@ -113,47 +113,24 @@ action "vault-init" {
 
 `secrets` are derived via HKDF-SHA256; `vars` are static key-value pairs. Both are returned in the claim response under separate keys. `secrets_path` persists derived secrets on first start and loads from disk on restart.
 
-`trusted_proxies` is a list of CIDRs. When a request comes from a trusted proxy, the client IP is read from `X-Forwarded-For` instead of `RemoteAddr`.
-
 ## API
 
-### `POST /attest`
+gRPC service defined in `internal/proto/enroll/v1/enroll.proto`.
 
-Starts TPM attestation. Validates EK identity (hash allowlist or cert chain), returns a credential activation challenge.
+### `EnrollService.Claim` (bidirectional stream)
 
-`ek_pub`, `ek_cert`, and `ak_params` fields are base64-encoded DER (`[]byte` in Go, auto-encoded by `encoding/json`).
+Bidirectional gRPC stream for TPM attestation and secret distribution. The client sends `ClaimRequest` messages and receives `ClaimResponse` messages:
 
-```json
-{"token": "<hmac>", "scope": "worker", "ek_pub": "<base64 DER>", "ek_cert": "<base64 DER>", "ak_params": {...}}
-```
+1. Client sends `ClaimRequest` with `token`, `scope`, `subject`, `ek_pub`, `ek_cert` (optional), `ak_params`, and optionally `csr_der`
+2. Server validates token and EK identity, returns `ClaimResponse` with `credential_activation_challenge`
+3. Client sends `ClaimRequest` with `activated_secret`
+4. Server verifies activation, returns `ClaimResponse` with `secrets`, `vars`, `jwts`, `jwt_keys`, and optionally `signed_cert_der`
 
-### `POST /claim`
+Without TPM (`-skip-tpm`, dev/testing): single-round — client sends token-only request, server returns secrets immediately.
 
-Completes attestation and returns secrets. With TPM: sends session ID and activated credential. Without TPM (`-skip-tpm`): sends token only.
+### Health
 
-TPM (default):
-
-`activated_secret` is base64-encoded (`[]byte`).
-
-```json
-{"session_id": "...", "activated_secret": "<base64>"}
-```
-
-Token-only (`-skip-tpm`, dev/testing):
-
-```json
-{"token": "<hmac>", "scope": "worker"}
-```
-
-Returns filtered secrets + vars:
-
-```json
-{"secrets": {"secret_a": "..."}, "vars": {"datacenter": "eu-west-gra"}}
-```
-
-### `GET /health`
-
-Returns `{"status": "ok"}`.
+Standard gRPC health check via `grpc.health.v1.Health`.
 
 ## Actions
 

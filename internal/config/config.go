@@ -73,7 +73,6 @@ type Config struct {
 	Certs            []CertSpec        `hcl:"cert,block"`
 	JWTs             []JWTSpec         `hcl:"jwt,block"`
 	SecretsPath      string            `hcl:"secrets_path,optional"`
-	TrustedProxies   []string          `hcl:"trusted_proxies,optional"`
 	Actions          []action.Config   `hcl:"action,block"`
 	RequireTPM       bool   `hcl:"require_tpm,optional"`
 	EKCAPath         string `hcl:"ek_ca_path,optional"`
@@ -276,12 +275,6 @@ func validate(cfg Config) error {
 		}
 		if j.Scope == "" {
 			return fmt.Errorf("jwt %q: scope is required", j.Name)
-		}
-	}
-
-	for _, cidr := range cfg.TrustedProxies {
-		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			return fmt.Errorf("trusted_proxies: invalid CIDR %q: %w", cidr, err)
 		}
 	}
 
