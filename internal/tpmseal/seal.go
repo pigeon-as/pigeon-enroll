@@ -4,6 +4,7 @@
 package tpmseal
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
+
+	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 )
 
 const tpmDevice = "/dev/tpmrm0"
@@ -136,7 +139,7 @@ func Seal(data []byte, pcrs []uint, path string) error {
 		return fmt.Errorf("marshal sealed blob: %w", err)
 	}
 
-	if err := os.WriteFile(path, js, 0600); err != nil {
+	if err := atomicfile.Write(path, js, 0600); err != nil {
 		return fmt.Errorf("write sealed blob: %w", err)
 	}
 
@@ -183,13 +186,9 @@ func Unseal(path string) ([]byte, error) {
 	}
 
 	// Verify SRK name matches what was stored (detects TPM replacement or reset).
-	storedName, err := tpm2.Unmarshal[tpm2.TPM2BName](blob.SRKName)
-	if err != nil {
-		return nil, fmt.Errorf("unmarshal stored SRK name: %w", err)
-	}
+	// Talos pattern: bytes.Equal on the marshaled name directly.
 	currentName := tpm2.Marshal(srkResp.Name)
-	storedNameBytes := tpm2.Marshal(*storedName)
-	if string(currentName) != string(storedNameBytes) {
+	if !bytes.Equal(currentName, blob.SRKName) {
 		return nil, fmt.Errorf("SRK name mismatch: TPM may have been replaced or reset")
 	}
 

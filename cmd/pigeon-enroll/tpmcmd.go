@@ -106,6 +106,7 @@ func cmdSealKey(args []string) int {
 func parsePCRList(s string) ([]uint, error) {
 	parts := strings.Split(s, ",")
 	pcrs := make([]uint, 0, len(parts))
+	seen := make(map[uint]bool)
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		if p == "" {
@@ -118,6 +119,10 @@ func parsePCRList(s string) ([]uint, error) {
 		if n > 23 {
 			return nil, fmt.Errorf("PCR index %d out of range (0-23)", n)
 		}
+		if seen[uint(n)] {
+			return nil, fmt.Errorf("duplicate PCR index %d", n)
+		}
+		seen[uint(n)] = true
 		pcrs = append(pcrs, uint(n))
 	}
 	if len(pcrs) == 0 {

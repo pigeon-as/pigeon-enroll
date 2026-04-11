@@ -43,12 +43,14 @@ func TestVerifier_SessionDeletedAfterLookup(t *testing.T) {
 	}
 	v.mu.Unlock()
 
-	// First call marks session as claimed (fails on secret check).
-	v.CompleteAttestation(CompleteRequest{SessionID: "once"})
-
-	// Second call should fail with "session already claimed".
+	// First call with wrong secret — session is deleted on failed activation.
 	_, err := v.CompleteAttestation(CompleteRequest{SessionID: "once"})
 	must.Error(t, err)
+
+	// Second call should fail with "unknown or expired session" (session was deleted).
+	_, err = v.CompleteAttestation(CompleteRequest{SessionID: "once"})
+	must.Error(t, err)
+	must.StrContains(t, err.Error(), "unknown or expired session")
 }
 
 func TestVerifier_CompleteAttestationKeepsSession(t *testing.T) {
@@ -124,6 +126,12 @@ func TestVerifier_ConsumeForCSR_NotClaimed(t *testing.T) {
 
 	_, err := v.ConsumeForCSR("s1")
 	must.Error(t, err)
+
+	// Session should NOT be deleted — it's unclaimed, not consumed.
+	v.mu.RLock()
+	_, ok := v.sessions["s1"]
+	v.mu.RUnlock()
+	must.True(t, ok)
 }
 
 func TestVerifier_ConsumeForCSR_Expired(t *testing.T) {

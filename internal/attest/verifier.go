@@ -166,10 +166,6 @@ func (v *Verifier) CompleteAttestation(req CompleteRequest) (*CompleteResult, er
 		v.mu.Unlock()
 		return nil, errors.New("session expired")
 	}
-	if ok {
-		sess.claimed = true
-		sess.expiresAt = time.Now().Add(sessionTTL) // extend for /csr window
-	}
 	v.mu.Unlock()
 
 	if !ok {
@@ -185,6 +181,12 @@ func (v *Verifier) CompleteAttestation(req CompleteRequest) (*CompleteResult, er
 		return nil, errors.New("credential activation failed")
 	}
 
+	// Mark session as claimed only after successful crypto verification.
+	v.mu.Lock()
+	sess.claimed = true
+	sess.expiresAt = time.Now().Add(sessionTTL) // extend for /csr window
+	v.mu.Unlock()
+
 	return &CompleteResult{
 		Scope:    sess.scope,
 		Subject: sess.subject,
@@ -199,20 +201,21 @@ func (v *Verifier) CompleteAttestation(req CompleteRequest) (*CompleteResult, er
 func (v *Verifier) ConsumeForCSR(sessionID string) (*CompleteResult, error) {
 	v.mu.Lock()
 	sess, ok := v.sessions[sessionID]
-	if ok {
-		delete(v.sessions, sessionID)
-	}
-	v.mu.Unlock()
-
 	if !ok {
+		v.mu.Unlock()
 		return nil, errors.New("unknown or expired session")
 	}
 	if !sess.claimed {
+		v.mu.Unlock()
 		return nil, errors.New("session not yet claimed")
 	}
 	if time.Now().After(sess.expiresAt) {
+		delete(v.sessions, sessionID)
+		v.mu.Unlock()
 		return nil, errors.New("session expired")
 	}
+	delete(v.sessions, sessionID)
+	v.mu.Unlock()
 
 	return &CompleteResult{
 		Scope:   sess.scope,
