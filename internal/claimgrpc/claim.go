@@ -44,7 +44,7 @@ func Run(ctx context.Context, conn *grpc.ClientConn, token, scope, subject, outp
 	defer stream.CloseSend()
 
 	if skipTPM {
-		logger.Warn("WARNING: --skip-tpm set — TPM attestation disabled, do not use in production")
+		logger.Warn("--skip-tpm set, TPM attestation disabled, do not use in production")
 		return runTokenOnly(stream, token, scope, subject, outputPath)
 	}
 	return runTPM(stream, token, scope, subject, outputPath, logger)

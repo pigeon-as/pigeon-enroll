@@ -16,7 +16,7 @@ func cmdGenerateToken(args []string) int {
 
 	_, cfg, _, hmacKey, err := loadConfig(*configPath, "info")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
 	fmt.Print(token.Generate(hmacKey, time.Now(), cfg.TokenWindow, *scope))

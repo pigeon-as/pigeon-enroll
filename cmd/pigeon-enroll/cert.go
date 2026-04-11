@@ -71,9 +71,9 @@ func cmdGenerateCert(args []string) int {
 			return 1
 		}
 	} else {
-		_, _, ikm, _, err := loadConfig(*configPath, "error")
+		ikm, err := loadIKM(*configPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "%v\n", err)
 			return 1
 		}
 		ca, err = pki.DeriveCA(ikm)

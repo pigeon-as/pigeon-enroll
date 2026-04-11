@@ -121,10 +121,10 @@ gRPC service defined in `proto/enroll/v1/enroll.proto`.
 
 Bidirectional gRPC stream for TPM attestation and secret distribution. The client sends `ClaimRequest` messages and receives `ClaimResponse` messages:
 
-1. Client sends `ClaimRequest` with `token`, `scope`, `subject`, `ek_pub`, `ek_cert` (optional), `ak_params`, and optionally `csr_der`
-2. Server validates token and EK identity, returns `ClaimResponse` with `credential_activation_challenge`
-3. Client sends `ClaimRequest` with `activated_secret`
-4. Server verifies activation, returns `ClaimResponse` with `secrets`, `vars`, `jwts`, `jwt_keys`, and optionally `signed_cert_der`
+1. Client sends `ClaimRequest.params` with `token`, `scope`, `subject`, `tpm` (`ek_public`, `ek_cert`, `ak_public`, `ak_create_data`, `ak_create_attestation`, `ak_create_signature`), and optionally `csr_der`
+2. Server validates token and EK identity, returns `ClaimResponse.challenge` with `credential` and `secret`
+3. Client sends `ClaimRequest.challenge_response` with the activated secret
+4. Server verifies activation, returns `ClaimResponse.result` with `secrets`, `vars`, `ca`, `certs`, `jwts`, `jwt_keys`
 
 Without TPM (`-skip-tpm`, dev/testing): single-round — client sends token-only request, server returns secrets immediately.
 

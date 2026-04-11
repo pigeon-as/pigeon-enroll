@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 
@@ -19,7 +18,7 @@ func cmdRunActions(args []string) int {
 
 	logger, cfg, ikm, _, err := loadConfig(*configPath, *logLevel)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		logger.Error(err.Error())
 		return 1
 	}
 

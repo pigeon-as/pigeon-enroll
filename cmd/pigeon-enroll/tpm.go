@@ -1,14 +1,12 @@
 package main
 
 import (
-	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
-	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/tpm"
 	"github.com/pigeon-as/pigeon-enroll/internal/tpmseal"
 )
@@ -65,22 +63,9 @@ func cmdSealKey(args []string) int {
 	}
 
 	// Read the plaintext enrollment key.
-	if err := config.CheckKeyFile(cfg.KeyPath); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		return 1
-	}
-	enrollmentKeyHex, err := os.ReadFile(cfg.KeyPath)
+	ikm, err := readIKM(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "read enrollment key: %v\n", err)
-		return 1
-	}
-	ikm, err := hex.DecodeString(strings.TrimSpace(string(enrollmentKeyHex)))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "decode enrollment key: %v\n", err)
-		return 1
-	}
-	if err := secrets.ValidateIKM(ikm); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
 

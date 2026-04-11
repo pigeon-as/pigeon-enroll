@@ -118,28 +118,8 @@ func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byt
 		return logger, config.Config{}, nil, nil, fmt.Errorf("load config: %w", err)
 	}
 
-	var ikm []byte
-	switch cfg.KeySource {
-	case "tpm":
-		ikm, err = tpmseal.Unseal(cfg.KeyPath)
-		if err != nil {
-			return logger, config.Config{}, nil, nil, fmt.Errorf("unseal enrollment key from TPM: %w", err)
-		}
-	default: // "file"
-		if err := config.CheckKeyFile(cfg.KeyPath); err != nil {
-			return logger, config.Config{}, nil, nil, err
-		}
-		enrollmentKeyHex, err := os.ReadFile(cfg.KeyPath)
-		if err != nil {
-			return logger, config.Config{}, nil, nil, fmt.Errorf("read enrollment key: %w", err)
-		}
-		ikm, err = hex.DecodeString(strings.TrimSpace(string(enrollmentKeyHex)))
-		if err != nil {
-			return logger, config.Config{}, nil, nil, fmt.Errorf("decode enrollment key: %w", err)
-		}
-	}
-
-	if err := secrets.ValidateIKM(ikm); err != nil {
+	ikm, err := readIKM(cfg)
+	if err != nil {
 		return logger, config.Config{}, nil, nil, err
 	}
 
@@ -149,6 +129,46 @@ func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byt
 	}
 
 	return logger, cfg, ikm, hmacKey, nil
+}
+
+// loadIKM loads the HCL config and reads the enrollment key without deriving HMAC.
+// Use this when only the IKM is needed (e.g. generate-cert).
+func loadIKM(configPath string) ([]byte, error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	return readIKM(cfg)
+}
+
+// readIKM reads the enrollment key from file or TPM based on config.
+func readIKM(cfg config.Config) ([]byte, error) {
+	var ikm []byte
+	var err error
+	switch cfg.KeySource {
+	case "tpm":
+		ikm, err = tpmseal.Unseal(cfg.KeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("unseal enrollment key from TPM: %w", err)
+		}
+	default: // "file"
+		if err := config.CheckKeyFile(cfg.KeyPath); err != nil {
+			return nil, err
+		}
+		enrollmentKeyHex, err := os.ReadFile(cfg.KeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("read enrollment key: %w", err)
+		}
+		ikm, err = hex.DecodeString(strings.TrimSpace(string(enrollmentKeyHex)))
+		if err != nil {
+			return nil, fmt.Errorf("decode enrollment key: %w", err)
+		}
+	}
+
+	if err := secrets.ValidateIKM(ikm); err != nil {
+		return nil, err
+	}
+	return ikm, nil
 }
 
 // writeSecureFile writes data atomically with mode 0600.
