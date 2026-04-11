@@ -33,10 +33,13 @@ func cmdClaim(args []string) int {
 		return 1
 	}
 
-	// Strip scheme if present (gRPC uses host:port, not URLs).
+	// Strip scheme and path if present (gRPC uses host:port, not URLs).
 	target := *url
 	target = strings.TrimPrefix(target, "https://")
-	target = strings.TrimRight(target, "/")
+	target = strings.TrimPrefix(target, "http://")
+	if i := strings.Index(target, "/"); i != -1 {
+		target = target[:i]
+	}
 
 	var dialOpts []grpc.DialOption
 

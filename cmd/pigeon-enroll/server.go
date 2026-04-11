@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/audit"
 	"github.com/pigeon-as/pigeon-enroll/internal/grpcserver"
@@ -87,7 +88,7 @@ func cmdServer(args []string) int {
 		return 1
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	go func() {

@@ -41,6 +41,7 @@ func Run(ctx context.Context, conn *grpc.ClientConn, token, scope, subject, outp
 	if err != nil {
 		return nil, fmt.Errorf("open claim stream: %w", err)
 	}
+	defer stream.CloseSend()
 
 	if skipTPM {
 		logger.Warn("WARNING: --skip-tpm set — TPM attestation disabled, do not use in production")

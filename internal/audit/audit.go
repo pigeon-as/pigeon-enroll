@@ -19,7 +19,7 @@ type Entry struct {
 	Scope     string `json:"scope,omitempty"`
 	Subject   string `json:"subject,omitempty"`
 	EKHash    string `json:"ek_hash,omitempty"`
-	Certs     string `json:"certs,omitempty"`
+	Certs     []string `json:"certs,omitempty"`
 	OK        bool   `json:"ok"`
 	Error     string `json:"error,omitempty"`
 }

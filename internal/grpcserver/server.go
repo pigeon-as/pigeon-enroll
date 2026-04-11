@@ -179,7 +179,7 @@ func (s *Server) Claim(stream pb.EnrollmentService_ClaimServer) error {
 		return status.Errorf(codes.InvalidArgument, "invalid claim request: %v", err)
 	}
 
-	s.logger.Info("claimed", "ip", ip, "scope", params.Scope, "subject", params.Subject, "ek", ekHash, "tpm", params.Tpm != nil)
+	s.logger.Info("claimed", "ip", ip, "scope", params.Scope, "subject", params.Subject, "ek", ekHash, "tpm", params.Tpm != nil, "certs", certNames)
 	s.audit.Record(audit.Entry{
 		Operation: "claim",
 		IP:        ip,
@@ -283,7 +283,7 @@ func (s *Server) attestTPM(stream pb.EnrollmentService_ClaimServer, ip string, p
 }
 
 // buildResult constructs the filtered claim result.
-func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimResult, string, error) {
+func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimResult, []string, error) {
 	// Filter secrets by scope.
 	filteredSecrets := make(map[string]string, len(s.secrets))
 	for name, val := range s.secrets {
@@ -315,10 +315,10 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 		var err error
 		csr, err = x509.ParseCertificateRequest(csrDER)
 		if err != nil {
-			return nil, "", fmt.Errorf("invalid CSR: %w", err)
+			return nil, nil, fmt.Errorf("invalid CSR: %w", err)
 		}
 		if err := csr.CheckSignature(); err != nil {
-			return nil, "", fmt.Errorf("CSR signature verification failed: %w", err)
+			return nil, nil, fmt.Errorf("CSR signature verification failed: %w", err)
 		}
 	}
 
@@ -335,7 +335,7 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 			cn = subject
 		}
 		if cn == "" {
-			return nil, "", fmt.Errorf("cert %q requires subject (no static cn)", cs.Name)
+			return nil, nil, fmt.Errorf("cert %q requires subject (no static cn)", cs.Name)
 		}
 
 		var ipSANs []net.IP
@@ -349,12 +349,12 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 		if cs.Mode == "csr" {
 			// CSR-mode: sign the worker's public key.
 			if csr == nil {
-				return nil, "", fmt.Errorf("csr_der is required for CSR-mode cert %q", cs.Name)
+				return nil, nil, fmt.Errorf("csr_der is required for CSR-mode cert %q", cs.Name)
 			}
 			ca := s.certCAs[cs.CA]
 			certPEM, err := pki.SignCSR(ca, csr.PublicKey, cn, cs.DNSSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
 			if err != nil {
-				return nil, "", fmt.Errorf("sign CSR for %q: %w", cs.Name, err)
+				return nil, nil, fmt.Errorf("sign CSR for %q: %w", cs.Name, err)
 			}
 			certs[cs.Name] = &pb.CertBundle{CertPem: string(certPEM)}
 		} else {
@@ -362,7 +362,7 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 			ca := s.certCAs[cs.CA]
 			certPEM, keyPEM, err := pki.IssueCert(ca, cn, cs.DNSSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
 			if err != nil {
-				return nil, "", fmt.Errorf("issue cert %q: %w", cs.Name, err)
+				return nil, nil, fmt.Errorf("issue cert %q: %w", cs.Name, err)
 			}
 			certs[cs.Name] = &pb.CertBundle{CertPem: string(certPEM), KeyPem: string(keyPEM)}
 		}
@@ -380,22 +380,17 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 		jwtKeys[spec.Name] = key.PublicKeyPEM
 		if spec.Scope == scope {
 			if subject == "" {
-				return nil, "", fmt.Errorf("JWT %q requires subject", spec.Name)
+				return nil, nil, fmt.Errorf("JWT %q requires subject", spec.Name)
 			}
 			signed, err := jwtpkg.Sign(key.PrivateKey, spec.Issuer, spec.Audience, subject, spec.TTL)
 			if err != nil {
-				return nil, "", fmt.Errorf("sign JWT %q: %w", spec.Name, err)
+				return nil, nil, fmt.Errorf("sign JWT %q: %w", spec.Name, err)
 			}
 			if jwts == nil {
 				jwts = make(map[string]string)
 			}
 			jwts[spec.Name] = signed
 		}
-	}
-
-	certNamesStr := ""
-	if len(certNames) > 0 {
-		certNamesStr = fmt.Sprintf("%v", certNames)
 	}
 
 	return &pb.ClaimResult{
@@ -405,7 +400,7 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 		Certs:   certs,
 		Jwts:    jwts,
 		JwtKeys: jwtKeys,
-	}, certNamesStr, nil
+	}, certNames, nil
 }
 
 // peerIP extracts the client IP from gRPC peer info.
