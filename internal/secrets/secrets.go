@@ -123,8 +123,8 @@ func Resolve(specs []config.SecretSpec, cas []config.CASpec, certs []config.Cert
 		var myCerts map[string]CertEntry
 		if scope != "" {
 			for _, cs := range certs {
-				if cs.Mode == "csr" {
-					continue // CSR-mode certs are issued via POST /csr, not server-side
+					if cs.Mode == "csr" {
+					continue // CSR-mode certs are issued via gRPC Claim (csr_der), not self-issued server-side
 				}
 				if !scopeMatch(cs.Scope, scope) {
 					continue
@@ -274,8 +274,8 @@ func deriveAll(specs []config.SecretSpec, cas []config.CASpec, certs []config.Ce
 	var certMap map[string]CertEntry
 	if scope != "" {
 		for _, cs := range certs {
-			if cs.Mode == "csr" {
-				continue // CSR-mode certs are issued via POST /csr, not server-side
+				if cs.Mode == "csr" {
+				continue // CSR-mode certs are issued via gRPC Claim (csr_der), not self-issued server-side
 			}
 			if !scopeMatch(cs.Scope, scope) {
 				continue

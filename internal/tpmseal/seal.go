@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -257,10 +258,14 @@ func Unseal(path string) ([]byte, error) {
 // readPCRDigest reads the specified PCRs and returns their composite digest
 // (SHA-256 hash of concatenated PCR values in index order).
 func readPCRDigest(t transport.TPM, pcrs []uint) ([]byte, error) {
+	// Sort so digest order matches ascending PCR index order from TPM.
+	sorted := slices.Clone(pcrs)
+	slices.Sort(sorted)
+
 	sel := tpm2.TPMLPCRSelection{
 		PCRSelections: []tpm2.TPMSPCRSelection{{
 			Hash:      tpm2.TPMAlgSHA256,
-			PCRSelect: tpm2.PCClientCompatible.PCRs(pcrs...),
+			PCRSelect: tpm2.PCClientCompatible.PCRs(sorted...),
 		}},
 	}
 	readResp, err := tpm2.PCRRead{PCRSelectionIn: sel}.Execute(t)
@@ -270,8 +275,8 @@ func readPCRDigest(t transport.TPM, pcrs []uint) ([]byte, error) {
 
 	// Validate: every PCR should have a value.
 	digests := readResp.PCRValues.Digests
-	if len(digests) != len(pcrs) {
-		return nil, fmt.Errorf("expected %d PCR values, got %d", len(pcrs), len(digests))
+	if len(digests) != len(sorted) {
+		return nil, fmt.Errorf("expected %d PCR values, got %d", len(sorted), len(digests))
 	}
 
 	// Validate PCR values are not all-zero or all-0xFF (Talos pattern:
@@ -288,10 +293,10 @@ func readPCRDigest(t transport.TPM, pcrs []uint) ([]byte, error) {
 			}
 		}
 		if allZero {
-			return nil, fmt.Errorf("PCR %d is all zeros (uninitialized)", pcrs[i])
+			return nil, fmt.Errorf("PCR %d is all zeros (uninitialized)", sorted[i])
 		}
 		if allFF {
-			return nil, fmt.Errorf("PCR %d is all 0xFF (capped)", pcrs[i])
+			return nil, fmt.Errorf("PCR %d is all 0xFF (capped)", sorted[i])
 		}
 	}
 

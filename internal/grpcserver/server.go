@@ -349,8 +349,7 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 		if cs.Mode == "csr" {
 			// CSR-mode: sign the worker's public key.
 			if csr == nil {
-				// No CSR provided — skip. Worker must include csr_der for CSR-mode certs.
-				continue
+				return nil, "", fmt.Errorf("csr_der is required for CSR-mode cert %q", cs.Name)
 			}
 			ca := s.certCAs[cs.CA]
 			certPEM, err := pki.SignCSR(ca, csr.PublicKey, cn, cs.DNSSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
