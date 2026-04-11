@@ -19,15 +19,18 @@ import (
 // Follows the SPIRE community TPM plugin pattern:
 //   - ek_ca_path: validate EK certificate chain against manufacturer CA certs
 //   - ek_hash_path: check EK public key hash against an allowlist
+//
+// Hash file is reloaded on each Validate() call so that appended hashes
+// take effect without restarting the server (Terraform appends during provisioning).
 type EKValidator struct {
-	caRoots *x509.CertPool
-	hashes  map[string]bool
+	caRoots  *x509.CertPool
+	hashPath string
 }
 
 // NewEKValidator creates a validator from optional CA directory and hash file paths.
 // At least one should be non-empty (caller is responsible for ensuring this).
 func NewEKValidator(caPath, hashPath string) (*EKValidator, error) {
-	v := &EKValidator{}
+	v := &EKValidator{hashPath: hashPath}
 
 	if caPath != "" {
 		roots, err := loadCACerts(caPath)
@@ -37,12 +40,12 @@ func NewEKValidator(caPath, hashPath string) (*EKValidator, error) {
 		v.caRoots = roots
 	}
 
+	// Validate hash file is readable at startup (fail-fast), but don't
+	// cache the contents — Validate() reloads on each call.
 	if hashPath != "" {
-		hashes, err := loadHashFile(hashPath)
-		if err != nil {
+		if _, err := loadHashFile(hashPath); err != nil {
 			return nil, fmt.Errorf("load EK hashes: %w", err)
 		}
-		v.hashes = hashes
 	}
 
 	return v, nil
@@ -50,6 +53,7 @@ func NewEKValidator(caPath, hashPath string) (*EKValidator, error) {
 
 // Validate checks whether the given EK is trusted.
 // Checks hash allowlist first (SPIRE community plugin order), then certificate chain.
+// Hash file is reloaded on each call so appended hashes take effect immediately.
 func (v *EKValidator) Validate(ekPub crypto.PublicKey, ekCert *x509.Certificate) error {
 	ekDER, err := x509.MarshalPKIXPublicKey(ekPub)
 	if err != nil {
@@ -58,9 +62,13 @@ func (v *EKValidator) Validate(ekPub crypto.PublicKey, ekCert *x509.Certificate)
 	h := sha256.Sum256(ekDER)
 	hash := hex.EncodeToString(h[:])
 
-	// Check hash allowlist first.
-	if len(v.hashes) > 0 {
-		if v.hashes[hash] {
+	// Check hash allowlist first (reloaded each call).
+	if v.hashPath != "" {
+		hashes, err := loadHashFile(v.hashPath)
+		if err != nil {
+			return fmt.Errorf("reload EK hashes: %w", err)
+		}
+		if hashes[hash] {
 			return nil
 		}
 	}

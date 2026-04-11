@@ -118,6 +118,33 @@ func TestEKValidator_CertChain(t *testing.T) {
 	must.Error(t, v.Validate(&ekKey.PublicKey, nil))
 }
 
+func TestEKValidator_HashHotReload(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	must.NoError(t, err)
+
+	ekDER, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	h := sha256.Sum256(ekDER)
+	hash := hex.EncodeToString(h[:])
+
+	dir := t.TempDir()
+	hashPath := filepath.Join(dir, "hashes")
+
+	// Start with an empty hash file — key should be rejected.
+	must.NoError(t, os.WriteFile(hashPath, []byte("# empty\n"), 0600))
+	v, err := NewEKValidator("", hashPath)
+	must.NoError(t, err)
+	must.Error(t, v.Validate(&key.PublicKey, nil))
+
+	// Append hash — same validator should now accept without restart.
+	f, err := os.OpenFile(hashPath, os.O_APPEND|os.O_WRONLY, 0600)
+	must.NoError(t, err)
+	_, err = f.WriteString(hash + "\n")
+	must.NoError(t, err)
+	must.NoError(t, f.Close())
+
+	must.NoError(t, v.Validate(&key.PublicKey, nil))
+}
+
 func TestEKValidator_EmptyCADir(t *testing.T) {
 	dir := t.TempDir()
 	_, err := NewEKValidator(dir, "")
