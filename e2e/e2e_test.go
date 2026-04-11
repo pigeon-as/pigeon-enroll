@@ -129,7 +129,7 @@ func claim(t *testing.T, bundlePath, token string, extra ...string) claimResult 
 	t.Helper()
 	output := filepath.Join(t.TempDir(), "claim.json")
 	args := append([]string{"claim",
-		"-url=" + testAddr,
+		"-addr=" + testAddr,
 		"-token=" + token,
 		"-output=" + output,
 		"-tls=" + bundlePath,
@@ -298,7 +298,7 @@ secret "test" {
 
 	// Second claim with same token fails.
 	cmd := exec.Command(binary, "claim",
-		"-url="+testAddr, "-token="+token,
+		"-addr="+testAddr, "-token="+token,
 		"-output="+filepath.Join(t.TempDir(), "replay.json"),
 		"-tls="+bundle, "-skip-tpm",
 	)
@@ -324,7 +324,7 @@ secret "test" {
 	bundle := startServer(t, cfgPath)
 
 	cmd := exec.Command(binary, "claim",
-		"-url="+testAddr, "-token=invalid-token",
+		"-addr="+testAddr, "-token=invalid-token",
 		"-output="+filepath.Join(t.TempDir(), "bad.json"),
 		"-tls="+bundle, "-skip-tpm",
 	)

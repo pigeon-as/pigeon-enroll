@@ -19,13 +19,13 @@ pigeon-enroll generate-token [-scope=worker]
 pigeon-enroll generate-cert -bundle /tmp/enroll-cert.pem
 
 # Claim (worker side, with mTLS + TPM attestation)
-pigeon-enroll claim -url enroll:8443 \
+pigeon-enroll claim -addr enroll:8443 \
   -token <hmac> -tls /tmp/enroll-cert.pem \
   -scope worker \
   -output /encrypted/pigeon/enroll.json
 
 # Claim (dev/testing only, no TPM)
-pigeon-enroll claim -url enroll:8443 \
+pigeon-enroll claim -addr enroll:8443 \
   -token <hmac> -tls /tmp/enroll-cert.pem \
   -skip-tpm \
   -output /encrypted/pigeon/enroll.json

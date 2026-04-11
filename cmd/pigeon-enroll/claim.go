@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/claimgrpc"
 	"github.com/pigeon-as/pigeon-enroll/internal/pki"
@@ -18,7 +17,7 @@ import (
 
 func cmdClaim(args []string) int {
 	flags := newFlagSet("claim")
-	url := flags.String("url", "", "Enrollment server address (host:port)")
+	addr := flags.String("addr", "", "Enrollment server address (host:port)")
 	tok := flags.String("token", "", "HMAC claim token")
 	output := flags.String("output", "", "Path to write secrets JSON")
 	scope := flags.String("scope", "", "Scope for secret filtering")
@@ -28,17 +27,9 @@ func cmdClaim(args []string) int {
 	skipTPM := flags.Bool("skip-tpm", false, "Skip TPM attestation (dev/testing only)")
 	flags.Parse(args)
 
-	if *url == "" || *tok == "" || *output == "" {
-		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<addr> -token=<hmac> -output=<path> [-tls=<bundle>] [-scope=<scope>] [-subject=<identity>] [-insecure] [-skip-tpm]")
+	if *addr == "" || *tok == "" || *output == "" {
+		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -addr=<host:port> -token=<hmac> -output=<path> [-tls=<bundle>] [-scope=<scope>] [-subject=<identity>] [-insecure] [-skip-tpm]")
 		return 1
-	}
-
-	// Strip scheme and path if present (gRPC uses host:port, not URLs).
-	target := *url
-	target = strings.TrimPrefix(target, "https://")
-	target = strings.TrimPrefix(target, "http://")
-	if i := strings.Index(target, "/"); i != -1 {
-		target = target[:i]
 	}
 
 	var dialOpts []grpc.DialOption
@@ -93,7 +84,7 @@ func cmdClaim(args []string) int {
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	}
 
-	conn, err := grpc.NewClient(target, dialOpts...)
+	conn, err := grpc.NewClient(*addr, dialOpts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gRPC connect: %v\n", err)
 		return 1
