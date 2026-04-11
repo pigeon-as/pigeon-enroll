@@ -48,7 +48,7 @@ mTLS is enabled by default — the CA is derived deterministically from the enro
 
 `generate-cert` outputs are explicit: `-bundle FILE` writes a PEM bundle (cert+key+ca), `-cert`/`-key`/`-ca` write individual files. `-bundle -` writes to stdout. EKU is inferred from SANs: `-dns`/`-ip` present → ServerAuth + ClientAuth, no SANs → ClientAuth only. `-ttl` sets validity (default 24h). `-base64` base64-encodes bundle output.
 
-Use `-insecure` for testing without TLS verification.
+Use `-insecure` to skip server certificate verification. When the server requires mTLS, still pass `-tls` alongside `-insecure` to present a client certificate.
 
 ## TPM Attestation
 
@@ -115,9 +115,9 @@ action "vault-init" {
 
 ## API
 
-gRPC service defined in `internal/proto/enroll/v1/enroll.proto`.
+gRPC service defined in `proto/enroll/v1/enroll.proto`.
 
-### `EnrollService.Claim` (bidirectional stream)
+### `EnrollmentService.Claim` (bidirectional stream)
 
 Bidirectional gRPC stream for TPM attestation and secret distribution. The client sends `ClaimRequest` messages and receives `ClaimResponse` messages:
 
@@ -127,10 +127,6 @@ Bidirectional gRPC stream for TPM attestation and secret distribution. The clien
 4. Server verifies activation, returns `ClaimResponse` with `secrets`, `vars`, `jwts`, `jwt_keys`, and optionally `signed_cert_der`
 
 Without TPM (`-skip-tpm`, dev/testing): single-round — client sends token-only request, server returns secrets immediately.
-
-### Health
-
-Standard gRPC health check via `grpc.health.v1.Health`.
 
 ## Actions
 

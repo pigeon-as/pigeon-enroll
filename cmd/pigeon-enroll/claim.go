@@ -61,10 +61,14 @@ func cmdClaim(args []string) int {
 			RootCAs:    caPool,
 			ServerName: "pigeon-enroll",
 		}
+		if *insecureFlag {
+			fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled — do not use in production")
+			tlsCfg.InsecureSkipVerify = true
+		}
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 
 	case *insecureFlag:
-		fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled — do not use in production")
+		fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled, no client cert — do not use in production")
 		tlsCfg := &tls.Config{
 			MinVersion:         tls.VersionTLS13,
 			InsecureSkipVerify: true,

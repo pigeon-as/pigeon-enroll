@@ -51,15 +51,11 @@ func Run(ctx context.Context, conn *grpc.ClientConn, token, scope, subject, outp
 
 // runTokenOnly sends a token-only claim (no TPM attestation).
 func runTokenOnly(stream pb.EnrollmentService_ClaimClient, token, scope, subject, outputPath string) (*Response, error) {
-	// Generate CSR so CSR-mode cert specs work in skip-tpm mode too.
-	var csrDER []byte
-	var csrKey ed25519.PrivateKey
-	if subject != "" {
-		var err error
-		csrDER, csrKey, err = generateCSR(subject)
-		if err != nil {
-			return nil, err
-		}
+	// Always generate a CSR — it's a public key vehicle for CSR-mode certs.
+	// The server assigns CN from config or subject independently (SPIRE pattern).
+	csrDER, csrKey, err := generateCSR(subject)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := stream.Send(&pb.ClaimRequest{
@@ -111,15 +107,11 @@ func runTPM(stream pb.EnrollmentService_ClaimClient, token, scope, subject, outp
 
 	akParams := sess.AKParams()
 
-	// Generate CSR for CSR-mode certs. Ed25519 keypair stays local.
-	var csrDER []byte
-	var csrKey ed25519.PrivateKey
-	if subject != "" {
-		var csrErr error
-		csrDER, csrKey, csrErr = generateCSR(subject)
-		if csrErr != nil {
-			return nil, csrErr
-		}
+	// Always generate a CSR — it's a public key vehicle for CSR-mode certs.
+	// The server assigns CN from config or subject independently (SPIRE pattern).
+	csrDER, csrKey, csrErr := generateCSR(subject)
+	if csrErr != nil {
+		return nil, csrErr
 	}
 
 	// Send initial params with TPM data + CSR (SPIRE pattern: everything in first message).
