@@ -6,6 +6,7 @@ package grpcserver
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/x509"
 	"fmt"
 	"log/slog"
@@ -272,7 +273,7 @@ func (s *Server) attestTPM(stream pb.EnrollmentService_ClaimServer, ip string, p
 	}
 
 	// Verify credential activation (constant-time).
-	if !constantTimeEqual(secret, activated) {
+	if subtle.ConstantTimeCompare(secret, activated) != 1 {
 		s.logger.Warn("TPM attestation failed", "ip", ip)
 		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, Scope: params.Scope, EKHash: ekHash, OK: false, Error: "credential activation failed"})
 		return "", status.Error(codes.PermissionDenied, "TPM attestation failed")
@@ -428,18 +429,6 @@ func scopeMatch(allowed []string, scope string) bool {
 		}
 	}
 	return false
-}
-
-// constantTimeEqual compares two byte slices in constant time.
-func constantTimeEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	var v byte
-	for i := range a {
-		v |= a[i] ^ b[i]
-	}
-	return v == 0
 }
 
 // ipRateLimiter tracks per-IP request rates.
