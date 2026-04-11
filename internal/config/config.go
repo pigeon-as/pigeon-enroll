@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/hcl/v2/hclsimple"
@@ -167,8 +168,17 @@ func validate(cfg Config) error {
 		if s.Name == "" {
 			return fmt.Errorf("secrets: name is required")
 		}
+		if strings.ContainsAny(s.Name, " \x00") {
+			return fmt.Errorf("secret %q: name must not contain spaces or NUL", s.Name)
+		}
+		if strings.ContainsAny(s.Scope, " \x00") {
+			return fmt.Errorf("secret %q: scope must not contain spaces or NUL", s.Scope)
+		}
 		if s.Length <= 0 {
 			return fmt.Errorf("secret %q: length must be positive", s.Name)
+		}
+		if s.Length > 8160 {
+			return fmt.Errorf("secret %q: length must not exceed 8160 (HKDF-SHA256 maximum)", s.Name)
 		}
 		if s.Encoding != "base64" && s.Encoding != "hex" {
 			return fmt.Errorf("secret %q: encoding must be \"base64\" or \"hex\"", s.Name)

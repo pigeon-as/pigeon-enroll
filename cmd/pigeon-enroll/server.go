@@ -4,22 +4,23 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"net/http"
+	"net"
 	"os"
 	"os/signal"
-	"time"
 
-	"github.com/pigeon-as/pigeon-enroll/internal/api"
 	"github.com/pigeon-as/pigeon-enroll/internal/audit"
+	"github.com/pigeon-as/pigeon-enroll/internal/grpcserver"
 	"github.com/pigeon-as/pigeon-enroll/internal/pki"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
+	pb "github.com/pigeon-as/pigeon-enroll/proto/enroll/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 func cmdServer(args []string) int {
 	flags := newFlagSet("server")
 	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
 	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
-	skipTLS := flags.Bool("skip-tls", false, "Allow plain HTTP (no TLS)")
 	flags.Parse(args)
 
 	logger, cfg, ikm, hmacKey, err := loadConfig(*configPath, *logLevel)
@@ -54,19 +55,36 @@ func cmdServer(args []string) int {
 		logger.Info("audit log", "path", cfg.AuditPath)
 	}
 
-	srv, err := api.New(logger, cfg, hmacKey, derived, cas, jwtKeys, al)
+	srv, err := grpcserver.New(logger, cfg, hmacKey, derived, cas, jwtKeys, al)
 	if err != nil {
-		logger.Error("create api server", "err", err)
+		logger.Error("create grpc server", "err", err)
 		return 1
 	}
 
-	httpServer := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
+	// Derive mTLS credentials from enrollment key.
+	ca, err := pki.DeriveCA(ikm)
+	if err != nil {
+		logger.Error("derive CA", "err", err)
+		return 1
+	}
+	caPool := x509.NewCertPool()
+	caPool.AddCert(ca.Cert)
+	rotator := pki.NewCertRotator(ca, []string{"pigeon-enroll"}, cfg.ServerCertTTL)
+
+	tlsCfg := &tls.Config{
+		MinVersion:     tls.VersionTLS13,
+		GetCertificate: rotator.GetCertificate,
+		ClientAuth:     tls.RequireAndVerifyClientCert,
+		ClientCAs:      caPool,
+	}
+
+	grpcSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsCfg)))
+	pb.RegisterEnrollmentServiceServer(grpcSrv, srv)
+
+	lis, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		logger.Error("listen", "err", err)
+		return 1
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -75,38 +93,13 @@ func cmdServer(args []string) int {
 	go func() {
 		<-ctx.Done()
 		logger.Info("shutting down")
-		srv.Close()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		httpServer.Shutdown(shutCtx)
+		grpcSrv.GracefulStop()
 	}()
 
-	if !*skipTLS {
-		ca, err := pki.DeriveCA(ikm)
-		if err != nil {
-			logger.Error("derive CA", "err", err)
-			return 1
-		}
-		caPool := x509.NewCertPool()
-		caPool.AddCert(ca.Cert)
-		rotator := pki.NewCertRotator(ca, []string{"pigeon-enroll"}, cfg.ServerCertTTL)
-		httpServer.TLSConfig = &tls.Config{
-			MinVersion:     tls.VersionTLS12,
-			GetCertificate: rotator.GetCertificate,
-			ClientAuth:     tls.RequireAndVerifyClientCert,
-			ClientCAs:      caPool,
-		}
-		logger.Info("listening (mTLS)", "addr", cfg.Listen, "server_cert_ttl", cfg.ServerCertTTL)
-		if err := httpServer.ListenAndServeTLS("", ""); err != http.ErrServerClosed {
-			logger.Error("listen", "err", err)
-			return 1
-		}
-	} else {
-		logger.Warn("listening without TLS (-skip-tls)", "addr", cfg.Listen)
-		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
-			logger.Error("listen", "err", err)
-			return 1
-		}
+	logger.Info("listening (gRPC mTLS)", "addr", cfg.Listen, "server_cert_ttl", cfg.ServerCertTTL)
+	if err := grpcSrv.Serve(lis); err != nil {
+		logger.Error("serve", "err", err)
+		return 1
 	}
 
 	return 0

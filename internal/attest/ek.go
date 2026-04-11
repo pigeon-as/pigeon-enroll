@@ -187,3 +187,14 @@ func loadHashFile(path string) (map[string]bool, error) {
 	}
 	return hashes, scanner.Err()
 }
+
+// EKHashFromKey computes the SHA-256 hash of a PKIX-encoded public key.
+// Returns the hex-encoded hash, or empty string on error.
+func EKHashFromKey(pub crypto.PublicKey) string {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return ""
+	}
+	h := sha256.Sum256(der)
+	return hex.EncodeToString(h[:])
+}

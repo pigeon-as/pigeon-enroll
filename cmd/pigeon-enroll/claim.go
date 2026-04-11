@@ -1,36 +1,50 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
-	"time"
+	"os/signal"
+	"strings"
 
-	"github.com/pigeon-as/pigeon-enroll/internal/claim"
+	"github.com/pigeon-as/pigeon-enroll/internal/claimgrpc"
 	"github.com/pigeon-as/pigeon-enroll/internal/pki"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func cmdClaim(args []string) int {
 	flags := newFlagSet("claim")
-	url := flags.String("url", "", "Enrollment server URL")
+	url := flags.String("url", "", "Enrollment server address (host:port)")
 	tok := flags.String("token", "", "HMAC claim token")
 	output := flags.String("output", "", "Path to write secrets JSON")
 	scope := flags.String("scope", "", "Scope for secret filtering")
 	subject := flags.String("subject", "", "Subject identity for JWT sub claim (e.g. hostname)")
 	tlsBundle := flags.String("tls", "", "Path to client TLS certificate bundle (PEM)")
-	insecure := flags.Bool("insecure", false, "Skip TLS certificate verification")
+	insecureFlag := flags.Bool("insecure", false, "Skip TLS certificate verification")
 	skipTPM := flags.Bool("skip-tpm", false, "Skip TPM attestation (dev/testing only)")
 	flags.Parse(args)
 
 	if *url == "" || *tok == "" || *output == "" {
-		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<url> -token=<hmac> -output=<path> [-tls=<bundle>] [-scope=<scope>] [-subject=<identity>] [-insecure] [-skip-tpm]")
+		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll claim -url=<addr> -token=<hmac> -output=<path> [-tls=<bundle>] [-scope=<scope>] [-subject=<identity>] [-insecure] [-skip-tpm]")
 		return 1
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	if *tlsBundle != "" {
+	// Strip scheme if present (gRPC uses host:port, not URLs).
+	target := *url
+	target = strings.TrimPrefix(target, "https://")
+	target = strings.TrimPrefix(target, "http://")
+	target = strings.TrimSuffix(target, "/claim")
+	target = strings.TrimRight(target, "/")
+
+	var dialOpts []grpc.DialOption
+
+	switch {
+	case *tlsBundle != "":
 		bundlePEM, err := os.ReadFile(*tlsBundle)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "read TLS bundle: %v\n", err)
@@ -41,25 +55,47 @@ func cmdClaim(args []string) int {
 			fmt.Fprintf(os.Stderr, "load TLS bundle: %v\n", err)
 			return 1
 		}
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-				Certificates: []tls.Certificate{{
-					Certificate: [][]byte{cert.Raw},
-					PrivateKey:  key,
-				}},
-				RootCAs:    caPool,
-				ServerName: "pigeon-enroll",
-			},
+		tlsCfg := &tls.Config{
+			MinVersion: tls.VersionTLS13,
+			Certificates: []tls.Certificate{{
+				Certificate: [][]byte{cert.Raw},
+				PrivateKey:  key,
+			}},
+			RootCAs:    caPool,
+			ServerName: "pigeon-enroll",
 		}
-	} else if *insecure {
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+
+	case *insecureFlag:
 		fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled — do not use in production")
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+	default:
+		// No bundle, not insecure — use system CA pool.
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load system CA pool: %v\n", err)
+			return 1
 		}
+		tlsCfg := &tls.Config{
+			MinVersion: tls.VersionTLS13,
+			RootCAs:    pool,
+			ServerName: "pigeon-enroll",
+		}
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	}
 
-	resp, err := claim.Run(client, *url, *tok, *scope, *subject, *output, *skipTPM, slog.Default())
+	conn, err := grpc.NewClient(target, dialOpts...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gRPC connect: %v\n", err)
+		return 1
+	}
+	defer conn.Close()
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	resp, err := claimgrpc.Run(ctx, conn, *tok, *scope, *subject, *output, *skipTPM, slog.Default())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "claim failed: %v\n", err)
 		return 1
