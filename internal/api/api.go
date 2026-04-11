@@ -4,6 +4,7 @@ package api
 import (
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"net"
@@ -119,6 +120,7 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 	}
 	srv.mux.HandleFunc("POST /attest", srv.handleAttest)
 	srv.mux.HandleFunc("POST /claim", srv.handleClaim)
+	srv.mux.HandleFunc("POST /csr", srv.handleCSR)
 	srv.mux.HandleFunc("GET /health", srv.handleHealth)
 	return srv, nil
 }
@@ -219,12 +221,13 @@ type claimRequestTPM struct {
 }
 
 type claimResponse struct {
-	Secrets map[string]string            `json:"secrets"`
-	Vars    map[string]string            `json:"vars"`
-	CA      map[string]secrets.CAEntry   `json:"ca,omitempty"`
-	Certs   map[string]secrets.CertEntry `json:"certs,omitempty"`
-	JWTs    map[string]string            `json:"jwts,omitempty"`
-	JWTKeys map[string]string            `json:"jwt_keys,omitempty"`
+	Secrets  map[string]string            `json:"secrets"`
+	Vars     map[string]string            `json:"vars"`
+	CA       map[string]secrets.CAEntry   `json:"ca,omitempty"`
+	Certs    map[string]secrets.CertEntry `json:"certs,omitempty"`
+	CSRCerts []string                     `json:"csr_certs,omitempty"` // cert names requiring worker CSR
+	JWTs     map[string]string            `json:"jwts,omitempty"`
+	JWTKeys  map[string]string            `json:"jwt_keys,omitempty"`
 }
 
 // handleAttest handles POST /attest — TPM attestation round 1.
@@ -428,8 +431,14 @@ func (s *Server) writeClaimResponse(w http.ResponseWriter, scope, subject string
 
 	// Issue leaf certs for matching cert blocks.
 	var certs map[string]secrets.CertEntry
+	var csrCerts []string
 	for _, cs := range s.certSpecs {
 		if !scopeMatch(cs.Scope, scope) {
+			continue
+		}
+		// CSR-mode certs are not pre-issued — worker submits a CSR after claim.
+		if cs.Mode == "csr" {
+			csrCerts = append(csrCerts, cs.Name)
 			continue
 		}
 		ca := s.certCAs[cs.CA]
@@ -490,13 +499,117 @@ func (s *Server) writeClaimResponse(w http.ResponseWriter, scope, subject string
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(claimResponse{
-		Secrets: filteredSecrets,
-		Vars:    filteredVars,
-		CA:      filteredCAs,
-		Certs:   certs,
-		JWTs:    jwts,
-		JWTKeys: jwtKeys,
+		Secrets:  filteredSecrets,
+		Vars:     filteredVars,
+		CA:       filteredCAs,
+		Certs:    certs,
+		CSRCerts: csrCerts,
+		JWTs:     jwts,
+		JWTKeys:  jwtKeys,
 	})
+}
+
+// csrRequest is the input for POST /csr.
+type csrRequest struct {
+	SessionID string `json:"session_id"`
+	CSRPEM    string `json:"csr_pem"`
+}
+
+// csrResponse is the output of POST /csr.
+type csrResponse struct {
+	Certs map[string]secrets.CertEntry `json:"certs"`
+}
+
+// handleCSR handles POST /csr — signs worker-generated CSRs for cert blocks
+// with mode = "csr". Uses the attestation session (post-claim) for authorization.
+// Follows the SPIRE pattern: only the CSR's public key is used; the server
+// controls subject, SANs, EKU, and validity.
+func (s *Server) handleCSR(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if !s.limiter.allow(ip) {
+		s.logger.Warn("rate limited", "ip", ip)
+		s.audit.Record(audit.Entry{Operation: "csr", IP: ip, OK: false, Error: "rate limited"})
+		s.jsonError(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 8192)
+	var req csrRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.SessionID == "" || req.CSRPEM == "" {
+		s.jsonError(w, "session_id and csr_pem are required", http.StatusBadRequest)
+		return
+	}
+
+	// Consume the claimed session (one-time use).
+	result, err := s.verifier.ConsumeForCSR(req.SessionID)
+	if err != nil {
+		s.logger.Warn("CSR session lookup failed", "ip", ip, "err", err)
+		s.audit.Record(audit.Entry{Operation: "csr", IP: ip, OK: false, Error: err.Error()})
+		s.jsonError(w, "invalid or expired session", http.StatusForbidden)
+		return
+	}
+
+	// Parse CSR — extract only the public key (SPIRE pattern).
+	block, _ := pem.Decode([]byte(req.CSRPEM))
+	if block == nil || block.Type != "CERTIFICATE REQUEST" {
+		s.jsonError(w, "invalid CSR PEM", http.StatusBadRequest)
+		return
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		s.jsonError(w, "invalid CSR", http.StatusBadRequest)
+		return
+	}
+	if err := csr.CheckSignature(); err != nil {
+		s.jsonError(w, "CSR signature verification failed", http.StatusBadRequest)
+		return
+	}
+
+	// Sign certs for all CSR-mode specs matching this scope.
+	certs := make(map[string]secrets.CertEntry)
+	for _, cs := range s.certSpecs {
+		if cs.Mode != "csr" {
+			continue
+		}
+		if !scopeMatch(cs.Scope, result.Scope) {
+			continue
+		}
+		ca := s.certCAs[cs.CA]
+		serverAuth := cs.ServerAuth != nil && *cs.ServerAuth
+		clientAuth := cs.ClientAuth == nil || *cs.ClientAuth
+		cn := cs.CN
+		if cn == "" {
+			cn = result.Subject
+		}
+		if cn == "" {
+			s.logger.Error("CSR cert CN is empty and no subject in session", "cert", cs.Name)
+			s.jsonError(w, "subject is required when cert has no static cn", http.StatusBadRequest)
+			return
+		}
+		var ipSANs []net.IP
+		for _, raw := range cs.IPSANs {
+			ipSANs = append(ipSANs, net.ParseIP(raw))
+		}
+		certPEM, err := pki.SignCSR(ca, csr.PublicKey, cn, cs.DNSSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
+		if err != nil {
+			s.logger.Error("sign CSR failed", "cert", cs.Name, "err", err)
+			s.jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		// CSR response includes cert PEM but no private key (worker has it).
+		certs[cs.Name] = secrets.CertEntry{CertPEM: string(certPEM)}
+	}
+
+	s.logger.Info("CSR signed", "ip", ip, "scope", result.Scope, "ek", result.EKHash, "certs", len(certs))
+	s.audit.Record(audit.Entry{Operation: "csr", IP: ip, Scope: result.Scope, OK: true})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(csrResponse{Certs: certs})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

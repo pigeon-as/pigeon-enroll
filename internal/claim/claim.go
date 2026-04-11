@@ -7,8 +7,12 @@ package claim
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,13 +27,14 @@ import (
 // Response is the JSON structure returned by POST /claim.
 // Format: {"secrets":{...},"vars":{...}} with optional "ca", "certs", "jwts", and "jwt_keys" fields.
 type Response struct {
-	Secrets map[string]string            `json:"secrets"`
-	Vars    map[string]string            `json:"vars"`
-	CA      map[string]map[string]string `json:"ca,omitempty"`
-	Certs   map[string]map[string]string `json:"certs,omitempty"`
-	JWTs    map[string]string            `json:"jwts,omitempty"`
-	JWTKeys map[string]string            `json:"jwt_keys,omitempty"`
-	Error   string                       `json:"error,omitempty"`
+	Secrets  map[string]string            `json:"secrets"`
+	Vars     map[string]string            `json:"vars"`
+	CA       map[string]map[string]string `json:"ca,omitempty"`
+	Certs    map[string]map[string]string `json:"certs,omitempty"`
+	CSRCerts []string                     `json:"csr_certs,omitempty"`
+	JWTs     map[string]string            `json:"jwts,omitempty"`
+	JWTKeys  map[string]string            `json:"jwt_keys,omitempty"`
+	Error    string                       `json:"error,omitempty"`
 }
 
 // attestResponse is the JSON structure returned by POST /attest.
@@ -71,7 +76,16 @@ func runTokenOnly(client *http.Client, baseURL, token, scope, subject, outputPat
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	return doClaimRequest(client, baseURL+"/claim", body, outputPath)
+	result, data, err := doClaimRequest(client, baseURL+"/claim", body)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := atomicfile.Write(outputPath, data, 0600); err != nil {
+		return nil, fmt.Errorf("write secrets: %w", err)
+	}
+
+	return result, nil
 }
 
 // runTPM performs the two-round TPM attestation claim.
@@ -162,37 +176,143 @@ func runTPM(client *http.Client, baseURL, token, scope, subject, outputPath stri
 		return nil, fmt.Errorf("marshal claim request: %w", err)
 	}
 
-	return doClaimRequest(client, baseURL+"/claim", claimBody, outputPath)
+	result, data, err := doClaimRequest(client, baseURL+"/claim", claimBody)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 7: If the server indicates CSR-mode certs, generate keypair and submit CSR.
+	if len(result.CSRCerts) > 0 {
+		logger.Info("submitting CSR for certs", "certs", result.CSRCerts)
+		csrCerts, csrKeyPEMs, err := submitCSR(client, baseURL, ar.SessionID, subject)
+		if err != nil {
+			return nil, fmt.Errorf("CSR: %w", err)
+		}
+		// Merge CSR certs into claim response (cert_pem from server, key_pem from local keypair).
+		if result.Certs == nil {
+			result.Certs = make(map[string]map[string]string)
+		}
+		for name, certPEM := range csrCerts {
+			result.Certs[name] = map[string]string{
+				"cert_pem": certPEM,
+				"key_pem":  csrKeyPEMs[name],
+			}
+		}
+		// Re-encode the merged response for the on-disk file.
+		data, err = json.Marshal(result)
+		if err != nil {
+			return nil, fmt.Errorf("re-encode response: %w", err)
+		}
+	}
+
+	// Write the final response to disk.
+	if err := atomicfile.Write(outputPath, data, 0600); err != nil {
+		return nil, fmt.Errorf("write secrets: %w", err)
+	}
+
+	return result, nil
 }
 
-// doClaimRequest sends a POST to the claim endpoint and writes the response.
-func doClaimRequest(client *http.Client, url string, body []byte, outputPath string) (*Response, error) {
+// doClaimRequest sends a POST to the claim endpoint and returns the parsed response and raw JSON.
+func doClaimRequest(client *http.Client, url string, body []byte) (*Response, []byte, error) {
 	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("POST %s: %w", url, err)
+		return nil, nil, fmt.Errorf("POST %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, nil, fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("claim failed (%d): %s", resp.StatusCode, extractError(data, resp.Status))
+		return nil, nil, fmt.Errorf("claim failed (%d): %s", resp.StatusCode, extractError(data, resp.Status))
 	}
 
 	var result Response
 	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return nil, nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	// Write the raw server response ("ca" field present only when CAs are configured).
-	if err := atomicfile.Write(outputPath, data, 0600); err != nil {
-		return nil, fmt.Errorf("write secrets: %w", err)
+	return &result, data, nil
+}
+
+// csrResponse is the JSON structure returned by POST /csr.
+type csrResponse struct {
+	Certs map[string]struct {
+		CertPEM string `json:"cert_pem"`
+	} `json:"certs"`
+	Error string `json:"error,omitempty"`
+}
+
+// submitCSR generates an Ed25519 keypair, builds a CSR, and submits it to POST /csr.
+// Returns maps of cert name → cert PEM (from server) and cert name → key PEM (local).
+func submitCSR(client *http.Client, baseURL, sessionID, subject string) (certPEMs, keyPEMs map[string]string, err error) {
+	// Generate ephemeral Ed25519 keypair (never leaves this machine).
+	_, privKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate keypair: %w", err)
 	}
 
-	return &result, nil
+	// Build CSR with subject as CN. Server ignores all CSR fields except the public key
+	// (SPIRE pattern), but we include a valid subject for protocol correctness.
+	csrTemplate := &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: subject},
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, privKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create CSR: %w", err)
+	}
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+
+	// POST /csr with session_id + CSR PEM.
+	reqBody := struct {
+		SessionID string `json:"session_id"`
+		CSRPEM    string `json:"csr_pem"`
+	}{
+		SessionID: sessionID,
+		CSRPEM:    string(csrPEM),
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal CSR request: %w", err)
+	}
+
+	resp, err := client.Post(baseURL+"/csr", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, fmt.Errorf("POST /csr: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read /csr response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("CSR failed (%d): %s", resp.StatusCode, extractError(data, resp.Status))
+	}
+
+	var csrResp csrResponse
+	if err := json.Unmarshal(data, &csrResp); err != nil {
+		return nil, nil, fmt.Errorf("decode CSR response: %w", err)
+	}
+
+	// Encode local private key as PEM.
+	keyDER, err := x509.MarshalPKCS8PrivateKey(privKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal private key: %w", err)
+	}
+	localKeyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
+
+	certPEMs = make(map[string]string, len(csrResp.Certs))
+	keyPEMs = make(map[string]string, len(csrResp.Certs))
+	for name, entry := range csrResp.Certs {
+		certPEMs[name] = entry.CertPEM
+		keyPEMs[name] = localKeyPEM // same keypair for all CSR certs
+	}
+
+	return certPEMs, keyPEMs, nil
 }
 
 // extractError attempts to parse an error message from a JSON error response.

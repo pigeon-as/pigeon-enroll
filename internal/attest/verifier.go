@@ -33,6 +33,7 @@ type session struct {
 	ekHash    string
 	token     string // original HMAC token, consumed on success
 	expiresAt time.Time
+	claimed   bool // true after successful /claim; session kept for /csr
 }
 
 // Verifier manages attestation sessions and verifies TPM responses.
@@ -151,24 +152,36 @@ type CompleteResult struct {
 }
 
 // CompleteAttestation verifies the credential activation response.
+// The session is marked as claimed (not deleted) so that it remains available
+// for a subsequent POST /csr within the session TTL.
 func (v *Verifier) CompleteAttestation(req CompleteRequest) (*CompleteResult, error) {
-	// Look up and remove session atomically.
 	v.mu.Lock()
 	sess, ok := v.sessions[req.SessionID]
-	if ok {
+	if ok && sess.claimed {
+		v.mu.Unlock()
+		return nil, errors.New("session already claimed")
+	}
+	if ok && time.Now().After(sess.expiresAt) {
 		delete(v.sessions, req.SessionID)
+		v.mu.Unlock()
+		return nil, errors.New("session expired")
+	}
+	if ok {
+		sess.claimed = true
+		sess.expiresAt = time.Now().Add(sessionTTL) // extend for /csr window
 	}
 	v.mu.Unlock()
 
 	if !ok {
 		return nil, errors.New("unknown or expired session")
 	}
-	if time.Now().After(sess.expiresAt) {
-		return nil, errors.New("session expired")
-	}
 
 	// Verify credential activation (proves real TPM with this EK).
 	if subtle.ConstantTimeCompare(sess.secret, req.ActivatedSecret) != 1 {
+		// Failed verification — remove session so it can't be retried.
+		v.mu.Lock()
+		delete(v.sessions, req.SessionID)
+		v.mu.Unlock()
 		return nil, errors.New("credential activation failed")
 	}
 
@@ -177,6 +190,35 @@ func (v *Verifier) CompleteAttestation(req CompleteRequest) (*CompleteResult, er
 		Subject: sess.subject,
 		Token:    sess.token,
 		EKHash:   sess.ekHash,
+	}, nil
+}
+
+// ConsumeForCSR looks up a claimed session and deletes it atomically.
+// Returns the session data (scope, subject, EK hash) for CSR signing authorization.
+// The session must have been previously completed via CompleteAttestation.
+func (v *Verifier) ConsumeForCSR(sessionID string) (*CompleteResult, error) {
+	v.mu.Lock()
+	sess, ok := v.sessions[sessionID]
+	if ok {
+		delete(v.sessions, sessionID)
+	}
+	v.mu.Unlock()
+
+	if !ok {
+		return nil, errors.New("unknown or expired session")
+	}
+	if !sess.claimed {
+		return nil, errors.New("session not yet claimed")
+	}
+	if time.Now().After(sess.expiresAt) {
+		return nil, errors.New("session expired")
+	}
+
+	return &CompleteResult{
+		Scope:   sess.scope,
+		Subject: sess.subject,
+		Token:   sess.token,
+		EKHash:  sess.ekHash,
 	}, nil
 }
 

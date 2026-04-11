@@ -36,6 +36,7 @@ type CertSpec struct {
 	Scope      []string `hcl:"scope"`                 // who gets this cert auto-issued
 	TTLRaw     string   `hcl:"ttl"`                   // e.g. "720h"
 	TTL        time.Duration
+	Mode       string   `hcl:"mode,optional"`         // "push" (default): server generates keypair; "csr": worker generates keypair, submits CSR
 	ClientAuth *bool    `hcl:"client_auth,optional"`  // default true
 	ServerAuth *bool    `hcl:"server_auth,optional"`  // default false
 	CN         string   `hcl:"cn,optional"`           // static common name; if empty, claim uses subject, server self-issue uses hostname
@@ -118,6 +119,9 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("cert %q: parse ttl: %w", c.Name, err)
 		}
 		cfg.Certs[i].TTL = d
+		if cfg.Certs[i].Mode == "" {
+			cfg.Certs[i].Mode = "push"
+		}
 	}
 
 	for i, j := range cfg.JWTs {
@@ -210,6 +214,9 @@ func validate(cfg Config) error {
 		certNames[c.Name] = true
 		if !caNames[c.CA] {
 			return fmt.Errorf("cert %q: ca %q is not defined", c.Name, c.CA)
+		}
+		if c.Mode != "" && c.Mode != "push" && c.Mode != "csr" {
+			return fmt.Errorf("cert %q: mode must be \"push\" or \"csr\"", c.Name)
 		}
 		if len(c.Scope) == 0 {
 			return fmt.Errorf("cert %q: scope must not be empty", c.Name)

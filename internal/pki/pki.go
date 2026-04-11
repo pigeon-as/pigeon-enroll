@@ -171,6 +171,44 @@ func IssueCert(ca *CA, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Du
 	return signLeaf(ca, tmpl)
 }
 
+// SignCSR signs a certificate using the CSR's public key with a server-controlled
+// template. Follows the SPIRE pattern: only the public key is extracted from the
+// CSR — subject, SANs, EKU, and validity are all set by the server. This prevents
+// the client from escalating privileges via crafted CSR fields.
+func SignCSR(ca *CA, pubKey crypto.PublicKey, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, serverAuth, clientAuth bool) (certPEM []byte, err error) {
+	var eku []x509.ExtKeyUsage
+	if serverAuth {
+		eku = append(eku, x509.ExtKeyUsageServerAuth)
+	}
+	if clientAuth {
+		eku = append(eku, x509.ExtKeyUsageClientAuth)
+	}
+
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, fmt.Errorf("generate serial: %w", err)
+	}
+
+	now := time.Now()
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    now.Add(-5 * time.Minute),
+		NotAfter:     now.Add(ttl),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  eku,
+		DNSNames:     dnsSANs,
+		IPAddresses:  ipSANs,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, pubKey, ca.Key)
+	if err != nil {
+		return nil, fmt.Errorf("sign CSR cert: %w", err)
+	}
+
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), nil
+}
+
 // GenerateClientCert creates an ephemeral Ed25519 client certificate bundle
 // (cert + key + CA cert) signed by the CA.
 // Returns the PEM bundle as a single byte slice.
