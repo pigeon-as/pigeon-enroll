@@ -51,11 +51,23 @@ func Run(ctx context.Context, conn *grpc.ClientConn, token, scope, subject, outp
 
 // runTokenOnly sends a token-only claim (no TPM attestation).
 func runTokenOnly(stream pb.EnrollmentService_ClaimClient, token, scope, subject, outputPath string) (*Response, error) {
+	// Generate CSR so CSR-mode cert specs work in skip-tpm mode too.
+	var csrDER []byte
+	var csrKey ed25519.PrivateKey
+	if subject != "" {
+		var err error
+		csrDER, csrKey, err = generateCSR(subject)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if err := stream.Send(&pb.ClaimRequest{
 		Step: &pb.ClaimRequest_Params{Params: &pb.ClaimParams{
 			Token:   token,
 			Scope:   scope,
 			Subject: subject,
+			CsrDer:  csrDER,
 		}},
 	}); err != nil {
 		return nil, fmt.Errorf("send params: %w", err)
@@ -69,7 +81,7 @@ func runTokenOnly(stream pb.EnrollmentService_ClaimClient, token, scope, subject
 	if result == nil {
 		return nil, fmt.Errorf("expected result, got challenge (server requires TPM?)")
 	}
-	return writeResult(result, outputPath, nil)
+	return writeResult(result, outputPath, csrKey)
 }
 
 // runTPM performs the full TPM attestation claim flow on the stream.
