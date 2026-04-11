@@ -504,8 +504,9 @@ cert "node" {
 
 	must.MapContainsKey(t, result.Certs, "node")
 	must.StrContains(t, result.Certs["node"]["cert_pem"], "BEGIN CERTIFICATE")
-	// CSR-mode: server does NOT return a private key (client generated it locally).
-	must.EqOp(t, "", result.Certs["node"]["key_pem"])
+	// CSR-mode: the client attaches its locally-generated private key to the on-disk JSON.
+	// The key never touched the server — only the CSR (public key) was sent.
+	must.StrContains(t, result.Certs["node"]["key_pem"], "PRIVATE KEY")
 }
 
 func TestClaim_MissingSubjectForCert(t *testing.T) {
