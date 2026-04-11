@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -220,7 +221,11 @@ func (s *Server) attestTPM(stream pb.EnrollmentService_ClaimServer, ip string, p
 		if err := s.ek.Validate(ekPub, ekCert); err != nil {
 			s.logger.Error("EK validation failed", "ip", ip, "err", err)
 			s.audit.Record(audit.Entry{Operation: "claim", IP: ip, Scope: params.Scope, OK: false, Error: "EK: " + err.Error()})
-			return "", status.Error(codes.PermissionDenied, "EK validation failed")
+			code := codes.Internal
+			if errors.Is(err, attestpkg.ErrEKNotTrusted) {
+				code = codes.PermissionDenied
+			}
+			return "", status.Error(code, "EK validation failed")
 		}
 	}
 

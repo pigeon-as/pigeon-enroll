@@ -62,7 +62,8 @@ func cmdSealKey(args []string) int {
 		outPath = cfg.KeyPath + ".sealed"
 	}
 
-	// Read the plaintext enrollment key.
+	// Always read plaintext — seal-key runs before key_source is switched to "tpm".
+	cfg.KeySource = "file"
 	ikm, err := readIKM(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "read enrollment key: %v\n", err)

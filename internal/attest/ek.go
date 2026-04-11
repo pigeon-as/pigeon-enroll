@@ -9,11 +9,17 @@ import (
 	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// ErrEKNotTrusted is returned when the EK is not in the hash allowlist
+// and not validated by any CA certificate chain. Operational errors
+// (e.g. hash file unreadable) return a different error.
+var ErrEKNotTrusted = errors.New("EK not trusted")
 
 // EKValidator checks whether an EK public key is trusted.
 // Follows the SPIRE community TPM plugin pattern:
@@ -80,7 +86,7 @@ func (v *EKValidator) Validate(ekPub crypto.PublicKey, ekCert *x509.Certificate)
 		}
 	}
 
-	return fmt.Errorf("EK not trusted (hash %s)", hash)
+	return fmt.Errorf("%w (hash %s)", ErrEKNotTrusted, hash)
 }
 
 // verifyCert validates the EK certificate chain and checks that the
