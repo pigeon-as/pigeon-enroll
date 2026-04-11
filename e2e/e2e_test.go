@@ -472,6 +472,120 @@ jwt "consul_auto_config" {
 	must.MapContainsKey(t, result2.JWTKeys, "consul_auto_config")
 }
 
+func TestClaim_CSRCert(t *testing.T) {
+	keyPath := enrollmentKey(t)
+	cfgPath := writeFile(t, "enroll.hcl", fmt.Sprintf(`
+listen       = "%s"
+key_path     = "%s"
+token_window = "30m"
+nonce_path   = "%s"
+
+secret "test" {
+  length   = 16
+  encoding = "hex"
+}
+
+ca "enroll" {}
+
+cert "node" {
+  ca          = "enroll"
+  mode        = "csr"
+  scope       = ["worker"]
+  ttl         = "24h"
+  client_auth = true
+}
+`, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
+
+	bundle := startServer(t, cfgPath)
+
+	// CSR-mode: server signs the client's public key. No key_pem in response.
+	token := run(t, "generate-token", "-config="+cfgPath, "-scope=worker")
+	result := claim(t, bundle, token, "-scope=worker", "-subject=worker-01.dc1")
+
+	must.MapContainsKey(t, result.Certs, "node")
+	must.StrContains(t, result.Certs["node"]["cert_pem"], "BEGIN CERTIFICATE")
+	// CSR-mode: server does NOT return a private key (client generated it locally).
+	must.EqOp(t, "", result.Certs["node"]["key_pem"])
+}
+
+func TestClaim_MissingSubjectForCert(t *testing.T) {
+	keyPath := enrollmentKey(t)
+	cfgPath := writeFile(t, "enroll.hcl", fmt.Sprintf(`
+listen       = "%s"
+key_path     = "%s"
+token_window = "30m"
+nonce_path   = "%s"
+
+secret "test" {
+  length   = 16
+  encoding = "hex"
+}
+
+ca "enroll" {}
+
+cert "node" {
+  ca          = "enroll"
+  scope       = ["worker"]
+  ttl         = "24h"
+  client_auth = true
+}
+`, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
+
+	bundle := startServer(t, cfgPath)
+
+	// Cert requires subject but none provided — should fail.
+	token := run(t, "generate-token", "-config="+cfgPath, "-scope=worker")
+
+	cmd := exec.Command(binary, "claim",
+		"-addr="+testAddr, "-token="+token,
+		"-output="+filepath.Join(t.TempDir(), "bad.json"),
+		"-tls="+bundle, "-skip-tpm",
+		"-scope=worker",
+		// No -subject flag.
+	)
+	b, err := cmd.CombinedOutput()
+	must.Error(t, err)
+	must.StrContains(t, string(b), "invalid claim request")
+}
+
+func TestClaim_MissingSubjectForJWT(t *testing.T) {
+	keyPath := enrollmentKey(t)
+	cfgPath := writeFile(t, "enroll.hcl", fmt.Sprintf(`
+listen       = "%s"
+key_path     = "%s"
+token_window = "30m"
+nonce_path   = "%s"
+
+secret "test" {
+  length   = 16
+  encoding = "hex"
+}
+
+jwt "consul_auto_config" {
+  issuer   = "pigeon-enroll"
+  audience = "consul-auto-config"
+  ttl      = "24h"
+  scope    = "worker"
+}
+`, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
+
+	bundle := startServer(t, cfgPath)
+
+	// JWT requires subject but none provided — should fail.
+	token := run(t, "generate-token", "-config="+cfgPath, "-scope=worker")
+
+	cmd := exec.Command(binary, "claim",
+		"-addr="+testAddr, "-token="+token,
+		"-output="+filepath.Join(t.TempDir(), "bad.json"),
+		"-tls="+bundle, "-skip-tpm",
+		"-scope=worker",
+		// No -subject flag.
+	)
+	b, err := cmd.CombinedOutput()
+	must.Error(t, err)
+	must.StrContains(t, string(b), "invalid claim request")
+}
+
 func TestClaim_Deterministic(t *testing.T) {
 	keyPath := enrollmentKey(t)
 	cfgPath := writeFile(t, "enroll.hcl", fmt.Sprintf(`
