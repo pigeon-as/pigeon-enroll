@@ -103,11 +103,13 @@ func newFlagSet(name string) *flag.FlagSet {
 // loadConfig loads the HCL config, reads the enrollment key (from file or TPM),
 // and derives the HMAC signing key.
 func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byte, []byte, error) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(logLevel)); err != nil {
-		return nil, config.Config{}, nil, nil, fmt.Errorf("invalid log-level %q: %w", logLevel, err)
+		return logger, config.Config{}, nil, nil, fmt.Errorf("invalid log-level %q: %w", logLevel, err)
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: level,
 	}))
 

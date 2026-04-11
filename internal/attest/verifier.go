@@ -154,44 +154,39 @@ type CompleteResult struct {
 // CompleteAttestation verifies the credential activation response.
 // The session is marked as claimed (not deleted) so that it remains available
 // for a subsequent POST /csr within the session TTL.
+// The entire operation (lookup + crypto verify + mark claimed) is held under
+// a single lock to prevent double-claim races.
 func (v *Verifier) CompleteAttestation(req CompleteRequest) (*CompleteResult, error) {
 	v.mu.Lock()
-	sess, ok := v.sessions[req.SessionID]
-	if ok && sess.claimed {
-		v.mu.Unlock()
-		return nil, errors.New("session already claimed")
-	}
-	if ok && time.Now().After(sess.expiresAt) {
-		delete(v.sessions, req.SessionID)
-		v.mu.Unlock()
-		return nil, errors.New("session expired")
-	}
-	v.mu.Unlock()
+	defer v.mu.Unlock()
 
+	sess, ok := v.sessions[req.SessionID]
 	if !ok {
 		return nil, errors.New("unknown or expired session")
+	}
+	if sess.claimed {
+		return nil, errors.New("session already claimed")
+	}
+	if time.Now().After(sess.expiresAt) {
+		delete(v.sessions, req.SessionID)
+		return nil, errors.New("session expired")
 	}
 
 	// Verify credential activation (proves real TPM with this EK).
 	if subtle.ConstantTimeCompare(sess.secret, req.ActivatedSecret) != 1 {
-		// Failed verification — remove session so it can't be retried.
-		v.mu.Lock()
 		delete(v.sessions, req.SessionID)
-		v.mu.Unlock()
 		return nil, errors.New("credential activation failed")
 	}
 
 	// Mark session as claimed only after successful crypto verification.
-	v.mu.Lock()
 	sess.claimed = true
 	sess.expiresAt = time.Now().Add(sessionTTL) // extend for /csr window
-	v.mu.Unlock()
 
 	return &CompleteResult{
-		Scope:    sess.scope,
+		Scope:   sess.scope,
 		Subject: sess.subject,
-		Token:    sess.token,
-		EKHash:   sess.ekHash,
+		Token:   sess.token,
+		EKHash:  sess.ekHash,
 	}, nil
 }
 

@@ -545,16 +545,8 @@ func (s *Server) handleCSR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Consume the claimed session (one-time use).
-	result, err := s.verifier.ConsumeForCSR(req.SessionID)
-	if err != nil {
-		s.logger.Warn("CSR session lookup failed", "ip", ip, "err", err)
-		s.audit.Record(audit.Entry{Operation: "csr", IP: ip, OK: false, Error: err.Error()})
-		s.jsonError(w, "invalid or expired session", http.StatusForbidden)
-		return
-	}
-
-	// Parse CSR — extract only the public key (SPIRE pattern).
+	// Parse and validate the CSR before consuming the session so that
+	// malformed requests don't burn one-time-use sessions.
 	block, _ := pem.Decode([]byte(req.CSRPEM))
 	if block == nil || block.Type != "CERTIFICATE REQUEST" {
 		s.jsonError(w, "invalid CSR PEM", http.StatusBadRequest)
@@ -567,6 +559,15 @@ func (s *Server) handleCSR(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := csr.CheckSignature(); err != nil {
 		s.jsonError(w, "CSR signature verification failed", http.StatusBadRequest)
+		return
+	}
+
+	// Consume the claimed session (one-time use) — only after CSR is valid.
+	result, err := s.verifier.ConsumeForCSR(req.SessionID)
+	if err != nil {
+		s.logger.Warn("CSR session lookup failed", "ip", ip, "err", err)
+		s.audit.Record(audit.Entry{Operation: "csr", IP: ip, OK: false, Error: err.Error()})
+		s.jsonError(w, "invalid or expired session", http.StatusForbidden)
 		return
 	}
 
