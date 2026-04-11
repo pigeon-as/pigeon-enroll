@@ -2,6 +2,8 @@
 // Tokens are stored in memory and optionally persisted to disk so that
 // replay protection survives restarts. Tokens are SHA-256 hashed before
 // storage to prevent disk-level replay.
+// Follows the Vault token single-use pattern: each token can only be
+// consumed once within its validity window.
 package nonce
 
 import (

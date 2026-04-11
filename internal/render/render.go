@@ -4,6 +4,10 @@
 // Template syntax: ${var} for interpolation, %{if}/%{for} for directives.
 // Go template {{ }} delimiters pass through as literal text — zero collision
 // by design, since HCL's template language ignores them.
+//
+// References:
+//   - Terraform templatefile(): https://developer.hashicorp.com/terraform/language/functions/templatefile
+//   - consul-template atomic write: https://github.com/hashicorp/consul-template
 package render
 
 import (

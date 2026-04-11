@@ -8,7 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,10 +20,7 @@ import (
 	"github.com/shoenig/test/must"
 )
 
-const (
-	testAddr = "127.0.0.1:19200"
-	testURL  = "http://" + testAddr
-)
+const testAddr = "127.0.0.1:19200"
 
 var binary string
 
@@ -76,11 +73,17 @@ func writeFile(t *testing.T, name, content string) string {
 	return path
 }
 
-// startServer starts pigeon-enroll server with --skip-tls, waits for the
-// health endpoint, and registers cleanup to send SIGTERM.
-func startServer(t *testing.T, cfgPath string) {
+// startServer starts pigeon-enroll server with mTLS, generates a client
+// cert bundle, waits for TCP readiness, and registers cleanup to send SIGTERM.
+// Returns the path to the client TLS bundle for use by claim().
+func startServer(t *testing.T, cfgPath string) string {
 	t.Helper()
-	cmd := exec.Command(binary, "server", "-config="+cfgPath, "-log-level=debug", "-skip-tls")
+
+	// Generate client cert bundle from the same config (derives from same enrollment key).
+	bundlePath := filepath.Join(t.TempDir(), "client-bundle.pem")
+	run(t, "generate-cert", "-config="+cfgPath, "-bundle="+bundlePath, "-cn=e2e-test", "-ttl=1h")
+
+	cmd := exec.Command(binary, "server", "-config="+cfgPath, "-log-level=debug")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	must.NoError(t, cmd.Start())
@@ -97,19 +100,18 @@ func startServer(t *testing.T, cfgPath string) {
 		}
 	})
 
-	client := &http.Client{Timeout: 2 * time.Second}
+	// Wait for gRPC server to accept TCP connections.
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(testURL + "/health")
+		conn, err := net.DialTimeout("tcp", testAddr, 500*time.Millisecond)
 		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == 200 {
-				return
-			}
+			conn.Close()
+			return bundlePath
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatal("server not healthy after 10s")
+	t.Fatal("server not ready after 10s")
+	return ""
 }
 
 // claimResult is the JSON structure written by the claim CLI.
@@ -122,15 +124,16 @@ type claimResult struct {
 	JWTKeys map[string]string            `json:"jwt_keys"`
 }
 
-// claim runs the claim CLI against testURL and returns the parsed result.
-func claim(t *testing.T, token string, extra ...string) claimResult {
+// claim runs the claim CLI against the gRPC server and returns the parsed result.
+func claim(t *testing.T, bundlePath, token string, extra ...string) claimResult {
 	t.Helper()
 	output := filepath.Join(t.TempDir(), "claim.json")
 	args := append([]string{"claim",
-		"-url=" + testURL,
+		"-addr=" + testAddr,
 		"-token=" + token,
 		"-output=" + output,
-		"-insecure", "-skip-tpm",
+		"-tls=" + bundlePath,
+		"-skip-tpm",
 	}, extra...)
 	run(t, args...)
 
@@ -150,29 +153,6 @@ func TestBinary(t *testing.T) {
 func TestVersion(t *testing.T) {
 	output := run(t, "version")
 	must.StrContains(t, output, "pigeon-enroll")
-}
-
-func TestServer_Health(t *testing.T) {
-	keyPath := enrollmentKey(t)
-	cfgPath := writeFile(t, "enroll.hcl", fmt.Sprintf(`
-listen       = "%s"
-key_path     = "%s"
-token_window = "30m"
-nonce_path   = "%s"
-
-secret "test" {
-  length   = 16
-  encoding = "hex"
-}
-`, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
-
-	startServer(t, cfgPath)
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(testURL + "/health")
-	must.NoError(t, err)
-	defer resp.Body.Close()
-	must.EqOp(t, 200, resp.StatusCode)
 }
 
 func TestGenerateToken(t *testing.T) {
@@ -212,10 +192,10 @@ secret "wg_psk" {
 }
 `, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
 
-	startServer(t, cfgPath)
+	bundle := startServer(t, cfgPath)
 
 	token := run(t, "generate-token", "-config="+cfgPath)
-	result := claim(t, token)
+	result := claim(t, bundle, token)
 
 	must.MapLen(t, 2, result.Secrets)
 	must.MapContainsKey(t, result.Secrets, "gossip_key")
@@ -248,11 +228,11 @@ secret "worker_only" {
 }
 `, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
 
-	startServer(t, cfgPath)
+	bundle := startServer(t, cfgPath)
 
 	// Worker scope: shared + worker_only.
 	token := run(t, "generate-token", "-config="+cfgPath, "-scope=worker")
-	result := claim(t, token, "-scope=worker")
+	result := claim(t, bundle, token, "-scope=worker")
 
 	must.MapContainsKey(t, result.Secrets, "shared")
 	must.MapContainsKey(t, result.Secrets, "worker_only")
@@ -260,7 +240,7 @@ secret "worker_only" {
 
 	// Server scope: shared + server_only.
 	token2 := run(t, "generate-token", "-config="+cfgPath, "-scope=server")
-	result2 := claim(t, token2, "-scope=server")
+	result2 := claim(t, bundle, token2, "-scope=server")
 
 	must.MapContainsKey(t, result2.Secrets, "shared")
 	must.MapContainsKey(t, result2.Secrets, "server_only")
@@ -286,10 +266,10 @@ vars = {
 }
 `, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
 
-	startServer(t, cfgPath)
+	bundle := startServer(t, cfgPath)
 
 	token := run(t, "generate-token", "-config="+cfgPath)
-	result := claim(t, token)
+	result := claim(t, bundle, token)
 
 	must.EqOp(t, "eu-west-gra", result.Vars["datacenter"])
 	must.EqOp(t, "10.0.0.1,10.0.0.2", result.Vars["consul_retry_join"])
@@ -309,18 +289,18 @@ secret "test" {
 }
 `, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
 
-	startServer(t, cfgPath)
+	bundle := startServer(t, cfgPath)
 
 	token := run(t, "generate-token", "-config="+cfgPath)
 
 	// First claim succeeds.
-	_ = claim(t, token)
+	_ = claim(t, bundle, token)
 
 	// Second claim with same token fails.
 	cmd := exec.Command(binary, "claim",
-		"-url="+testURL, "-token="+token,
+		"-addr="+testAddr, "-token="+token,
 		"-output="+filepath.Join(t.TempDir(), "replay.json"),
-		"-insecure", "-skip-tpm",
+		"-tls="+bundle, "-skip-tpm",
 	)
 	b, err := cmd.CombinedOutput()
 	must.Error(t, err)
@@ -341,12 +321,12 @@ secret "test" {
 }
 `, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
 
-	startServer(t, cfgPath)
+	bundle := startServer(t, cfgPath)
 
 	cmd := exec.Command(binary, "claim",
-		"-url="+testURL, "-token=invalid-token",
+		"-addr="+testAddr, "-token=invalid-token",
 		"-output="+filepath.Join(t.TempDir(), "bad.json"),
-		"-insecure", "-skip-tpm",
+		"-tls="+bundle, "-skip-tpm",
 	)
 	b, err := cmd.CombinedOutput()
 	must.Error(t, err)
@@ -369,10 +349,10 @@ secret "test" {
 ca "enroll" {}
 `, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
 
-	startServer(t, cfgPath)
+	bundle := startServer(t, cfgPath)
 
 	token := run(t, "generate-token", "-config="+cfgPath)
-	result := claim(t, token)
+	result := claim(t, bundle, token)
 
 	must.MapContainsKey(t, result.CA, "enroll")
 	must.StrContains(t, result.CA["enroll"]["cert_pem"], "BEGIN CERTIFICATE")
@@ -398,16 +378,16 @@ ca "enroll" {
 }
 `, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
 
-	startServer(t, cfgPath)
+	bundle := startServer(t, cfgPath)
 
 	// Matching scope — gets private key.
 	token := run(t, "generate-token", "-config="+cfgPath, "-scope=server")
-	result := claim(t, token, "-scope=server")
+	result := claim(t, bundle, token, "-scope=server")
 	must.StrContains(t, result.CA["enroll"]["private_key_pem"], "PRIVATE KEY")
 
 	// Non-matching scope — no private key.
 	token2 := run(t, "generate-token", "-config="+cfgPath, "-scope=worker")
-	result2 := claim(t, token2, "-scope=worker")
+	result2 := claim(t, bundle, token2, "-scope=worker")
 	must.EqOp(t, "", result2.CA["enroll"]["private_key_pem"])
 }
 
@@ -434,11 +414,11 @@ cert "node" {
 }
 `, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
 
-	startServer(t, cfgPath)
+	bundle := startServer(t, cfgPath)
 
 	// Matching scope + subject — gets leaf cert.
 	token := run(t, "generate-token", "-config="+cfgPath, "-scope=worker")
-	result := claim(t, token, "-scope=worker", "-subject=worker-01.dc1")
+	result := claim(t, bundle, token, "-scope=worker", "-subject=worker-01.dc1")
 
 	must.MapContainsKey(t, result.Certs, "node")
 	must.StrContains(t, result.Certs["node"]["cert_pem"], "BEGIN CERTIFICATE")
@@ -446,7 +426,7 @@ cert "node" {
 
 	// Non-matching scope — no cert.
 	token2 := run(t, "generate-token", "-config="+cfgPath, "-scope=server")
-	result2 := claim(t, token2, "-scope=server", "-subject=server-01")
+	result2 := claim(t, bundle, token2, "-scope=server", "-subject=server-01")
 	must.MapEmpty(t, result2.Certs)
 }
 
@@ -471,11 +451,11 @@ jwt "consul_auto_config" {
 }
 `, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
 
-	startServer(t, cfgPath)
+	bundle := startServer(t, cfgPath)
 
 	// Matching scope — gets JWT.
 	token := run(t, "generate-token", "-config="+cfgPath, "-scope=worker")
-	result := claim(t, token, "-scope=worker", "-subject=worker-01.dc1")
+	result := claim(t, bundle, token, "-scope=worker", "-subject=worker-01.dc1")
 
 	must.MapContainsKey(t, result.JWTs, "consul_auto_config")
 	parts := strings.Split(result.JWTs["consul_auto_config"], ".")
@@ -487,9 +467,124 @@ jwt "consul_auto_config" {
 
 	// Non-matching scope — no JWT, but still gets public key.
 	token2 := run(t, "generate-token", "-config="+cfgPath, "-scope=server")
-	result2 := claim(t, token2, "-scope=server", "-subject=server-01")
+	result2 := claim(t, bundle, token2, "-scope=server", "-subject=server-01")
 	must.MapEmpty(t, result2.JWTs)
 	must.MapContainsKey(t, result2.JWTKeys, "consul_auto_config")
+}
+
+func TestClaim_CSRCert(t *testing.T) {
+	keyPath := enrollmentKey(t)
+	cfgPath := writeFile(t, "enroll.hcl", fmt.Sprintf(`
+listen       = "%s"
+key_path     = "%s"
+token_window = "30m"
+nonce_path   = "%s"
+
+secret "test" {
+  length   = 16
+  encoding = "hex"
+}
+
+ca "enroll" {}
+
+cert "node" {
+  ca          = "enroll"
+  mode        = "csr"
+  scope       = ["worker"]
+  ttl         = "24h"
+  client_auth = true
+}
+`, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
+
+	bundle := startServer(t, cfgPath)
+
+	// CSR-mode: server signs the client's public key. No key_pem in response.
+	token := run(t, "generate-token", "-config="+cfgPath, "-scope=worker")
+	result := claim(t, bundle, token, "-scope=worker", "-subject=worker-01.dc1")
+
+	must.MapContainsKey(t, result.Certs, "node")
+	must.StrContains(t, result.Certs["node"]["cert_pem"], "BEGIN CERTIFICATE")
+	// CSR-mode: the client attaches its locally-generated private key to the on-disk JSON.
+	// The key never touched the server — only the CSR (public key) was sent.
+	must.StrContains(t, result.Certs["node"]["key_pem"], "PRIVATE KEY")
+}
+
+func TestClaim_MissingSubjectForCert(t *testing.T) {
+	keyPath := enrollmentKey(t)
+	cfgPath := writeFile(t, "enroll.hcl", fmt.Sprintf(`
+listen       = "%s"
+key_path     = "%s"
+token_window = "30m"
+nonce_path   = "%s"
+
+secret "test" {
+  length   = 16
+  encoding = "hex"
+}
+
+ca "enroll" {}
+
+cert "node" {
+  ca          = "enroll"
+  scope       = ["worker"]
+  ttl         = "24h"
+  client_auth = true
+}
+`, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
+
+	bundle := startServer(t, cfgPath)
+
+	// Cert requires subject but none provided — should fail.
+	token := run(t, "generate-token", "-config="+cfgPath, "-scope=worker")
+
+	cmd := exec.Command(binary, "claim",
+		"-addr="+testAddr, "-token="+token,
+		"-output="+filepath.Join(t.TempDir(), "bad.json"),
+		"-tls="+bundle, "-skip-tpm",
+		"-scope=worker",
+		// No -subject flag.
+	)
+	b, err := cmd.CombinedOutput()
+	must.Error(t, err)
+	must.StrContains(t, string(b), "invalid claim request")
+}
+
+func TestClaim_MissingSubjectForJWT(t *testing.T) {
+	keyPath := enrollmentKey(t)
+	cfgPath := writeFile(t, "enroll.hcl", fmt.Sprintf(`
+listen       = "%s"
+key_path     = "%s"
+token_window = "30m"
+nonce_path   = "%s"
+
+secret "test" {
+  length   = 16
+  encoding = "hex"
+}
+
+jwt "consul_auto_config" {
+  issuer   = "pigeon-enroll"
+  audience = "consul-auto-config"
+  ttl      = "24h"
+  scope    = "worker"
+}
+`, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
+
+	bundle := startServer(t, cfgPath)
+
+	// JWT requires subject but none provided — should fail.
+	token := run(t, "generate-token", "-config="+cfgPath, "-scope=worker")
+
+	cmd := exec.Command(binary, "claim",
+		"-addr="+testAddr, "-token="+token,
+		"-output="+filepath.Join(t.TempDir(), "bad.json"),
+		"-tls="+bundle, "-skip-tpm",
+		"-scope=worker",
+		// No -subject flag.
+	)
+	b, err := cmd.CombinedOutput()
+	must.Error(t, err)
+	must.StrContains(t, string(b), "invalid claim request")
 }
 
 func TestClaim_Deterministic(t *testing.T) {
@@ -506,13 +601,13 @@ secret "key" {
 }
 `, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces")))
 
-	startServer(t, cfgPath)
+	bundle := startServer(t, cfgPath)
 
 	token1 := run(t, "generate-token", "-config="+cfgPath)
-	result1 := claim(t, token1)
+	result1 := claim(t, bundle, token1)
 
 	token2 := run(t, "generate-token", "-config="+cfgPath)
-	result2 := claim(t, token2)
+	result2 := claim(t, bundle, token2)
 
 	must.EqOp(t, result1.Secrets["key"], result2.Secrets["key"])
 }
@@ -533,7 +628,7 @@ secret "test" {
 }
 `, testAddr, keyPath, filepath.Join(t.TempDir(), "nonces"), secretsPath))
 
-	startServer(t, cfgPath)
+	_ = startServer(t, cfgPath)
 
 	// secrets_path should have been written on startup.
 	data, err := os.ReadFile(secretsPath)

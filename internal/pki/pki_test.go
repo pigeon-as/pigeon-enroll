@@ -374,3 +374,45 @@ func TestDeriveJWTKey_SignVerify(t *testing.T) {
 	sig := ed25519.Sign(priv, msg)
 	must.True(t, ed25519.Verify(pub, msg, sig))
 }
+
+func TestSignCSR(t *testing.T) {
+	ca, err := DeriveCA(testIKM)
+	must.NoError(t, err)
+
+	// Generate a client keypair (simulates the worker).
+	_, clientKey, err := ed25519.GenerateKey(nil)
+	must.NoError(t, err)
+
+	// Sign using the client's public key (SPIRE pattern: server controls template).
+	certPEM, err := SignCSR(
+		ca, clientKey.Public(),
+		"worker-01", []string{"mesh.internal"}, []net.IP{net.ParseIP("10.0.0.1")},
+		24*time.Hour, false, true,
+	)
+	must.NoError(t, err)
+
+	// Parse and verify the signed cert.
+	block, _ := pem.Decode(certPEM)
+	must.NotNil(t, block)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	must.NoError(t, err)
+
+	must.EqOp(t, "worker-01", cert.Subject.CommonName)
+	must.SliceLen(t, 1, cert.DNSNames)
+	must.EqOp(t, "mesh.internal", cert.DNSNames[0])
+	must.SliceLen(t, 1, cert.IPAddresses)
+	must.EqOp(t, "10.0.0.1", cert.IPAddresses[0].String())
+	must.SliceLen(t, 1, cert.ExtKeyUsage)
+	must.EqOp(t, x509.ExtKeyUsageClientAuth, cert.ExtKeyUsage[0])
+
+	// Verify cert was signed by the CA.
+	pool := x509.NewCertPool()
+	pool.AddCert(ca.Cert)
+	_, err = cert.Verify(x509.VerifyOptions{Roots: pool, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}})
+	must.NoError(t, err)
+
+	// Verify the cert has the client's public key, not a server-generated one.
+	certPub, ok := cert.PublicKey.(ed25519.PublicKey)
+	must.True(t, ok)
+	must.True(t, certPub.Equal(clientKey.Public()))
+}

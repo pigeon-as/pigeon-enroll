@@ -1,4 +1,7 @@
 // Package jwt signs JWTs with HKDF-derived Ed25519 keys.
+// Follows the Consul auto_config pattern: intro tokens are JWTs signed with
+// a pre-shared key, presented during agent startup to authorize automatic
+// cluster joining. Reference: https://developer.hashicorp.com/consul/docs/agent/config/config-files#auto_config
 package jwt
 
 import (

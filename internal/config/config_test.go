@@ -451,3 +451,36 @@ func TestValidateCertDNSSANsEmpty(t *testing.T) {
 	}
 	must.Error(t, validate(cfg))
 }
+
+func TestValidateCertModePush(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour, Mode: "push"}},
+	}
+	must.NoError(t, validate(cfg))
+}
+
+func TestValidateCertModeCSR(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour, Mode: "csr"}},
+	}
+	must.NoError(t, validate(cfg))
+}
+
+func TestValidateCertModeInvalid(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		CAs:           []CASpec{{Name: "auth"}},
+		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour, Mode: "bogus"}},
+	}
+	must.Error(t, validate(cfg))
+}

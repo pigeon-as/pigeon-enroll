@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/hcl/v2/hclsimple"
@@ -36,6 +37,7 @@ type CertSpec struct {
 	Scope      []string `hcl:"scope"`                 // who gets this cert auto-issued
 	TTLRaw     string   `hcl:"ttl"`                   // e.g. "720h"
 	TTL        time.Duration
+	Mode       string   `hcl:"mode,optional"`         // "push" (default): server generates keypair; "csr": worker generates keypair, submits CSR
 	ClientAuth *bool    `hcl:"client_auth,optional"`  // default true
 	ServerAuth *bool    `hcl:"server_auth,optional"`  // default false
 	CN         string   `hcl:"cn,optional"`           // static common name; if empty, claim uses subject, server self-issue uses hostname
@@ -58,6 +60,7 @@ type JWTSpec struct {
 type Config struct {
 	Listen           string `hcl:"listen,optional"`
 	KeyPath          string `hcl:"key_path,optional"`
+	KeySource        string `hcl:"key_source,optional"`
 	NoncePath        string `hcl:"nonce_path,optional"`
 	TokenWindow      time.Duration
 	TokenWindowRaw   string `hcl:"token_window,optional"`
@@ -70,7 +73,6 @@ type Config struct {
 	Certs            []CertSpec        `hcl:"cert,block"`
 	JWTs             []JWTSpec         `hcl:"jwt,block"`
 	SecretsPath      string            `hcl:"secrets_path,optional"`
-	TrustedProxies   []string          `hcl:"trusted_proxies,optional"`
 	Actions          []action.Config   `hcl:"action,block"`
 	RequireTPM       bool   `hcl:"require_tpm,optional"`
 	EKCAPath         string `hcl:"ek_ca_path,optional"`
@@ -89,6 +91,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.KeyPath == "" {
 		cfg.KeyPath = "/etc/pigeon/enrollment-key"
+	}
+	if cfg.KeySource == "" {
+		cfg.KeySource = "file"
 	}
 	if cfg.NoncePath == "" {
 		cfg.NoncePath = "/var/lib/pigeon-enroll/nonces"
@@ -114,6 +119,9 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("cert %q: parse ttl: %w", c.Name, err)
 		}
 		cfg.Certs[i].TTL = d
+		if cfg.Certs[i].Mode == "" {
+			cfg.Certs[i].Mode = "push"
+		}
 	}
 
 	for i, j := range cfg.JWTs {
@@ -142,6 +150,9 @@ func parseDuration(raw string, defaultVal time.Duration) (time.Duration, error) 
 }
 
 func validate(cfg Config) error {
+	if cfg.KeySource != "" && cfg.KeySource != "file" && cfg.KeySource != "tpm" {
+		return fmt.Errorf("key_source must be \"file\" or \"tpm\"")
+	}
 	if cfg.TokenWindow < time.Second {
 		return fmt.Errorf("token_window must be at least 1s")
 	}
@@ -156,8 +167,17 @@ func validate(cfg Config) error {
 		if s.Name == "" {
 			return fmt.Errorf("secrets: name is required")
 		}
+		if strings.ContainsAny(s.Name, " \x00") {
+			return fmt.Errorf("secret %q: name must not contain spaces or NUL", s.Name)
+		}
+		if strings.ContainsAny(s.Scope, " \x00") {
+			return fmt.Errorf("secret %q: scope must not contain spaces or NUL", s.Scope)
+		}
 		if s.Length <= 0 {
 			return fmt.Errorf("secret %q: length must be positive", s.Name)
+		}
+		if s.Length > 8160 {
+			return fmt.Errorf("secret %q: length must not exceed 8160 (HKDF-SHA256 maximum)", s.Name)
 		}
 		if s.Encoding != "base64" && s.Encoding != "hex" {
 			return fmt.Errorf("secret %q: encoding must be \"base64\" or \"hex\"", s.Name)
@@ -203,6 +223,9 @@ func validate(cfg Config) error {
 		certNames[c.Name] = true
 		if !caNames[c.CA] {
 			return fmt.Errorf("cert %q: ca %q is not defined", c.Name, c.CA)
+		}
+		if c.Mode != "" && c.Mode != "push" && c.Mode != "csr" {
+			return fmt.Errorf("cert %q: mode must be \"push\" or \"csr\"", c.Name)
 		}
 		if len(c.Scope) == 0 {
 			return fmt.Errorf("cert %q: scope must not be empty", c.Name)
@@ -252,12 +275,6 @@ func validate(cfg Config) error {
 		}
 		if j.Scope == "" {
 			return fmt.Errorf("jwt %q: scope is required", j.Name)
-		}
-	}
-
-	for _, cidr := range cfg.TrustedProxies {
-		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			return fmt.Errorf("trusted_proxies: invalid CIDR %q: %w", cidr, err)
 		}
 	}
 
