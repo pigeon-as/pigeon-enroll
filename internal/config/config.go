@@ -117,7 +117,7 @@ type Config struct {
 	CAs              []CASpec          `hcl:"ca,block"`
 	Certs            []CertSpec        `hcl:"cert,block"`
 	JWTs             []JWTSpec         `hcl:"jwt,block"`
-	SecretsPath      string            `hcl:"secrets_path,optional"`
+	PersistPath      string            `hcl:"persist_path,optional"`
 	Actions          []action.Config   `hcl:"action,block"`
 	RequireTPM       bool   `hcl:"require_tpm,optional"`
 	EKCAPath         string `hcl:"ek_ca_path,optional"`

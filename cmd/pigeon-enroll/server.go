@@ -37,13 +37,13 @@ func cmdServer(args []string) int {
 		return 1
 	}
 
-	derived, cas, _, jwtKeys, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm, "server", hostname)
+	derived, cas, _, jwtKeys, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.PersistPath, ikm, "server", hostname)
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1
 	}
 	if derived != nil {
-		logger.Info("secrets resolved", "count", len(derived), "path", cfg.SecretsPath)
+		logger.Info("secrets resolved", "count", len(derived), "path", cfg.PersistPath)
 	}
 
 	srv, err := grpcserver.New(logger, cfg, hmacKey, derived, cas, jwtKeys)

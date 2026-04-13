@@ -29,7 +29,7 @@ func cmdRunActions(args []string) int {
 	}
 
 	// Empty scope — run-actions only needs derived secrets, not certs.
-	derived, _, _, _, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.SecretsPath, ikm, "", "")
+	derived, _, _, _, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.PersistPath, ikm, "", "")
 	if err != nil {
 		logger.Error("resolve secrets", "err", err)
 		return 1

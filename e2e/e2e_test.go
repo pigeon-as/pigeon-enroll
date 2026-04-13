@@ -620,7 +620,7 @@ listen       = "%s"
 key_path     = "%s"
 token_window = "30m"
 nonce_path   = "%s"
-secrets_path = "%s"
+persist_path = "%s"
 
 secret "test" {
   length   = 16
@@ -630,7 +630,7 @@ secret "test" {
 
 	_ = startServer(t, cfgPath)
 
-	// secrets_path should have been written on startup.
+	// persist_path should have been written on startup.
 	data, err := os.ReadFile(secretsPath)
 	must.NoError(t, err, must.Sprint("secrets file should be written on startup"))
 
