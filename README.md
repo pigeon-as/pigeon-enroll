@@ -184,6 +184,24 @@ template {
 
 Variables come from the `-vars` JSON file, passed as-is to templates. Like Terraform's `templatefile(path, vars)`, the vars object can contain nested maps — templates navigate the structure directly (e.g. `${secrets.gossip_key}`, `${vars.datacenter}`).
 
+## systemd
+
+pigeon-enroll expects its enrollment key as a systemd encrypted credential. Seal the key once during provisioning:
+
+```bash
+systemd-creds encrypt --with-key=tpm2 /run/enrollment-key /etc/credstore.encrypted/pigeon-enroll.enrollment-key
+```
+
+Then reference it in the unit file:
+
+```ini
+[Service]
+ExecStart=/opt/pigeon/bin/pigeon-enroll server -config=/etc/pigeon/enroll-server.hcl -key-path=%d/enrollment-key
+LoadCredentialEncrypted=enrollment-key:/etc/credstore.encrypted/pigeon-enroll.enrollment-key
+```
+
+systemd decrypts the credential at runtime into `$CREDENTIALS_DIRECTORY` (RAM-backed, never hits disk). The `-key-path=%d/enrollment-key` flag points pigeon-enroll at the decrypted file.
+
 ## Build
 
 ```bash
