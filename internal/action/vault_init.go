@@ -71,7 +71,7 @@ func newVaultInit(body hcl.Body) (*vaultInit, error) {
 		cfg.SecretThreshold = 1
 	}
 	if cfg.Output == "" {
-		cfg.Output = "/encrypted/vault/init.json"
+		cfg.Output = "/var/lib/pigeon/vault-init.json"
 	}
 	if len(cfg.Token) > 1 {
 		return nil, fmt.Errorf("vault-init: at most one token block allowed, got %d", len(cfg.Token))

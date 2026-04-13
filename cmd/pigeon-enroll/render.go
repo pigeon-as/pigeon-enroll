@@ -12,7 +12,7 @@ import (
 func cmdRender(args []string) int {
 	flags := newFlagSet("render")
 	configPath := flags.String("config", "", "Path to render HCL config")
-	varsPath := flags.String("vars", "/encrypted/pigeon/enroll.json", "Path to template variables JSON")
+	varsPath := flags.String("vars", "/var/lib/pigeon/enroll.json", "Path to template variables JSON")
 	flags.Parse(args)
 
 	if *configPath == "" {

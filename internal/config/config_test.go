@@ -274,8 +274,12 @@ vars = { k = "v" }
 	c := cfg.Certs[0]
 	must.EqOp(t, "mesh_worker", c.Name)
 	must.EqOp(t, "", c.CN)
-	must.SliceLen(t, 1, c.DNSSANs)
-	must.EqOp(t, "mesh.pigeon.internal", c.DNSSANs[0])
+
+	dns, ips, err := c.ResolveSANs("test-subject")
+	must.NoError(t, err)
+	must.SliceLen(t, 1, dns)
+	must.EqOp(t, "mesh.pigeon.internal", dns[0])
+	must.SliceLen(t, 0, ips)
 }
 
 func TestValidateCertMissingCA(t *testing.T) {
@@ -333,32 +337,54 @@ func TestValidateCertNameConflictsWithCA(t *testing.T) {
 	must.Error(t, validate(cfg))
 }
 
-func TestValidateCertIPSANsValid(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs: []CertSpec{{
-			Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour,
-			IPSANs: []string{"10.0.0.1", "::1"},
-		}},
-	}
-	must.NoError(t, validate(cfg))
+func TestLoadCertIPSANsValid(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+ca "auth" {
+  scope = ["server"]
 }
 
-func TestValidateCertIPSANsInvalid(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs: []CertSpec{{
-			Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour,
-			IPSANs: []string{"not-an-ip"},
-		}},
-	}
-	err := validate(cfg)
+cert "c" {
+  ca       = "auth"
+  scope    = ["worker"]
+  ttl      = "1h"
+  cn       = "w"
+  ip_sans  = ["10.0.0.1", "::1"]
+}
+
+vars = { k = "v" }
+`), 0644)
+
+	cfg, err := Load(path)
+	must.NoError(t, err)
+	must.SliceLen(t, 1, cfg.Certs)
+
+	_, ips, err := cfg.Certs[0].ResolveSANs("test")
+	must.NoError(t, err)
+	must.SliceLen(t, 2, ips)
+}
+
+func TestLoadCertIPSANsInvalid(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+ca "auth" {
+  scope = ["server"]
+}
+
+cert "c" {
+  ca       = "auth"
+  scope    = ["worker"]
+  ttl      = "1h"
+  cn       = "w"
+  ip_sans  = ["not-an-ip"]
+}
+
+vars = { k = "v" }
+`), 0644)
+
+	_, err := Load(path)
 	must.Error(t, err)
 	must.StrContains(t, err.Error(), "ip_sans entry \"not-an-ip\" is not a valid IP address")
 }
@@ -441,15 +467,27 @@ func TestValidateJWTOnlyConfig(t *testing.T) {
 	must.NoError(t, validate(cfg))
 }
 
-func TestValidateCertDNSSANsEmpty(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour, DNSSANs: []string{""}}},
-	}
-	must.Error(t, validate(cfg))
+func TestLoadCertDNSSANsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+ca "auth" {
+  scope = ["server"]
+}
+
+cert "c" {
+  ca       = "auth"
+  scope    = ["worker"]
+  ttl      = "1h"
+  cn       = "w"
+  dns_sans = [""]
+}
+
+vars = { k = "v" }
+`), 0644)
+
+	_, err := Load(path)
+	must.Error(t, err)
 }
 
 func TestValidateCertModePush(t *testing.T) {
@@ -483,4 +521,57 @@ func TestValidateCertModeInvalid(t *testing.T) {
 		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour, Mode: "bogus"}},
 	}
 	must.Error(t, validate(cfg))
+}
+
+func TestResolveSANsSubjectInterpolation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+ca "auth" {
+  scope = ["server"]
+}
+
+cert "c" {
+  ca          = "auth"
+  scope       = ["worker"]
+  ttl         = "1h"
+  server_auth = true
+  dns_sans    = ["vault.service.internal", "${subject}"]
+}
+
+vars = { k = "v" }
+`), 0644)
+
+	cfg, err := Load(path)
+	must.NoError(t, err)
+	must.SliceLen(t, 1, cfg.Certs)
+
+	dns, ips, err := cfg.Certs[0].ResolveSANs("worker-01.dc1.example.com")
+	must.NoError(t, err)
+	must.SliceLen(t, 2, dns)
+	must.EqOp(t, "vault.service.internal", dns[0])
+	must.EqOp(t, "worker-01.dc1.example.com", dns[1])
+	must.SliceLen(t, 0, ips)
+}
+
+func TestResolveSANsNoRemain(t *testing.T) {
+	cs := CertSpec{Name: "test"}
+	dns, ips, err := cs.ResolveSANs("anything")
+	must.NoError(t, err)
+	must.SliceLen(t, 0, dns)
+	must.SliceLen(t, 0, ips)
+}
+
+func TestResolveSANsBody(t *testing.T) {
+	cs := CertSpec{
+		Name:   "test",
+		Remain: testBody(t, `{"dns_sans": ["static.internal", "${subject}"], "ip_sans": ["10.0.0.1"]}`),
+	}
+	dns, ips, err := cs.ResolveSANs("node-01.dc1.example.com")
+	must.NoError(t, err)
+	must.SliceLen(t, 2, dns)
+	must.EqOp(t, "static.internal", dns[0])
+	must.EqOp(t, "node-01.dc1.example.com", dns[1])
+	must.SliceLen(t, 1, ips)
+	must.EqOp(t, "10.0.0.1", ips[0].String())
 }

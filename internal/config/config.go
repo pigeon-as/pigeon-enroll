@@ -9,8 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/gohcl"
 	"github.com/hashicorp/hcl/v2/hclsimple"
 	"github.com/pigeon-as/pigeon-enroll/internal/action"
+	"github.com/zclconf/go-cty/cty"
 )
 
 // SecretSpec describes a secret to derive from the enrollment key via HKDF.
@@ -31,6 +34,11 @@ type CASpec struct {
 // Follows the Vault PKI role pattern: issuance policy separate from CA.
 // If CN is empty, claim issuance uses the claim subject (node identity) as the
 // cert CN, while server-side self-issuance for a non-empty scope uses hostname.
+//
+// The dns_sans and ip_sans fields support HCL interpolation with a "subject"
+// variable that resolves to the claim subject at issuance time. Example:
+//
+//	dns_sans = ["vault.service.internal", "${subject}"]
 type CertSpec struct {
 	Name       string   `hcl:"name,label"`
 	CA         string   `hcl:"ca"`                   // must reference a ca block name
@@ -41,8 +49,47 @@ type CertSpec struct {
 	ClientAuth *bool    `hcl:"client_auth,optional"`  // default true
 	ServerAuth *bool    `hcl:"server_auth,optional"`  // default false
 	CN         string   `hcl:"cn,optional"`           // static common name; if empty, claim uses subject, server self-issue uses hostname
-	DNSSANs    []string `hcl:"dns_sans,optional"`     // DNS subject alternative names
-	IPSANs     []string `hcl:"ip_sans,optional"`      // IP subject alternative names
+	Remain     hcl.Body `hcl:",remain"`               // deferred: dns_sans, ip_sans (decoded at claim time with subject variable)
+}
+
+// certSANs holds the deferred SAN fields from a cert block.
+// Decoded from CertSpec.Remain with an EvalContext providing the subject variable.
+type certSANs struct {
+	DNSSANs []string `hcl:"dns_sans,optional"`
+	IPSANs  []string `hcl:"ip_sans,optional"`
+}
+
+// ResolveSANs decodes the deferred dns_sans and ip_sans fields, evaluating
+// any HCL expressions with the provided subject variable. This allows
+// "${subject}" interpolation in SAN entries at claim time.
+func (cs CertSpec) ResolveSANs(subject string) ([]string, []net.IP, error) {
+	if cs.Remain == nil {
+		return nil, nil, nil
+	}
+	var sans certSANs
+	ctx := &hcl.EvalContext{
+		Variables: map[string]cty.Value{
+			"subject": cty.StringVal(subject),
+		},
+	}
+	diags := gohcl.DecodeBody(cs.Remain, ctx, &sans)
+	if diags.HasErrors() {
+		return nil, nil, fmt.Errorf("resolve SANs: %s", diags.Error())
+	}
+	for _, d := range sans.DNSSANs {
+		if d == "" {
+			return nil, nil, fmt.Errorf("dns_sans entries must not be empty strings")
+		}
+	}
+	var ipSANs []net.IP
+	for _, raw := range sans.IPSANs {
+		ip := net.ParseIP(raw)
+		if ip == nil {
+			return nil, nil, fmt.Errorf("ip_sans entry %q is not a valid IP address", raw)
+		}
+		ipSANs = append(ipSANs, ip)
+	}
+	return sans.DNSSANs, ipSANs, nil
 }
 
 // JWTSpec describes a JWT to sign and include in the claim response.
@@ -235,15 +282,10 @@ func validate(cfg Config) error {
 				return fmt.Errorf("cert %q: scope entries must not be empty strings", c.Name)
 			}
 		}
-		for _, d := range c.DNSSANs {
-			if d == "" {
-				return fmt.Errorf("cert %q: dns_sans entries must not be empty strings", c.Name)
-			}
-		}
-		for _, ip := range c.IPSANs {
-			if net.ParseIP(ip) == nil {
-				return fmt.Errorf("cert %q: ip_sans entry %q is not a valid IP address", c.Name, ip)
-			}
+		// Structural validation: decode deferred SANs with a placeholder to
+		// catch HCL syntax errors at load time rather than claim time.
+		if _, _, err := c.ResolveSANs("validate.placeholder"); err != nil {
+			return fmt.Errorf("cert %q: %w", c.Name, err)
 		}
 		if c.TTL < time.Minute {
 			return fmt.Errorf("cert %q: ttl must be at least 1m", c.Name)

@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net"
 	"os"
 	"strings"
 	"time"
@@ -355,11 +354,11 @@ func issueCert(cs config.CertSpec, caMap map[string]CAEntry, hostname string) (C
 	}
 	serverAuth := cs.ServerAuth != nil && *cs.ServerAuth
 	clientAuth := cs.ClientAuth == nil || *cs.ClientAuth
-	var ipSANs []net.IP
-	for _, raw := range cs.IPSANs {
-		ipSANs = append(ipSANs, net.ParseIP(raw))
+	dnsSANs, ipSANs, err := cs.ResolveSANs(hostname)
+	if err != nil {
+		return CertEntry{}, fmt.Errorf("cert %q: %w", cs.Name, err)
 	}
-	certPEM, keyPEM, err := pki.IssueCert(ca, cn, cs.DNSSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
+	certPEM, keyPEM, err := pki.IssueCert(ca, cn, dnsSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
 	if err != nil {
 		return CertEntry{}, fmt.Errorf("issue cert %q: %w", cs.Name, err)
 	}

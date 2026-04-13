@@ -343,9 +343,9 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 			return nil, nil, fmt.Errorf("cert %q requires subject (no static cn)", cs.Name)
 		}
 
-		var ipSANs []net.IP
-		for _, raw := range cs.IPSANs {
-			ipSANs = append(ipSANs, net.ParseIP(raw))
+		dnsSANs, ipSANs, err := cs.ResolveSANs(subject)
+		if err != nil {
+			return nil, nil, fmt.Errorf("cert %q: %w", cs.Name, err)
 		}
 
 		serverAuth := cs.ServerAuth != nil && *cs.ServerAuth
@@ -357,7 +357,7 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 				return nil, nil, fmt.Errorf("csr_der is required for CSR-mode cert %q", cs.Name)
 			}
 			ca := s.certCAs[cs.CA]
-			certPEM, err := pki.SignCSR(ca, csr.PublicKey, cn, cs.DNSSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
+			certPEM, err := pki.SignCSR(ca, csr.PublicKey, cn, dnsSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
 			if err != nil {
 				return nil, nil, fmt.Errorf("sign CSR for %q: %w", cs.Name, err)
 			}
@@ -365,7 +365,7 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 		} else {
 			// Push-mode: server generates keypair.
 			ca := s.certCAs[cs.CA]
-			certPEM, keyPEM, err := pki.IssueCert(ca, cn, cs.DNSSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
+			certPEM, keyPEM, err := pki.IssueCert(ca, cn, dnsSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
 			if err != nil {
 				return nil, nil, fmt.Errorf("issue cert %q: %w", cs.Name, err)
 			}
