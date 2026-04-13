@@ -6,6 +6,8 @@
 
 **Stage-0 bootstrap:** [pigeon-enroll](https://github.com/pigeon-as/pigeon-enroll) is a dumb pipe (token in, secrets out), [pigeon-template](https://github.com/pigeon-as/pigeon-template) is a dumb renderer (data in, config files out). Neither knows about the other. Neither forces a workflow.
 
+**Relationship to systemd:** systemd handles encryption at rest (`LoadCredentialEncrypted=` + TPM2 for the enrollment key) and service lifecycle. pigeon-enroll handles what systemd can't.
+
 ## Usage
 
 ```bash
@@ -87,7 +89,7 @@ secret "secret_b" {
   scope    = "server"
 }
 
-secrets_path = "/var/lib/pigeon/secrets.json"
+persist_path = "/var/lib/pigeon/enroll.json"
 
 vars = {
   datacenter = "eu-west-gra"
@@ -108,7 +110,7 @@ action "vault-init" {
 }
 ```
 
-`secrets` are derived via HKDF-SHA256; `vars` are static key-value pairs. Both are returned in the claim response under separate keys. `secrets_path` persists derived secrets on first start and loads from disk on restart.
+`secrets` are derived via HKDF-SHA256; `vars` are static key-value pairs. Both are returned in the claim response under separate keys. `persist_path` persists derived state on first start and loads from disk on restart.
 
 ## API
 
