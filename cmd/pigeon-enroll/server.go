@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/pigeon-as/pigeon-enroll/internal/audit"
 	"github.com/pigeon-as/pigeon-enroll/internal/grpcserver"
 	"github.com/pigeon-as/pigeon-enroll/internal/pki"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
@@ -47,17 +46,7 @@ func cmdServer(args []string) int {
 		logger.Info("secrets resolved", "count", len(derived), "path", cfg.SecretsPath)
 	}
 
-	al, err := audit.Open(cfg.AuditPath)
-	if err != nil {
-		logger.Error("open audit log", "err", err)
-		return 1
-	}
-	defer al.Close()
-	if cfg.AuditPath != "" {
-		logger.Info("audit log", "path", cfg.AuditPath)
-	}
-
-	srv, err := grpcserver.New(logger, cfg, hmacKey, derived, cas, jwtKeys, al)
+	srv, err := grpcserver.New(logger, cfg, hmacKey, derived, cas, jwtKeys)
 	if err != nil {
 		logger.Error("create grpc server", "err", err)
 		return 1

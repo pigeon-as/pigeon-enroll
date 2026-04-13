@@ -22,18 +22,18 @@ pigeon-enroll generate-cert -bundle /tmp/enroll-cert.pem
 pigeon-enroll claim -addr enroll:8443 \
   -token <hmac> -tls /tmp/enroll-cert.pem \
   -scope worker \
-  -output /encrypted/pigeon/enroll.json
+  -output enroll.json
 
 # Claim (dev/testing only, no TPM)
 pigeon-enroll claim -addr enroll:8443 \
   -token <hmac> -tls /tmp/enroll-cert.pem \
   -skip-tpm \
-  -output /encrypted/pigeon/enroll.json
+  -output enroll.json
 
 # Render templates (worker side, one-shot after claim)
 pigeon-enroll render \
   -config /etc/pigeon/render.hcl \
-  -vars /encrypted/pigeon/enroll.json
+  -vars enroll.json
 
 # Run all actions
 pigeon-enroll run-actions
@@ -68,13 +68,10 @@ Use `pigeon-enroll ek-hash` to print the EK public key hash for populating the a
 
 ```hcl
 listen       = ":8443"
-key_path     = "/encrypted/pigeon/enrollment-key"
 token_window = "30m"
 server_cert_ttl = "720h"
-audit_path   = "/var/log/pigeon-enroll/audit.jsonl"
 require_tpm  = true
 
-# EK identity validation (SPIRE community TPM plugin pattern).
 # At least one required when require_tpm = true.
 ek_ca_path   = "/etc/pigeon/ek-ca"      # directory of manufacturer CA certs (PEM/DER)
 ek_hash_path = "/etc/pigeon/ek-hashes"   # file with one SHA-256 EK pubkey hash per line
@@ -90,7 +87,7 @@ secret "secret_b" {
   scope    = "server"
 }
 
-secrets_path = "/encrypted/pigeon/enroll.json"
+secrets_path = "/var/lib/pigeon/secrets.json"
 
 vars = {
   datacenter = "eu-west-gra"
@@ -101,7 +98,7 @@ action "vault-init" {
   addr             = "https://127.0.0.1:8200"
   secret_shares    = 1
   secret_threshold = 1
-  output           = "/encrypted/vault/init.json"
+  output           = "/var/lib/pigeon/vault-init.json"
 
   token {
     id          = "secret_a"
@@ -146,7 +143,7 @@ action "vault-init" {
   addr             = "https://127.0.0.1:8200"
   secret_shares    = 1
   secret_threshold = 1
-  output           = "/encrypted/vault/init.json"
+  output           = "/var/lib/pigeon/vault-init.json"
 
   token {
     id          = "vault_management_token"
@@ -178,7 +175,7 @@ One-shot HCL template rendering using `hclsyntax.ParseTemplate()` — Terraform'
 ```hcl
 template {
   source      = "/etc/pigeon/templates/consul.hcl.tpl"
-  destination = "/encrypted/consul/consul.hcl"
+  destination = "/etc/consul.d/consul.hcl"
   perms       = "0640"
 }
 ```

@@ -17,7 +17,6 @@ import (
 
 	"github.com/google/go-attestation/attest"
 	attestpkg "github.com/pigeon-as/pigeon-enroll/internal/attest"
-	"github.com/pigeon-as/pigeon-enroll/internal/audit"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	jwtpkg "github.com/pigeon-as/pigeon-enroll/internal/jwt"
 	"github.com/pigeon-as/pigeon-enroll/internal/nonce"
@@ -39,7 +38,6 @@ type Server struct {
 	secrets   map[string]string
 	ca        map[string]secrets.CAEntry
 	hmacKey   []byte
-	audit     *audit.Log
 	nonces    *nonce.Store
 	limiter   *ipRateLimiter
 	scopes    map[string]string
@@ -53,7 +51,7 @@ type Server struct {
 }
 
 // New creates a new enrollment gRPC server.
-func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets map[string]string, cas map[string]secrets.CAEntry, jwtKeys map[string]secrets.JWTKeyEntry, al *audit.Log) (*Server, error) {
+func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets map[string]string, cas map[string]secrets.CAEntry, jwtKeys map[string]secrets.JWTKeyEntry) (*Server, error) {
 	scopes := make(map[string]string, len(cfg.Secrets))
 	for _, s := range cfg.Secrets {
 		if s.Scope != "" {
@@ -102,7 +100,6 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 		secrets:   derivedSecrets,
 		ca:        cas,
 		hmacKey:   hmacKey,
-		audit:     al,
 		nonces:    ns,
 		limiter:   newIPRateLimiter(rate.Every(12*time.Second), 5),
 		scopes:    scopes,
@@ -122,8 +119,7 @@ func (s *Server) Claim(stream pb.EnrollmentService_ClaimServer) error {
 	ip := peerIP(stream.Context())
 
 	if !s.limiter.allow(ip) {
-		s.logger.Warn("rate limited", "ip", ip)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "rate limited"})
+		s.logger.Warn("claim denied", "ip", ip, "reason", "rate limited")
 		return status.Error(codes.ResourceExhausted, "too many requests")
 	}
 
@@ -139,8 +135,7 @@ func (s *Server) Claim(stream pb.EnrollmentService_ClaimServer) error {
 
 	// Step 2: Verify HMAC token.
 	if !token.Verify(s.hmacKey, params.Token, time.Now(), s.cfg.TokenWindow, params.Scope) {
-		s.logger.Warn("invalid token", "ip", ip)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, Scope: params.Scope, OK: false, Error: "invalid token"})
+		s.logger.Warn("claim denied", "ip", ip, "scope", params.Scope, "reason", "invalid token")
 		return status.Error(codes.PermissionDenied, "invalid or expired token")
 	}
 
@@ -154,42 +149,29 @@ func (s *Server) Claim(stream pb.EnrollmentService_ClaimServer) error {
 			return err // already a gRPC status error
 		}
 	} else if s.cfg.RequireTPM {
-		s.logger.Warn("TPM required but token-only claim", "ip", ip)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, Scope: params.Scope, OK: false, Error: "TPM attestation required"})
+		s.logger.Warn("claim denied", "ip", ip, "scope", params.Scope, "reason", "TPM attestation required")
 		return status.Error(codes.PermissionDenied, "TPM attestation required")
 	}
 
 	// Step 4: Consume one-time nonce.
 	ok, err := s.nonces.Check(params.Token)
 	if err != nil {
-		s.logger.Error("nonce persistence failed", "ip", ip, "err", err)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "nonce storage error"})
+		s.logger.Error("claim denied", "ip", ip, "reason", "nonce storage error", "err", err)
 		return status.Error(codes.Internal, "internal error")
 	}
 	if !ok {
-		s.logger.Warn("replayed token", "ip", ip)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, OK: false, Error: "token already used"})
+		s.logger.Warn("claim denied", "ip", ip, "reason", "token already used")
 		return status.Error(codes.PermissionDenied, "token already used")
 	}
 
 	// Step 5: Build and send result.
 	result, certNames, err := s.buildResult(params.Scope, params.Subject, params.CsrDer)
 	if err != nil {
-		s.logger.Error("build result failed", "ip", ip, "err", err)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, Scope: params.Scope, OK: false, Error: err.Error()})
+		s.logger.Error("claim denied", "ip", ip, "scope", params.Scope, "reason", err.Error())
 		return status.Error(codes.InvalidArgument, "invalid claim request")
 	}
 
-	s.logger.Info("claimed", "ip", ip, "scope", params.Scope, "subject", params.Subject, "ek", ekHash, "tpm", params.Tpm != nil, "certs", certNames)
-	s.audit.Record(audit.Entry{
-		Operation: "claim",
-		IP:        ip,
-		Scope:     params.Scope,
-		Subject:   params.Subject,
-		EKHash:    ekHash,
-		Certs:     certNames,
-		OK:        true,
-	})
+	s.logger.Info("claim ok", "ip", ip, "scope", params.Scope, "subject", params.Subject, "ek", ekHash, "tpm", params.Tpm != nil, "certs", certNames)
 
 	return stream.Send(&pb.ClaimResponse{
 		Step: &pb.ClaimResponse_Result{Result: result},
@@ -219,8 +201,7 @@ func (s *Server) attestTPM(stream pb.EnrollmentService_ClaimServer, ip string, p
 	// Validate EK identity (SPIRE pattern).
 	if s.ek != nil {
 		if err := s.ek.Validate(ekPub, ekCert); err != nil {
-			s.logger.Error("EK validation failed", "ip", ip, "err", err)
-			s.audit.Record(audit.Entry{Operation: "claim", IP: ip, Scope: params.Scope, OK: false, Error: "EK: " + err.Error()})
+			s.logger.Error("claim denied", "ip", ip, "scope", params.Scope, "reason", "EK validation failed", "err", err)
 			code := codes.Internal
 			if errors.Is(err, attestpkg.ErrEKNotTrusted) {
 				code = codes.PermissionDenied
@@ -279,8 +260,7 @@ func (s *Server) attestTPM(stream pb.EnrollmentService_ClaimServer, ip string, p
 
 	// Verify credential activation (constant-time).
 	if subtle.ConstantTimeCompare(secret, activated) != 1 {
-		s.logger.Warn("TPM attestation failed", "ip", ip)
-		s.audit.Record(audit.Entry{Operation: "claim", IP: ip, Scope: params.Scope, EKHash: ekHash, OK: false, Error: "credential activation failed"})
+		s.logger.Warn("claim denied", "ip", ip, "scope", params.Scope, "ek", ekHash, "reason", "credential activation failed")
 		return "", status.Error(codes.PermissionDenied, "TPM attestation failed")
 	}
 

@@ -112,7 +112,6 @@ type Config struct {
 	TokenWindowRaw   string `hcl:"token_window,optional"`
 	ServerCertTTL    time.Duration
 	ServerCertTTLRaw string            `hcl:"server_cert_ttl,optional"`
-	AuditPath        string            `hcl:"audit_path,optional"`
 	Vars             map[string]string `hcl:"vars,optional"`
 	Secrets          []SecretSpec      `hcl:"secret,block"`
 	CAs              []CASpec          `hcl:"ca,block"`
