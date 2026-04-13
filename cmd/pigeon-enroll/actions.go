@@ -12,11 +12,12 @@ import (
 func cmdRunActions(args []string) int {
 	flags := newFlagSet("run-actions")
 	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
+	keyPathFlag := flags.String("key-path", "", "Override enrollment key path from config")
 	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
 	actionType := flags.String("type", "", "Run a specific action type (default: all)")
 	flags.Parse(args)
 
-	logger, cfg, ikm, _, err := loadConfig(*configPath, *logLevel)
+	logger, cfg, ikm, _, err := loadConfig(*configPath, *logLevel, *keyPathFlag)
 	if err != nil {
 		logger.Error(err.Error())
 		return 1

@@ -26,7 +26,6 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
-	"github.com/pigeon-as/pigeon-enroll/internal/tpmseal"
 )
 
 const (
@@ -65,8 +64,6 @@ func main() {
 		os.Exit(cmdClaim(args))
 	case "ek-hash":
 		os.Exit(cmdEKHash(args))
-	case "seal-key":
-		os.Exit(cmdSealKey(args))
 	case "render":
 		os.Exit(cmdRender(args))
 	case "run-actions":
@@ -89,7 +86,6 @@ Commands:
   generate-cert   Generate a TLS certificate
   claim           Claim secrets from an enrollment server
   ek-hash         Print EK public key hash (for ek_hash_path allowlist)
-  seal-key        Seal enrollment key to TPM (for key_source = "tpm")
   render          Render HCL templates with variables
   run-actions     Run post-claim lifecycle actions
   version         Print version`)
@@ -100,9 +96,9 @@ func newFlagSet(name string) *flag.FlagSet {
 	return flag.NewFlagSet(name, flag.ExitOnError)
 }
 
-// loadConfig loads the HCL config, reads the enrollment key (from file or TPM),
-// and derives the HMAC signing key.
-func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byte, []byte, error) {
+// loadConfig loads the HCL config, reads the enrollment key, and derives the
+// HMAC signing key. If keyPath is non-empty, it overrides cfg.KeyPath.
+func loadConfig(configPath, logLevel, keyPath string) (*slog.Logger, config.Config, []byte, []byte, error) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	var level slog.Level
@@ -116,6 +112,9 @@ func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byt
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return logger, config.Config{}, nil, nil, fmt.Errorf("load config: %w", err)
+	}
+	if keyPath != "" {
+		cfg.KeyPath = keyPath
 	}
 
 	ikm, err := readIKM(cfg)
@@ -132,37 +131,31 @@ func loadConfig(configPath, logLevel string) (*slog.Logger, config.Config, []byt
 }
 
 // loadIKM loads the HCL config and reads the enrollment key without deriving HMAC.
-// Use this when only the IKM is needed (e.g. generate-cert).
-func loadIKM(configPath string) ([]byte, error) {
+// If keyPath is non-empty, it overrides cfg.KeyPath.
+func loadIKM(configPath, keyPath string) ([]byte, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
+	if keyPath != "" {
+		cfg.KeyPath = keyPath
+	}
 	return readIKM(cfg)
 }
 
-// readIKM reads the enrollment key from file or TPM based on config.
+// readIKM reads the enrollment key from the key_path config file.
 func readIKM(cfg config.Config) ([]byte, error) {
-	var ikm []byte
-	var err error
-	switch cfg.KeySource {
-	case "tpm":
-		ikm, err = tpmseal.Unseal(cfg.KeyPath)
-		if err != nil {
-			return nil, fmt.Errorf("unseal enrollment key from TPM: %w", err)
-		}
-	default: // "file"
-		if err := config.CheckKeyFile(cfg.KeyPath); err != nil {
-			return nil, err
-		}
-		enrollmentKeyHex, err := os.ReadFile(cfg.KeyPath)
-		if err != nil {
-			return nil, fmt.Errorf("read enrollment key: %w", err)
-		}
-		ikm, err = hex.DecodeString(strings.TrimSpace(string(enrollmentKeyHex)))
-		if err != nil {
-			return nil, fmt.Errorf("decode enrollment key: %w", err)
-		}
+	if err := config.CheckKeyFile(cfg.KeyPath); err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(cfg.KeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("read enrollment key: %w", err)
+	}
+
+	ikm, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return nil, fmt.Errorf("decode enrollment key: %w", err)
 	}
 
 	if err := secrets.ValidateIKM(ikm); err != nil {

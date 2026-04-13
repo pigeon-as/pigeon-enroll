@@ -107,7 +107,6 @@ type JWTSpec struct {
 type Config struct {
 	Listen           string `hcl:"listen,optional"`
 	KeyPath          string `hcl:"key_path,optional"`
-	KeySource        string `hcl:"key_source,optional"`
 	NoncePath        string `hcl:"nonce_path,optional"`
 	TokenWindow      time.Duration
 	TokenWindowRaw   string `hcl:"token_window,optional"`
@@ -138,9 +137,6 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.KeyPath == "" {
 		cfg.KeyPath = "/etc/pigeon/enrollment-key"
-	}
-	if cfg.KeySource == "" {
-		cfg.KeySource = "file"
 	}
 	if cfg.NoncePath == "" {
 		cfg.NoncePath = "/var/lib/pigeon-enroll/nonces"
@@ -197,9 +193,6 @@ func parseDuration(raw string, defaultVal time.Duration) (time.Duration, error) 
 }
 
 func validate(cfg Config) error {
-	if cfg.KeySource != "" && cfg.KeySource != "file" && cfg.KeySource != "tpm" {
-		return fmt.Errorf("key_source must be \"file\" or \"tpm\"")
-	}
 	if cfg.TokenWindow < time.Second {
 		return fmt.Errorf("token_window must be at least 1s")
 	}

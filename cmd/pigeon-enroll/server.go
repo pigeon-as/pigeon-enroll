@@ -21,15 +21,16 @@ import (
 func cmdServer(args []string) int {
 	flags := newFlagSet("server")
 	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
+	keyPathFlag := flags.String("key-path", "", "Override enrollment key path from config")
 	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
 	flags.Parse(args)
 
-	logger, cfg, ikm, hmacKey, err := loadConfig(*configPath, *logLevel)
+	logger, cfg, ikm, hmacKey, err := loadConfig(*configPath, *logLevel, *keyPathFlag)
 	if err != nil {
 		logger.Error(err.Error())
 		return 1
 	}
-	logger.Info("enrollment key", "source", cfg.KeySource, "path", cfg.KeyPath)
+	logger.Info("enrollment key loaded", "path", cfg.KeyPath)
 
 	hostname, err := os.Hostname()
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 func cmdGenerateCert(args []string) int {
 	flags := newFlagSet("generate-cert")
 	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
+	keyPathFlag := flags.String("key-path", "", "Override enrollment key path from config")
 	fromCA := flags.String("from-ca", "", "PEM file with CA cert+key (alternative to -config)")
 	cn := flags.String("cn", "", "Certificate CommonName (default: pigeon-enroll)")
 	ttl := flags.String("ttl", "24h", "Certificate validity duration")
@@ -71,7 +72,7 @@ func cmdGenerateCert(args []string) int {
 			return 1
 		}
 	} else {
-		ikm, err := loadIKM(*configPath)
+		ikm, err := loadIKM(*configPath, *keyPathFlag)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			return 1
