@@ -25,6 +25,7 @@ func cmdGenerateCert(args []string) int {
 	var dnsNames, ipAddrs stringSlice
 	flags.Var(&dnsNames, "dns", "DNS SAN (repeatable)")
 	flags.Var(&ipAddrs, "ip", "IP SAN (repeatable)")
+	scope := flags.String("scope", "", "Scope embedded as OU in cert subject (Vault cert auth pattern)")
 	flags.Parse(args)
 
 	// Validate: at least one output flag required.
@@ -93,7 +94,7 @@ func cmdGenerateCert(args []string) int {
 	hosts = append(hosts, dnsNames...)
 	hosts = append(hosts, ipAddrs...)
 
-	certPEM, keyPEM, err := pki.GenerateCert(ca, certCN, hosts, certTTL)
+	certPEM, keyPEM, err := pki.GenerateCert(ca, certCN, hosts, *scope, certTTL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "generate cert: %v\n", err)
 		return 1

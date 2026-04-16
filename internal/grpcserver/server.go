@@ -28,6 +28,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -404,7 +405,9 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 }
 
 // Publish renders a server-side template with fresh credentials.
-// The caller authenticates via mTLS (same CA as Claim).
+// The caller authenticates via mTLS (same CA as Claim). Authorization is
+// enforced by checking the caller's cert OU against the template's scope
+// (Vault cert auth pattern: allowed_organizational_units).
 func (s *Server) Publish(ctx context.Context, req *pb.PublishRequest) (*pb.PublishResponse, error) {
 	ip := peerIP(ctx)
 
@@ -419,11 +422,23 @@ func (s *Server) Publish(ctx context.Context, req *pb.PublishRequest) (*pb.Publi
 		return nil, status.Error(codes.NotFound, "unknown template")
 	}
 
+	// Authorize: caller's cert OU must match template scope.
+	peerScope, err := peerCertScope(ctx)
+	if err != nil {
+		s.logger.Warn("publish denied", "ip", ip, "name", req.GetName(), "reason", "no peer cert")
+		return nil, status.Error(codes.Unauthenticated, "client certificate required")
+	}
+	if peerScope != tpl.Scope {
+		s.logger.Warn("publish denied", "ip", ip, "name", req.GetName(),
+			"reason", "scope mismatch", "peer_scope", peerScope, "template_scope", tpl.Scope)
+		return nil, status.Error(codes.PermissionDenied, "scope mismatch")
+	}
+
 	// Generate fresh HMAC token scoped to the template's scope.
 	tok := token.Generate(s.hmacKey, time.Now(), s.cfg.TokenWindow, tpl.Scope)
 
-	// Generate ephemeral client cert bundle.
-	certBundle, err := pki.GenerateClientCert(s.mtlsCA, s.clientTTL)
+	// Generate ephemeral client cert bundle with template scope embedded as OU.
+	certBundle, err := pki.GenerateClientCert(s.mtlsCA, tpl.Scope, s.clientTTL)
 	if err != nil {
 		s.logger.Error("publish failed", "ip", ip, "name", tpl.Name, "reason", "generate cert", "err", err)
 		return nil, status.Error(codes.Internal, "internal error")
@@ -463,6 +478,25 @@ func peerIP(ctx context.Context) string {
 		return p.Addr.String()
 	}
 	return host
+}
+
+// peerCertScope extracts the scope (first OU) from the peer's TLS client
+// certificate. Returns an error if no verified peer certificate is available.
+// Follows the Vault cert auth pattern: allowed_organizational_units.
+func peerCertScope(ctx context.Context) (string, error) {
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return "", fmt.Errorf("no peer info")
+	}
+	ti, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok || len(ti.State.VerifiedChains) == 0 || len(ti.State.VerifiedChains[0]) == 0 {
+		return "", fmt.Errorf("no verified peer certificate")
+	}
+	leaf := ti.State.VerifiedChains[0][0]
+	if len(leaf.Subject.OrganizationalUnit) == 0 {
+		return "", fmt.Errorf("peer certificate has no OU")
+	}
+	return leaf.Subject.OrganizationalUnit[0], nil
 }
 
 func scopeMatch(allowed []string, scope string) bool {

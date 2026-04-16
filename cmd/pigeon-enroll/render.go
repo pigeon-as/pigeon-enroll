@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"os"
 	"os/signal"
@@ -24,61 +23,37 @@ func cmdRender(args []string) int {
 	insecureFlag := flags.Bool("insecure", false, "Skip TLS certificate verification")
 	flags.Parse(args)
 
-	if *addr == "" || *name == "" || *output == "" {
+	if *addr == "" || *tlsBundle == "" || *name == "" || *output == "" {
 		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll render -addr=<host:port> -tls=<bundle> -name=<template> -output=<path> [-insecure]")
 		return 1
 	}
 
-	var dialOpts []grpc.DialOption
-
-	switch {
-	case *tlsBundle != "":
-		bundlePEM, err := os.ReadFile(*tlsBundle)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "read TLS bundle: %v\n", err)
-			return 1
-		}
-		key, cert, caPool, err := pki.LoadClientBundle(bundlePEM)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "load TLS bundle: %v\n", err)
-			return 1
-		}
-		tlsCfg := &tls.Config{
-			MinVersion: tls.VersionTLS13,
-			Certificates: []tls.Certificate{{
-				Certificate: [][]byte{cert.Raw},
-				PrivateKey:  key,
-			}},
-			RootCAs:    caPool,
-			ServerName: "pigeon-enroll",
-		}
-		if *insecureFlag {
-			fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled — do not use in production")
-			tlsCfg.InsecureSkipVerify = true
-		}
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
-
-	case *insecureFlag:
-		fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled, no client cert — do not use in production")
-		tlsCfg := &tls.Config{
-			MinVersion:         tls.VersionTLS13,
-			InsecureSkipVerify: true,
-		}
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
-
-	default:
-		pool, err := x509.SystemCertPool()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "load system CA pool: %v\n", err)
-			return 1
-		}
-		tlsCfg := &tls.Config{
-			MinVersion: tls.VersionTLS13,
-			RootCAs:    pool,
-			ServerName: "pigeon-enroll",
-		}
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	bundlePEM, err := os.ReadFile(*tlsBundle)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "read TLS bundle: %v\n", err)
+		return 1
 	}
+	key, cert, caPool, err := pki.LoadClientBundle(bundlePEM)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load TLS bundle: %v\n", err)
+		return 1
+	}
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{cert.Raw},
+			PrivateKey:  key,
+		}},
+		RootCAs:    caPool,
+		ServerName: "pigeon-enroll",
+	}
+	if *insecureFlag {
+		fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled — do not use in production")
+		tlsCfg.InsecureSkipVerify = true
+	}
+
+	var dialOpts []grpc.DialOption
+	dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 
 	conn, err := grpc.NewClient(*addr, dialOpts...)
 	if err != nil {

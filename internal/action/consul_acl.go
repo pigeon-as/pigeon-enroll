@@ -184,6 +184,10 @@ func (c *consulACL) ensurePolicy(ctx context.Context, logger *slog.Logger, clien
 		logger.Info("consul nomad-agent policy already exists", "id", existing.ID)
 		return existing.ID, nil
 	}
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("read policy: unexpected status %d: %s", resp.StatusCode, respBody)
+	}
 	io.Copy(io.Discard, resp.Body)
 
 	// Create the policy.
