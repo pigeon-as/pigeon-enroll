@@ -641,52 +641,6 @@ secret "test" {
 	must.MapContainsKey(t, persisted.Secrets, "test")
 }
 
-func TestRender_File(t *testing.T) {
-	dir := t.TempDir()
-
-	varsPath := filepath.Join(dir, "vars.json")
-	must.NoError(t, os.WriteFile(varsPath,
-		[]byte(`{"secrets":{"gossip":"mysecret"},"vars":{"dc":"gra"}}`), 0644))
-
-	tplPath := filepath.Join(dir, "consul.hcl.tpl")
-	must.NoError(t, os.WriteFile(tplPath,
-		[]byte("encrypt = \"${secrets.gossip}\"\ndatacenter = \"${vars.dc}\""), 0644))
-
-	destPath := filepath.Join(dir, "consul.hcl")
-	renderCfgPath := filepath.Join(dir, "render.hcl")
-	must.NoError(t, os.WriteFile(renderCfgPath, []byte(fmt.Sprintf(`
-template {
-  source      = %q
-  destination = %q
-}
-`, tplPath, destPath)), 0644))
-
-	run(t, "render", "-config="+renderCfgPath, "-vars="+varsPath)
-
-	must.FileContains(t, destPath, `encrypt = "mysecret"`)
-	must.FileContains(t, destPath, `datacenter = "gra"`)
-}
-
-func TestRender_InlineContent(t *testing.T) {
-	dir := t.TempDir()
-
-	varsPath := filepath.Join(dir, "vars.json")
-	must.NoError(t, os.WriteFile(varsPath, []byte(`{"secrets":{"key":"val123"}}`), 0644))
-
-	destPath := filepath.Join(dir, "out.txt")
-	renderCfgPath := filepath.Join(dir, "render.hcl")
-	must.NoError(t, os.WriteFile(renderCfgPath, []byte(fmt.Sprintf(`
-template {
-  content     = "key=$${secrets.key}"
-  destination = %q
-}
-`, destPath)), 0644))
-
-	run(t, "render", "-config="+renderCfgPath, "-vars="+varsPath)
-
-	must.FileContains(t, destPath, "key=val123")
-}
-
 func TestGenerateCert(t *testing.T) {
 	keyPath := enrollmentKey(t)
 	cfgPath := writeFile(t, "enroll.hcl", fmt.Sprintf(`

@@ -26,9 +26,9 @@ type consulACLConfig struct {
 	// TLSSkipVerify disables TLS certificate verification.
 	TLSSkipVerify bool `hcl:"tls_skip_verify,optional"`
 	// ManagementToken references a secret name whose value is the Consul management token.
-	ManagementToken string `hcl:"management_token"`
+	ManagementToken string `hcl:"management_token,optional"`
 	// AgentToken references a secret name whose value becomes the agent token SecretID.
-	AgentToken string `hcl:"agent_token"`
+	AgentToken string `hcl:"agent_token,optional"`
 	// AgentTokenDescription is the description for the agent token in Consul.
 	AgentTokenDescription string `hcl:"agent_token_description,optional"`
 }
