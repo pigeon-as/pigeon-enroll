@@ -11,19 +11,19 @@ option go_package = "github.com/pigeon-as/pigeon-enroll/proto/enroll/v1;enrollv1
 service EnrollmentService {
   rpc Claim(stream ClaimRequest) returns (stream ClaimResponse);
 
-  // Publish returns a server-rendered template with fresh credentials embedded.
+  // Render returns a server-rendered template with fresh credentials embedded.
   // Templates are defined in the server config via "template" blocks.
   // The caller authenticates via mTLS (same as Claim).
-  rpc Publish(PublishRequest) returns (PublishResponse);
+  rpc Render(RenderRequest) returns (RenderResponse);
 }
 
-// PublishRequest identifies which server-side template to render.
-message PublishRequest {
+// RenderRequest identifies which server-side template to render.
+message RenderRequest {
   string name = 1;
 }
 
-// PublishResponse contains the rendered template content.
-message PublishResponse {
+// RenderResponse contains the rendered template content.
+message RenderResponse {
   string content = 1;
 }
 

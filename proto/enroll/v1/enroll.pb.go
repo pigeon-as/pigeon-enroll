@@ -21,28 +21,28 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// PublishRequest identifies which server-side template to render.
-type PublishRequest struct {
+// RenderRequest identifies which server-side template to render.
+type RenderRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PublishRequest) Reset() {
-	*x = PublishRequest{}
+func (x *RenderRequest) Reset() {
+	*x = RenderRequest{}
 	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PublishRequest) String() string {
+func (x *RenderRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PublishRequest) ProtoMessage() {}
+func (*RenderRequest) ProtoMessage() {}
 
-func (x *PublishRequest) ProtoReflect() protoreflect.Message {
+func (x *RenderRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -54,40 +54,40 @@ func (x *PublishRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PublishRequest.ProtoReflect.Descriptor instead.
-func (*PublishRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use RenderRequest.ProtoReflect.Descriptor instead.
+func (*RenderRequest) Descriptor() ([]byte, []int) {
 	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *PublishRequest) GetName() string {
+func (x *RenderRequest) GetName() string {
 	if x != nil {
 		return x.Name
 	}
 	return ""
 }
 
-// PublishResponse contains the rendered template content.
-type PublishResponse struct {
+// RenderResponse contains the rendered template content.
+type RenderResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PublishResponse) Reset() {
-	*x = PublishResponse{}
+func (x *RenderResponse) Reset() {
+	*x = RenderResponse{}
 	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PublishResponse) String() string {
+func (x *RenderResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PublishResponse) ProtoMessage() {}
+func (*RenderResponse) ProtoMessage() {}
 
-func (x *PublishResponse) ProtoReflect() protoreflect.Message {
+func (x *RenderResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -99,12 +99,12 @@ func (x *PublishResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PublishResponse.ProtoReflect.Descriptor instead.
-func (*PublishResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use RenderResponse.ProtoReflect.Descriptor instead.
+func (*RenderResponse) Descriptor() ([]byte, []int) {
 	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *PublishResponse) GetContent() string {
+func (x *RenderResponse) GetContent() string {
 	if x != nil {
 		return x.Content
 	}
@@ -698,10 +698,10 @@ var File_proto_enroll_v1_enroll_proto protoreflect.FileDescriptor
 
 const file_proto_enroll_v1_enroll_proto_rawDesc = "" +
 	"\n" +
-	"\x1cproto/enroll/v1/enroll.proto\x12\x10pigeon.enroll.v1\"$\n" +
-	"\x0ePublishRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"+\n" +
-	"\x0fPublishResponse\x12\x18\n" +
+	"\x1cproto/enroll/v1/enroll.proto\x12\x10pigeon.enroll.v1\"#\n" +
+	"\rRenderRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"*\n" +
+	"\x0eRenderResponse\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\"\x80\x01\n" +
 	"\fClaimRequest\x127\n" +
 	"\x06params\x18\x01 \x01(\v2\x1d.pigeon.enroll.v1.ClaimParamsH\x00R\x06params\x12/\n" +
@@ -761,10 +761,10 @@ const file_proto_enroll_v1_enroll_proto_rawDesc = "" +
 	"\n" +
 	"CertBundle\x12\x19\n" +
 	"\bcert_pem\x18\x01 \x01(\tR\acertPem\x12\x17\n" +
-	"\akey_pem\x18\x02 \x01(\tR\x06keyPem2\xb1\x01\n" +
+	"\akey_pem\x18\x02 \x01(\tR\x06keyPem2\xae\x01\n" +
 	"\x11EnrollmentService\x12L\n" +
-	"\x05Claim\x12\x1e.pigeon.enroll.v1.ClaimRequest\x1a\x1f.pigeon.enroll.v1.ClaimResponse(\x010\x01\x12N\n" +
-	"\aPublish\x12 .pigeon.enroll.v1.PublishRequest\x1a!.pigeon.enroll.v1.PublishResponseB=Z;github.com/pigeon-as/pigeon-enroll/proto/enroll/v1;enrollv1b\x06proto3"
+	"\x05Claim\x12\x1e.pigeon.enroll.v1.ClaimRequest\x1a\x1f.pigeon.enroll.v1.ClaimResponse(\x010\x01\x12K\n" +
+	"\x06Render\x12\x1f.pigeon.enroll.v1.RenderRequest\x1a .pigeon.enroll.v1.RenderResponseB=Z;github.com/pigeon-as/pigeon-enroll/proto/enroll/v1;enrollv1b\x06proto3"
 
 var (
 	file_proto_enroll_v1_enroll_proto_rawDescOnce sync.Once
@@ -780,22 +780,22 @@ func file_proto_enroll_v1_enroll_proto_rawDescGZIP() []byte {
 
 var file_proto_enroll_v1_enroll_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_proto_enroll_v1_enroll_proto_goTypes = []any{
-	(*PublishRequest)(nil),  // 0: pigeon.enroll.v1.PublishRequest
-	(*PublishResponse)(nil), // 1: pigeon.enroll.v1.PublishResponse
-	(*ClaimRequest)(nil),    // 2: pigeon.enroll.v1.ClaimRequest
-	(*ClaimParams)(nil),     // 3: pigeon.enroll.v1.ClaimParams
-	(*TPMParams)(nil),       // 4: pigeon.enroll.v1.TPMParams
-	(*TPMChallenge)(nil),    // 5: pigeon.enroll.v1.TPMChallenge
-	(*ClaimResponse)(nil),   // 6: pigeon.enroll.v1.ClaimResponse
-	(*ClaimResult)(nil),     // 7: pigeon.enroll.v1.ClaimResult
-	(*CACert)(nil),          // 8: pigeon.enroll.v1.CACert
-	(*CertBundle)(nil),      // 9: pigeon.enroll.v1.CertBundle
-	nil,                     // 10: pigeon.enroll.v1.ClaimResult.SecretsEntry
-	nil,                     // 11: pigeon.enroll.v1.ClaimResult.VarsEntry
-	nil,                     // 12: pigeon.enroll.v1.ClaimResult.CaEntry
-	nil,                     // 13: pigeon.enroll.v1.ClaimResult.CertsEntry
-	nil,                     // 14: pigeon.enroll.v1.ClaimResult.JwtsEntry
-	nil,                     // 15: pigeon.enroll.v1.ClaimResult.JwtKeysEntry
+	(*RenderRequest)(nil),  // 0: pigeon.enroll.v1.RenderRequest
+	(*RenderResponse)(nil), // 1: pigeon.enroll.v1.RenderResponse
+	(*ClaimRequest)(nil),   // 2: pigeon.enroll.v1.ClaimRequest
+	(*ClaimParams)(nil),    // 3: pigeon.enroll.v1.ClaimParams
+	(*TPMParams)(nil),      // 4: pigeon.enroll.v1.TPMParams
+	(*TPMChallenge)(nil),   // 5: pigeon.enroll.v1.TPMChallenge
+	(*ClaimResponse)(nil),  // 6: pigeon.enroll.v1.ClaimResponse
+	(*ClaimResult)(nil),    // 7: pigeon.enroll.v1.ClaimResult
+	(*CACert)(nil),         // 8: pigeon.enroll.v1.CACert
+	(*CertBundle)(nil),     // 9: pigeon.enroll.v1.CertBundle
+	nil,                    // 10: pigeon.enroll.v1.ClaimResult.SecretsEntry
+	nil,                    // 11: pigeon.enroll.v1.ClaimResult.VarsEntry
+	nil,                    // 12: pigeon.enroll.v1.ClaimResult.CaEntry
+	nil,                    // 13: pigeon.enroll.v1.ClaimResult.CertsEntry
+	nil,                    // 14: pigeon.enroll.v1.ClaimResult.JwtsEntry
+	nil,                    // 15: pigeon.enroll.v1.ClaimResult.JwtKeysEntry
 }
 var file_proto_enroll_v1_enroll_proto_depIdxs = []int32{
 	3,  // 0: pigeon.enroll.v1.ClaimRequest.params:type_name -> pigeon.enroll.v1.ClaimParams
@@ -811,9 +811,9 @@ var file_proto_enroll_v1_enroll_proto_depIdxs = []int32{
 	8,  // 10: pigeon.enroll.v1.ClaimResult.CaEntry.value:type_name -> pigeon.enroll.v1.CACert
 	9,  // 11: pigeon.enroll.v1.ClaimResult.CertsEntry.value:type_name -> pigeon.enroll.v1.CertBundle
 	2,  // 12: pigeon.enroll.v1.EnrollmentService.Claim:input_type -> pigeon.enroll.v1.ClaimRequest
-	0,  // 13: pigeon.enroll.v1.EnrollmentService.Publish:input_type -> pigeon.enroll.v1.PublishRequest
+	0,  // 13: pigeon.enroll.v1.EnrollmentService.Render:input_type -> pigeon.enroll.v1.RenderRequest
 	6,  // 14: pigeon.enroll.v1.EnrollmentService.Claim:output_type -> pigeon.enroll.v1.ClaimResponse
-	1,  // 15: pigeon.enroll.v1.EnrollmentService.Publish:output_type -> pigeon.enroll.v1.PublishResponse
+	1,  // 15: pigeon.enroll.v1.EnrollmentService.Render:output_type -> pigeon.enroll.v1.RenderResponse
 	14, // [14:16] is the sub-list for method output_type
 	12, // [12:14] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name

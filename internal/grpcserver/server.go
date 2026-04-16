@@ -404,32 +404,32 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 	}, certNames, nil
 }
 
-// Publish renders a server-side template with fresh credentials.
+// Render renders a server-side template with fresh credentials.
 // The caller authenticates via mTLS (same CA as Claim). Authorization is
 // enforced by checking the caller's cert OU against the template's scope
 // (Vault cert auth pattern: allowed_organizational_units).
-func (s *Server) Publish(ctx context.Context, req *pb.PublishRequest) (*pb.PublishResponse, error) {
+func (s *Server) Render(ctx context.Context, req *pb.RenderRequest) (*pb.RenderResponse, error) {
 	ip := peerIP(ctx)
 
 	if !s.limiter.allow(ip) {
-		s.logger.Warn("publish denied", "ip", ip, "reason", "rate limited")
+		s.logger.Warn("render denied", "ip", ip, "reason", "rate limited")
 		return nil, status.Error(codes.ResourceExhausted, "too many requests")
 	}
 
 	tpl, ok := s.templates[req.GetName()]
 	if !ok {
-		s.logger.Warn("publish denied", "ip", ip, "name", req.GetName(), "reason", "unknown template")
+		s.logger.Warn("render denied", "ip", ip, "name", req.GetName(), "reason", "unknown template")
 		return nil, status.Error(codes.NotFound, "unknown template")
 	}
 
 	// Authorize: caller's cert OU must match template scope.
 	peerScope, err := peerCertScope(ctx)
 	if err != nil {
-		s.logger.Warn("publish denied", "ip", ip, "name", req.GetName(), "reason", "no peer cert")
+		s.logger.Warn("render denied", "ip", ip, "name", req.GetName(), "reason", "no peer cert")
 		return nil, status.Error(codes.Unauthenticated, "client certificate required")
 	}
 	if peerScope != tpl.Scope {
-		s.logger.Warn("publish denied", "ip", ip, "name", req.GetName(),
+		s.logger.Warn("render denied", "ip", ip, "name", req.GetName(),
 			"reason", "scope mismatch", "peer_scope", peerScope, "template_scope", tpl.Scope)
 		return nil, status.Error(codes.PermissionDenied, "scope mismatch")
 	}
@@ -440,7 +440,7 @@ func (s *Server) Publish(ctx context.Context, req *pb.PublishRequest) (*pb.Publi
 	// Generate ephemeral client cert bundle with template scope embedded as OU.
 	certBundle, err := pki.GenerateClientCert(s.mtlsCA, tpl.Scope, s.clientTTL)
 	if err != nil {
-		s.logger.Error("publish failed", "ip", ip, "name", tpl.Name, "reason", "generate cert", "err", err)
+		s.logger.Error("render failed", "ip", ip, "name", tpl.Name, "reason", "generate cert", "err", err)
 		return nil, status.Error(codes.Internal, "internal error")
 	}
 
@@ -459,12 +459,12 @@ func (s *Server) Publish(ctx context.Context, req *pb.PublishRequest) (*pb.Publi
 
 	rendered, err := render.File(tpl.Source, tplVars)
 	if err != nil {
-		s.logger.Error("publish failed", "ip", ip, "name", tpl.Name, "reason", "render", "err", err)
+		s.logger.Error("render failed", "ip", ip, "name", tpl.Name, "reason", "render", "err", err)
 		return nil, status.Error(codes.Internal, "template render failed")
 	}
 
-	s.logger.Info("publish", "ip", ip, "name", tpl.Name, "scope", tpl.Scope)
-	return &pb.PublishResponse{Content: string(rendered)}, nil
+	s.logger.Info("render", "ip", ip, "name", tpl.Name, "scope", tpl.Scope)
+	return &pb.RenderResponse{Content: string(rendered)}, nil
 }
 
 // peerIP extracts the client IP from gRPC peer info.

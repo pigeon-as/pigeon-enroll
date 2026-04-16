@@ -92,7 +92,7 @@ func (cs CertSpec) ResolveSANs(subject string) ([]string, []net.IP, error) {
 	return sans.DNSSANs, ipSANs, nil
 }
 
-// TemplateSpec describes a template rendered on demand via the Publish RPC.
+// TemplateSpec describes a template rendered on demand via the Render RPC.
 // Each request generates a fresh HMAC token (scoped) and ephemeral client cert bundle.
 type TemplateSpec struct {
 	Name   string `hcl:"name,label"`

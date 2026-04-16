@@ -19,8 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	EnrollmentService_Claim_FullMethodName   = "/pigeon.enroll.v1.EnrollmentService/Claim"
-	EnrollmentService_Publish_FullMethodName = "/pigeon.enroll.v1.EnrollmentService/Publish"
+	EnrollmentService_Claim_FullMethodName  = "/pigeon.enroll.v1.EnrollmentService/Claim"
+	EnrollmentService_Render_FullMethodName = "/pigeon.enroll.v1.EnrollmentService/Render"
 )
 
 // EnrollmentServiceClient is the client API for EnrollmentService service.
@@ -35,10 +35,10 @@ const (
 // - Token-only: params → result
 type EnrollmentServiceClient interface {
 	Claim(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ClaimRequest, ClaimResponse], error)
-	// Publish returns a server-rendered template with fresh credentials embedded.
+	// Render returns a server-rendered template with fresh credentials embedded.
 	// Templates are defined in the server config via "template" blocks.
 	// The caller authenticates via mTLS (same as Claim).
-	Publish(ctx context.Context, in *PublishRequest, opts ...grpc.CallOption) (*PublishResponse, error)
+	Render(ctx context.Context, in *RenderRequest, opts ...grpc.CallOption) (*RenderResponse, error)
 }
 
 type enrollmentServiceClient struct {
@@ -62,10 +62,10 @@ func (c *enrollmentServiceClient) Claim(ctx context.Context, opts ...grpc.CallOp
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EnrollmentService_ClaimClient = grpc.BidiStreamingClient[ClaimRequest, ClaimResponse]
 
-func (c *enrollmentServiceClient) Publish(ctx context.Context, in *PublishRequest, opts ...grpc.CallOption) (*PublishResponse, error) {
+func (c *enrollmentServiceClient) Render(ctx context.Context, in *RenderRequest, opts ...grpc.CallOption) (*RenderResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PublishResponse)
-	err := c.cc.Invoke(ctx, EnrollmentService_Publish_FullMethodName, in, out, cOpts...)
+	out := new(RenderResponse)
+	err := c.cc.Invoke(ctx, EnrollmentService_Render_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -84,10 +84,10 @@ func (c *enrollmentServiceClient) Publish(ctx context.Context, in *PublishReques
 // - Token-only: params → result
 type EnrollmentServiceServer interface {
 	Claim(grpc.BidiStreamingServer[ClaimRequest, ClaimResponse]) error
-	// Publish returns a server-rendered template with fresh credentials embedded.
+	// Render returns a server-rendered template with fresh credentials embedded.
 	// Templates are defined in the server config via "template" blocks.
 	// The caller authenticates via mTLS (same as Claim).
-	Publish(context.Context, *PublishRequest) (*PublishResponse, error)
+	Render(context.Context, *RenderRequest) (*RenderResponse, error)
 	mustEmbedUnimplementedEnrollmentServiceServer()
 }
 
@@ -101,8 +101,8 @@ type UnimplementedEnrollmentServiceServer struct{}
 func (UnimplementedEnrollmentServiceServer) Claim(grpc.BidiStreamingServer[ClaimRequest, ClaimResponse]) error {
 	return status.Error(codes.Unimplemented, "method Claim not implemented")
 }
-func (UnimplementedEnrollmentServiceServer) Publish(context.Context, *PublishRequest) (*PublishResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method Publish not implemented")
+func (UnimplementedEnrollmentServiceServer) Render(context.Context, *RenderRequest) (*RenderResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Render not implemented")
 }
 func (UnimplementedEnrollmentServiceServer) mustEmbedUnimplementedEnrollmentServiceServer() {}
 func (UnimplementedEnrollmentServiceServer) testEmbeddedByValue()                           {}
@@ -132,20 +132,20 @@ func _EnrollmentService_Claim_Handler(srv interface{}, stream grpc.ServerStream)
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EnrollmentService_ClaimServer = grpc.BidiStreamingServer[ClaimRequest, ClaimResponse]
 
-func _EnrollmentService_Publish_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PublishRequest)
+func _EnrollmentService_Render_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenderRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(EnrollmentServiceServer).Publish(ctx, in)
+		return srv.(EnrollmentServiceServer).Render(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: EnrollmentService_Publish_FullMethodName,
+		FullMethod: EnrollmentService_Render_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EnrollmentServiceServer).Publish(ctx, req.(*PublishRequest))
+		return srv.(EnrollmentServiceServer).Render(ctx, req.(*RenderRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -158,8 +158,8 @@ var EnrollmentService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*EnrollmentServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Publish",
-			Handler:    _EnrollmentService_Publish_Handler,
+			MethodName: "Render",
+			Handler:    _EnrollmentService_Render_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

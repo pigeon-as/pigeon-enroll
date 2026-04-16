@@ -66,9 +66,9 @@ func cmdRender(args []string) int {
 	defer cancel()
 
 	client := pb.NewEnrollmentServiceClient(conn)
-	resp, err := client.Publish(ctx, &pb.PublishRequest{Name: *name})
+	resp, err := client.Render(ctx, &pb.RenderRequest{Name: *name})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "publish failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "render failed: %v\n", err)
 		return 1
 	}
 
