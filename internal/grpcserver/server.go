@@ -422,16 +422,19 @@ func (s *Server) Render(ctx context.Context, req *pb.RenderRequest) (*pb.RenderR
 		return nil, status.Error(codes.NotFound, "unknown template")
 	}
 
-	// Authorize: caller's cert OU must match template scope.
-	peerScope, err := peerCertScope(ctx)
-	if err != nil {
-		s.logger.Warn("render denied", "ip", ip, "name", req.GetName(), "reason", "no peer cert")
-		return nil, status.Error(codes.Unauthenticated, "client certificate required")
-	}
-	if peerScope != tpl.Scope {
-		s.logger.Warn("render denied", "ip", ip, "name", req.GetName(),
-			"reason", "scope mismatch", "peer_scope", peerScope, "template_scope", tpl.Scope)
-		return nil, status.Error(codes.PermissionDenied, "scope mismatch")
+	// Authorize: if template has a scope, caller's cert OU must match.
+	// Unscoped templates are available to all callers (same pattern as secrets/certs).
+	if tpl.Scope != "" {
+		peerScope, err := peerCertScope(ctx)
+		if err != nil {
+			s.logger.Warn("render denied", "ip", ip, "name", req.GetName(), "reason", "no peer cert")
+			return nil, status.Error(codes.Unauthenticated, "client certificate required")
+		}
+		if peerScope != tpl.Scope {
+			s.logger.Warn("render denied", "ip", ip, "name", req.GetName(),
+				"reason", "scope mismatch", "peer_scope", peerScope, "template_scope", tpl.Scope)
+			return nil, status.Error(codes.PermissionDenied, "scope mismatch")
+		}
 	}
 
 	// Generate fresh HMAC token scoped to the template's scope.
