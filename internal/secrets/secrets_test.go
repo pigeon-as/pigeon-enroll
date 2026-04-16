@@ -355,6 +355,23 @@ func TestResolvePersistedJWTKey(t *testing.T) {
 	}
 }
 
+func TestLoadSecretsFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "enroll.json")
+	pf := persistedFile{
+		Secrets: map[string]string{"foo": "bar", "baz": "qux"},
+	}
+	data, err := json.Marshal(pf)
+	must.NoError(t, err)
+	must.NoError(t, os.WriteFile(path, data, 0600))
+
+	secrets, err := LoadSecretsFile(path)
+	must.NoError(t, err)
+	must.EqOp(t, "bar", secrets["foo"])
+	must.EqOp(t, "qux", secrets["baz"])
+	must.MapLen(t, 2, secrets)
+}
+
 func TestResolveMissingJWTKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.json")

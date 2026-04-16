@@ -575,3 +575,99 @@ func TestResolveSANsBody(t *testing.T) {
 	must.SliceLen(t, 1, ips)
 	must.EqOp(t, "10.0.0.1", ips[0].String())
 }
+
+func TestLoadTemplateBlock(t *testing.T) {
+	dir := t.TempDir()
+
+	tplPath := filepath.Join(dir, "worker.sh.tpl")
+	os.WriteFile(tplPath, []byte("#!/bin/bash\necho ${token}"), 0644)
+
+	// Use forward slashes in HCL to avoid backslash escape issues on Windows.
+	tplPathHCL := filepath.ToSlash(tplPath)
+
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`
+template "setup-worker" {
+  source = "`+tplPathHCL+`"
+  scope  = "worker"
+}
+
+client_cert_ttl = "12h"
+vars = { k = "v" }
+`), 0644)
+
+	cfg, err := Load(path)
+	must.NoError(t, err)
+	must.SliceLen(t, 1, cfg.Templates)
+	must.EqOp(t, "setup-worker", cfg.Templates[0].Name)
+	must.EqOp(t, tplPathHCL, cfg.Templates[0].Source)
+	must.EqOp(t, "worker", cfg.Templates[0].Scope)
+	must.EqOp(t, 12*time.Hour, cfg.ClientCertTTL)
+}
+
+func TestValidateTemplateDuplicateName(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		ClientCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		Templates: []TemplateSpec{
+			{Name: "t", Source: "/a.tpl", Scope: "worker"},
+			{Name: "t", Source: "/b.tpl", Scope: "worker"},
+		},
+	}
+	must.Error(t, validate(cfg))
+}
+
+func TestValidateTemplateMissingScope(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		ClientCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		Templates:     []TemplateSpec{{Name: "t", Source: "/a.tpl"}},
+	}
+	must.Error(t, validate(cfg))
+}
+
+func TestValidateTemplateMissingSource(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		ClientCertTTL: time.Hour,
+		Vars:          map[string]string{"k": "v"},
+		Templates:     []TemplateSpec{{Name: "t", Scope: "worker"}},
+	}
+	must.Error(t, validate(cfg))
+}
+
+func TestValidateTemplateClientCertTTLTooSmall(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		ClientCertTTL: time.Second,
+		Vars:          map[string]string{"k": "v"},
+		Templates:     []TemplateSpec{{Name: "t", Source: "/a.tpl", Scope: "worker"}},
+	}
+	must.Error(t, validate(cfg))
+}
+
+func TestValidateTemplateOnlyConfig(t *testing.T) {
+	cfg := Config{
+		TokenWindow:   time.Minute,
+		ServerCertTTL: time.Hour,
+		ClientCertTTL: time.Hour,
+		Templates:     []TemplateSpec{{Name: "t", Source: "/a.tpl", Scope: "worker"}},
+	}
+	must.NoError(t, validate(cfg))
+}
+
+func TestLoadClientCertTTLDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.hcl")
+	os.WriteFile(path, []byte(`vars = { k = "v" }`), 0644)
+
+	cfg, err := Load(path)
+	must.NoError(t, err)
+	must.EqOp(t, 24*time.Hour, cfg.ClientCertTTL)
+}

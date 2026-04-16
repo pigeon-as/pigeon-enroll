@@ -30,6 +30,8 @@ func New(cfg Config) (Action, error) {
 		return newVaultInit(cfg.Body)
 	case "luks-recovery":
 		return newLuksRecovery(cfg.Body)
+	case "consul-acl":
+		return newConsulACL(cfg.Body)
 	default:
 		return nil, fmt.Errorf("unknown action type")
 	}

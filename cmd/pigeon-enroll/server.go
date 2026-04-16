@@ -46,18 +46,19 @@ func cmdServer(args []string) int {
 		logger.Info("secrets resolved", "count", len(derived), "path", cfg.PersistPath)
 	}
 
-	srv, err := grpcserver.New(logger, cfg, hmacKey, derived, cas, jwtKeys)
-	if err != nil {
-		logger.Error("create grpc server", "err", err)
-		return 1
-	}
-
 	// Derive mTLS credentials from enrollment key.
 	ca, err := pki.DeriveCA(ikm)
 	if err != nil {
 		logger.Error("derive CA", "err", err)
 		return 1
 	}
+
+	srv, err := grpcserver.New(logger, cfg, hmacKey, derived, cas, jwtKeys, ca)
+	if err != nil {
+		logger.Error("create grpc server", "err", err)
+		return 1
+	}
+
 	caPool := x509.NewCertPool()
 	caPool.AddCert(ca.Cert)
 	rotator := pki.NewCertRotator(ca, []string{"pigeon-enroll"}, cfg.ServerCertTTL)

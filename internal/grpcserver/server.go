@@ -21,9 +21,11 @@ import (
 	jwtpkg "github.com/pigeon-as/pigeon-enroll/internal/jwt"
 	"github.com/pigeon-as/pigeon-enroll/internal/nonce"
 	"github.com/pigeon-as/pigeon-enroll/internal/pki"
+	"github.com/pigeon-as/pigeon-enroll/internal/render"
 	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
 	"github.com/pigeon-as/pigeon-enroll/internal/token"
 	pb "github.com/pigeon-as/pigeon-enroll/proto/enroll/v1"
+	"github.com/zclconf/go-cty/cty"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
@@ -46,12 +48,16 @@ type Server struct {
 	certSpecs []config.CertSpec
 	jwtKeys   map[string]secrets.JWTKeyEntry
 	jwtSpecs  []config.JWTSpec
+	templates map[string]config.TemplateSpec // keyed by name
+	mtlsCA    *pki.CA                        // mTLS CA for generating ephemeral client certs
+	clientTTL time.Duration                  // TTL for generated client certs
+	vars      map[string]string              // config vars passed to template rendering
 	logger    *slog.Logger
 	ek        *attestpkg.EKValidator
 }
 
 // New creates a new enrollment gRPC server.
-func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets map[string]string, cas map[string]secrets.CAEntry, jwtKeys map[string]secrets.JWTKeyEntry) (*Server, error) {
+func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets map[string]string, cas map[string]secrets.CAEntry, jwtKeys map[string]secrets.JWTKeyEntry, mtlsCA *pki.CA) (*Server, error) {
 	scopes := make(map[string]string, len(cfg.Secrets))
 	for _, s := range cfg.Secrets {
 		if s.Scope != "" {
@@ -95,6 +101,11 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 		}
 	}
 
+	tplMap := make(map[string]config.TemplateSpec, len(cfg.Templates))
+	for _, t := range cfg.Templates {
+		tplMap[t.Name] = t
+	}
+
 	return &Server{
 		cfg:       cfg,
 		secrets:   derivedSecrets,
@@ -108,6 +119,10 @@ func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets 
 		certSpecs: cfg.Certs,
 		jwtKeys:   jwtKeys,
 		jwtSpecs:  cfg.JWTs,
+		templates: tplMap,
+		mtlsCA:    mtlsCA,
+		clientTTL: cfg.ClientCertTTL,
+		vars:      cfg.Vars,
 		logger:    logger,
 		ek:        ekValidator,
 	}, nil
@@ -386,6 +401,55 @@ func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimRes
 		Jwts:    jwts,
 		JwtKeys: jwtKeys,
 	}, certNames, nil
+}
+
+// Publish renders a server-side template with fresh credentials.
+// The caller authenticates via mTLS (same CA as Claim).
+func (s *Server) Publish(ctx context.Context, req *pb.PublishRequest) (*pb.PublishResponse, error) {
+	ip := peerIP(ctx)
+
+	if !s.limiter.allow(ip) {
+		s.logger.Warn("publish denied", "ip", ip, "reason", "rate limited")
+		return nil, status.Error(codes.ResourceExhausted, "too many requests")
+	}
+
+	tpl, ok := s.templates[req.GetName()]
+	if !ok {
+		s.logger.Warn("publish denied", "ip", ip, "name", req.GetName(), "reason", "unknown template")
+		return nil, status.Error(codes.NotFound, "unknown template")
+	}
+
+	// Generate fresh HMAC token scoped to the template's scope.
+	tok := token.Generate(s.hmacKey, time.Now(), s.cfg.TokenWindow, tpl.Scope)
+
+	// Generate ephemeral client cert bundle.
+	certBundle, err := pki.GenerateClientCert(s.mtlsCA, s.clientTTL)
+	if err != nil {
+		s.logger.Error("publish failed", "ip", ip, "name", tpl.Name, "reason", "generate cert", "err", err)
+		return nil, status.Error(codes.Internal, "internal error")
+	}
+
+	// Build template variables: ${token}, ${cert}, ${vars.*}
+	tplVars := map[string]cty.Value{
+		"token": cty.StringVal(tok),
+		"cert":  cty.StringVal(string(certBundle)),
+	}
+	if len(s.vars) > 0 {
+		varMap := make(map[string]cty.Value, len(s.vars))
+		for k, v := range s.vars {
+			varMap[k] = cty.StringVal(v)
+		}
+		tplVars["vars"] = cty.ObjectVal(varMap)
+	}
+
+	rendered, err := render.File(tpl.Source, tplVars)
+	if err != nil {
+		s.logger.Error("publish failed", "ip", ip, "name", tpl.Name, "reason", "render", "err", err)
+		return nil, status.Error(codes.Internal, "template render failed")
+	}
+
+	s.logger.Info("publish", "ip", ip, "name", tpl.Name, "scope", tpl.Scope)
+	return &pb.PublishResponse{Content: string(rendered)}, nil
 }
 
 // peerIP extracts the client IP from gRPC peer info.

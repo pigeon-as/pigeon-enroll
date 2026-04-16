@@ -202,6 +202,24 @@ type persistedFile struct {
 	JWTKeys map[string]string    `json:"jwt_keys,omitempty"` // name → PEM public key
 }
 
+// LoadSecretsFile reads a persisted secrets file (enroll.json) and returns
+// the secrets map. This is used by run-actions on nodes that received
+// pre-derived secrets via claim instead of deriving from the enrollment key.
+func LoadSecretsFile(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read secrets file: %w", err)
+	}
+	var pf persistedFile
+	if err := json.Unmarshal(data, &pf); err != nil {
+		return nil, fmt.Errorf("parse secrets file: %w", err)
+	}
+	if pf.Secrets == nil {
+		pf.Secrets = make(map[string]string)
+	}
+	return pf.Secrets, nil
+}
+
 // load parses the persisted secrets file and validates that all required
 // specs are present. Returns all persisted certs as-is (no scope filtering) —
 // the caller checks for missing scope-matching certs and issues them

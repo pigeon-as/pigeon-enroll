@@ -1,92 +1,107 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"os"
-	"strconv"
+	"os/signal"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
-	"github.com/pigeon-as/pigeon-enroll/internal/render"
+	"github.com/pigeon-as/pigeon-enroll/internal/pki"
+	pb "github.com/pigeon-as/pigeon-enroll/proto/enroll/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 func cmdRender(args []string) int {
 	flags := newFlagSet("render")
-	configPath := flags.String("config", "", "Path to render HCL config")
-	varsPath := flags.String("vars", "/var/lib/pigeon/enroll.json", "Path to template variables JSON")
+	addr := flags.String("addr", "", "Enrollment server address (host:port)")
+	tlsBundle := flags.String("tls", "", "Path to client TLS certificate bundle (PEM)")
+	name := flags.String("name", "", "Template name to render")
+	output := flags.String("output", "", "Path to write rendered output")
+	insecureFlag := flags.Bool("insecure", false, "Skip TLS certificate verification")
 	flags.Parse(args)
 
-	if *configPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll render -config=<path> [-vars=<path>]")
+	if *addr == "" || *name == "" || *output == "" {
+		fmt.Fprintln(os.Stderr, "usage: pigeon-enroll render -addr=<host:port> -tls=<bundle> -name=<template> -output=<path> [-insecure]")
 		return 1
 	}
 
-	cfg, err := render.LoadConfig(*configPath)
+	var dialOpts []grpc.DialOption
+
+	switch {
+	case *tlsBundle != "":
+		bundlePEM, err := os.ReadFile(*tlsBundle)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "read TLS bundle: %v\n", err)
+			return 1
+		}
+		key, cert, caPool, err := pki.LoadClientBundle(bundlePEM)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load TLS bundle: %v\n", err)
+			return 1
+		}
+		tlsCfg := &tls.Config{
+			MinVersion: tls.VersionTLS13,
+			Certificates: []tls.Certificate{{
+				Certificate: [][]byte{cert.Raw},
+				PrivateKey:  key,
+			}},
+			RootCAs:    caPool,
+			ServerName: "pigeon-enroll",
+		}
+		if *insecureFlag {
+			fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled — do not use in production")
+			tlsCfg.InsecureSkipVerify = true
+		}
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+
+	case *insecureFlag:
+		fmt.Fprintln(os.Stderr, "WARNING: TLS verification disabled, no client cert — do not use in production")
+		tlsCfg := &tls.Config{
+			MinVersion:         tls.VersionTLS13,
+			InsecureSkipVerify: true,
+		}
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+
+	default:
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load system CA pool: %v\n", err)
+			return 1
+		}
+		tlsCfg := &tls.Config{
+			MinVersion: tls.VersionTLS13,
+			RootCAs:    pool,
+			ServerName: "pigeon-enroll",
+		}
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	}
+
+	conn, err := grpc.NewClient(*addr, dialOpts...)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "load render config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gRPC connect: %v\n", err)
 		return 1
 	}
+	defer conn.Close()
 
-	vars, err := render.ParseVarsFile(*varsPath)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	client := pb.NewEnrollmentServiceClient(conn)
+	resp, err := client.Publish(ctx, &pb.PublishRequest{Name: *name})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "parse vars: %v\n", err)
+		fmt.Fprintf(os.Stderr, "publish failed: %v\n", err)
 		return 1
 	}
 
-	for _, tpl := range cfg.Templates {
-		perms := tpl.Perms
-		if perms == "" {
-			perms = "0640"
-		}
-		perm, err := parsePerms(perms)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid perms for %s: %v\n", tpl.Destination, err)
-			return 1
-		}
-
-		var rendered []byte
-		if tpl.Content != "" {
-			rendered, err = render.Content(tpl.Content, vars)
-		} else {
-			rendered, err = render.File(tpl.Source, vars)
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "render %s: %v\n", tpl.Destination, err)
-			return 1
-		}
-
-		uid, err := render.LookupUser(tpl.User)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", tpl.Destination, err)
-			return 1
-		}
-		gid, err := render.LookupGroup(tpl.Group)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", tpl.Destination, err)
-			return 1
-		}
-
-		if err := atomicfile.WriteOwned(tpl.Destination, rendered, perm, uid, gid); err != nil {
-			fmt.Fprintf(os.Stderr, "write %s: %v\n", tpl.Destination, err)
-			return 1
-		}
-
-		if tpl.Source != "" {
-			fmt.Fprintf(os.Stderr, "rendered %s → %s\n", tpl.Source, tpl.Destination)
-		} else {
-			fmt.Fprintf(os.Stderr, "rendered → %s\n", tpl.Destination)
-		}
+	if err := atomicfile.Write(*output, []byte(resp.Content), 0640); err != nil {
+		fmt.Fprintf(os.Stderr, "write %s: %v\n", *output, err)
+		return 1
 	}
 
+	fmt.Fprintf(os.Stderr, "rendered %s → %s\n", *name, *output)
 	return 0
-}
-
-func parsePerms(s string) (os.FileMode, error) {
-	p, err := strconv.ParseUint(s, 8, 32)
-	if err != nil {
-		return 0, fmt.Errorf("parse perms %q: %w", s, err)
-	}
-	if p > 0o777 {
-		return 0, fmt.Errorf("invalid perms %q: must be between 0000 and 0777", s)
-	}
-	return os.FileMode(p), nil
 }

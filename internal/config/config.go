@@ -92,6 +92,14 @@ func (cs CertSpec) ResolveSANs(subject string) ([]string, []net.IP, error) {
 	return sans.DNSSANs, ipSANs, nil
 }
 
+// TemplateSpec describes a template rendered on demand via the Publish RPC.
+// Each request generates a fresh HMAC token (scoped) and ephemeral client cert bundle.
+type TemplateSpec struct {
+	Name   string `hcl:"name,label"`
+	Source string `hcl:"source"` // path to HCL template file on disk
+	Scope  string `hcl:"scope"`  // HMAC token scope for the generated credential
+}
+
 // JWTSpec describes a JWT to sign and include in the claim response.
 // Key pair is derived from the enrollment key via HKDF (same pattern as CAs).
 type JWTSpec struct {
@@ -111,12 +119,15 @@ type Config struct {
 	TokenWindow      time.Duration
 	TokenWindowRaw   string `hcl:"token_window,optional"`
 	ServerCertTTL    time.Duration
-	ServerCertTTLRaw string            `hcl:"server_cert_ttl,optional"`
+	ServerCertTTLRaw string `hcl:"server_cert_ttl,optional"`
+	ClientCertTTL    time.Duration
+	ClientCertTTLRaw string            `hcl:"client_cert_ttl,optional"`
 	Vars             map[string]string `hcl:"vars,optional"`
 	Secrets          []SecretSpec      `hcl:"secret,block"`
 	CAs              []CASpec          `hcl:"ca,block"`
 	Certs            []CertSpec        `hcl:"cert,block"`
 	JWTs             []JWTSpec         `hcl:"jwt,block"`
+	Templates        []TemplateSpec    `hcl:"template,block"`
 	PersistPath      string            `hcl:"persist_path,optional"`
 	Actions          []action.Config   `hcl:"action,block"`
 	RequireTPM       bool   `hcl:"require_tpm,optional"`
@@ -151,6 +162,12 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("parse server_cert_ttl: %w", err)
 	}
 	cfg.ServerCertTTL = d
+
+	d, err = parseDuration(cfg.ClientCertTTLRaw, 24*time.Hour)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse client_cert_ttl: %w", err)
+	}
+	cfg.ClientCertTTL = d
 
 	for i, c := range cfg.Certs {
 		if c.TTLRaw == "" {
@@ -198,8 +215,8 @@ func validate(cfg Config) error {
 	if cfg.ServerCertTTL < time.Second {
 		return fmt.Errorf("server_cert_ttl must be at least 1s")
 	}
-	if len(cfg.Vars) == 0 && len(cfg.Secrets) == 0 && len(cfg.CAs) == 0 && len(cfg.JWTs) == 0 && len(cfg.Certs) == 0 {
-		return fmt.Errorf("config must define at least one of: vars, secret, ca, cert, or jwt")
+	if len(cfg.Vars) == 0 && len(cfg.Secrets) == 0 && len(cfg.CAs) == 0 && len(cfg.JWTs) == 0 && len(cfg.Certs) == 0 && len(cfg.Actions) == 0 && len(cfg.Templates) == 0 {
+		return fmt.Errorf("config must define at least one of: vars, secret, ca, cert, jwt, template, or action")
 	}
 	seen := make(map[string]bool, len(cfg.Secrets)+len(cfg.Vars))
 	for _, s := range cfg.Secrets {
@@ -310,6 +327,26 @@ func validate(cfg Config) error {
 		if j.Scope == "" {
 			return fmt.Errorf("jwt %q: scope is required", j.Name)
 		}
+	}
+
+	tplNames := make(map[string]bool, len(cfg.Templates))
+	for _, t := range cfg.Templates {
+		if t.Name == "" {
+			return fmt.Errorf("template: name is required")
+		}
+		if tplNames[t.Name] {
+			return fmt.Errorf("template %q: duplicate name", t.Name)
+		}
+		tplNames[t.Name] = true
+		if t.Source == "" {
+			return fmt.Errorf("template %q: source is required", t.Name)
+		}
+		if t.Scope == "" {
+			return fmt.Errorf("template %q: scope is required", t.Name)
+		}
+	}
+	if len(cfg.Templates) > 0 && cfg.ClientCertTTL < time.Minute {
+		return fmt.Errorf("client_cert_ttl must be at least 1m when templates are defined")
 	}
 
 	// Validate EK identity config (SPIRE pattern: at least one required when TPM is required).

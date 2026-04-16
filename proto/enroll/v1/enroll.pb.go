@@ -21,6 +21,96 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// PublishRequest identifies which server-side template to render.
+type PublishRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PublishRequest) Reset() {
+	*x = PublishRequest{}
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PublishRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PublishRequest) ProtoMessage() {}
+
+func (x *PublishRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PublishRequest.ProtoReflect.Descriptor instead.
+func (*PublishRequest) Descriptor() ([]byte, []int) {
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *PublishRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+// PublishResponse contains the rendered template content.
+type PublishResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PublishResponse) Reset() {
+	*x = PublishResponse{}
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PublishResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PublishResponse) ProtoMessage() {}
+
+func (x *PublishResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PublishResponse.ProtoReflect.Descriptor instead.
+func (*PublishResponse) Descriptor() ([]byte, []int) {
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *PublishResponse) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
 type ClaimRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Step:
@@ -34,7 +124,7 @@ type ClaimRequest struct {
 
 func (x *ClaimRequest) Reset() {
 	*x = ClaimRequest{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[0]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -46,7 +136,7 @@ func (x *ClaimRequest) String() string {
 func (*ClaimRequest) ProtoMessage() {}
 
 func (x *ClaimRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[0]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -59,7 +149,7 @@ func (x *ClaimRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimRequest.ProtoReflect.Descriptor instead.
 func (*ClaimRequest) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{0}
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ClaimRequest) GetStep() isClaimRequest_Step {
@@ -122,7 +212,7 @@ type ClaimParams struct {
 
 func (x *ClaimParams) Reset() {
 	*x = ClaimParams{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[1]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -134,7 +224,7 @@ func (x *ClaimParams) String() string {
 func (*ClaimParams) ProtoMessage() {}
 
 func (x *ClaimParams) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[1]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -147,7 +237,7 @@ func (x *ClaimParams) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimParams.ProtoReflect.Descriptor instead.
 func (*ClaimParams) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{1}
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ClaimParams) GetToken() string {
@@ -206,7 +296,7 @@ type TPMParams struct {
 
 func (x *TPMParams) Reset() {
 	*x = TPMParams{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[2]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -218,7 +308,7 @@ func (x *TPMParams) String() string {
 func (*TPMParams) ProtoMessage() {}
 
 func (x *TPMParams) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[2]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -231,7 +321,7 @@ func (x *TPMParams) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TPMParams.ProtoReflect.Descriptor instead.
 func (*TPMParams) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{2}
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *TPMParams) GetEkPublic() []byte {
@@ -287,7 +377,7 @@ type TPMChallenge struct {
 
 func (x *TPMChallenge) Reset() {
 	*x = TPMChallenge{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[3]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -299,7 +389,7 @@ func (x *TPMChallenge) String() string {
 func (*TPMChallenge) ProtoMessage() {}
 
 func (x *TPMChallenge) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[3]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -312,7 +402,7 @@ func (x *TPMChallenge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TPMChallenge.ProtoReflect.Descriptor instead.
 func (*TPMChallenge) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{3}
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *TPMChallenge) GetCredential() []byte {
@@ -342,7 +432,7 @@ type ClaimResponse struct {
 
 func (x *ClaimResponse) Reset() {
 	*x = ClaimResponse{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[4]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -354,7 +444,7 @@ func (x *ClaimResponse) String() string {
 func (*ClaimResponse) ProtoMessage() {}
 
 func (x *ClaimResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[4]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -367,7 +457,7 @@ func (x *ClaimResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimResponse.ProtoReflect.Descriptor instead.
 func (*ClaimResponse) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{4}
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ClaimResponse) GetStep() isClaimResponse_Step {
@@ -427,7 +517,7 @@ type ClaimResult struct {
 
 func (x *ClaimResult) Reset() {
 	*x = ClaimResult{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[5]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -439,7 +529,7 @@ func (x *ClaimResult) String() string {
 func (*ClaimResult) ProtoMessage() {}
 
 func (x *ClaimResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[5]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -452,7 +542,7 @@ func (x *ClaimResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimResult.ProtoReflect.Descriptor instead.
 func (*ClaimResult) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{5}
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ClaimResult) GetSecrets() map[string]string {
@@ -508,7 +598,7 @@ type CACert struct {
 
 func (x *CACert) Reset() {
 	*x = CACert{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[6]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -520,7 +610,7 @@ func (x *CACert) String() string {
 func (*CACert) ProtoMessage() {}
 
 func (x *CACert) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[6]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -533,7 +623,7 @@ func (x *CACert) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CACert.ProtoReflect.Descriptor instead.
 func (*CACert) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{6}
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CACert) GetCertPem() string {
@@ -562,7 +652,7 @@ type CertBundle struct {
 
 func (x *CertBundle) Reset() {
 	*x = CertBundle{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[7]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -574,7 +664,7 @@ func (x *CertBundle) String() string {
 func (*CertBundle) ProtoMessage() {}
 
 func (x *CertBundle) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[7]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -587,7 +677,7 @@ func (x *CertBundle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CertBundle.ProtoReflect.Descriptor instead.
 func (*CertBundle) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{7}
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *CertBundle) GetCertPem() string {
@@ -608,7 +698,11 @@ var File_proto_enroll_v1_enroll_proto protoreflect.FileDescriptor
 
 const file_proto_enroll_v1_enroll_proto_rawDesc = "" +
 	"\n" +
-	"\x1cproto/enroll/v1/enroll.proto\x12\x10pigeon.enroll.v1\"\x80\x01\n" +
+	"\x1cproto/enroll/v1/enroll.proto\x12\x10pigeon.enroll.v1\"$\n" +
+	"\x0ePublishRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"+\n" +
+	"\x0fPublishResponse\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\"\x80\x01\n" +
 	"\fClaimRequest\x127\n" +
 	"\x06params\x18\x01 \x01(\v2\x1d.pigeon.enroll.v1.ClaimParamsH\x00R\x06params\x12/\n" +
 	"\x12challenge_response\x18\x02 \x01(\fH\x00R\x11challengeResponseB\x06\n" +
@@ -667,9 +761,10 @@ const file_proto_enroll_v1_enroll_proto_rawDesc = "" +
 	"\n" +
 	"CertBundle\x12\x19\n" +
 	"\bcert_pem\x18\x01 \x01(\tR\acertPem\x12\x17\n" +
-	"\akey_pem\x18\x02 \x01(\tR\x06keyPem2a\n" +
+	"\akey_pem\x18\x02 \x01(\tR\x06keyPem2\xb1\x01\n" +
 	"\x11EnrollmentService\x12L\n" +
-	"\x05Claim\x12\x1e.pigeon.enroll.v1.ClaimRequest\x1a\x1f.pigeon.enroll.v1.ClaimResponse(\x010\x01B=Z;github.com/pigeon-as/pigeon-enroll/proto/enroll/v1;enrollv1b\x06proto3"
+	"\x05Claim\x12\x1e.pigeon.enroll.v1.ClaimRequest\x1a\x1f.pigeon.enroll.v1.ClaimResponse(\x010\x01\x12N\n" +
+	"\aPublish\x12 .pigeon.enroll.v1.PublishRequest\x1a!.pigeon.enroll.v1.PublishResponseB=Z;github.com/pigeon-as/pigeon-enroll/proto/enroll/v1;enrollv1b\x06proto3"
 
 var (
 	file_proto_enroll_v1_enroll_proto_rawDescOnce sync.Once
@@ -683,40 +778,44 @@ func file_proto_enroll_v1_enroll_proto_rawDescGZIP() []byte {
 	return file_proto_enroll_v1_enroll_proto_rawDescData
 }
 
-var file_proto_enroll_v1_enroll_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_proto_enroll_v1_enroll_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_proto_enroll_v1_enroll_proto_goTypes = []any{
-	(*ClaimRequest)(nil),  // 0: pigeon.enroll.v1.ClaimRequest
-	(*ClaimParams)(nil),   // 1: pigeon.enroll.v1.ClaimParams
-	(*TPMParams)(nil),     // 2: pigeon.enroll.v1.TPMParams
-	(*TPMChallenge)(nil),  // 3: pigeon.enroll.v1.TPMChallenge
-	(*ClaimResponse)(nil), // 4: pigeon.enroll.v1.ClaimResponse
-	(*ClaimResult)(nil),   // 5: pigeon.enroll.v1.ClaimResult
-	(*CACert)(nil),        // 6: pigeon.enroll.v1.CACert
-	(*CertBundle)(nil),    // 7: pigeon.enroll.v1.CertBundle
-	nil,                   // 8: pigeon.enroll.v1.ClaimResult.SecretsEntry
-	nil,                   // 9: pigeon.enroll.v1.ClaimResult.VarsEntry
-	nil,                   // 10: pigeon.enroll.v1.ClaimResult.CaEntry
-	nil,                   // 11: pigeon.enroll.v1.ClaimResult.CertsEntry
-	nil,                   // 12: pigeon.enroll.v1.ClaimResult.JwtsEntry
-	nil,                   // 13: pigeon.enroll.v1.ClaimResult.JwtKeysEntry
+	(*PublishRequest)(nil),  // 0: pigeon.enroll.v1.PublishRequest
+	(*PublishResponse)(nil), // 1: pigeon.enroll.v1.PublishResponse
+	(*ClaimRequest)(nil),    // 2: pigeon.enroll.v1.ClaimRequest
+	(*ClaimParams)(nil),     // 3: pigeon.enroll.v1.ClaimParams
+	(*TPMParams)(nil),       // 4: pigeon.enroll.v1.TPMParams
+	(*TPMChallenge)(nil),    // 5: pigeon.enroll.v1.TPMChallenge
+	(*ClaimResponse)(nil),   // 6: pigeon.enroll.v1.ClaimResponse
+	(*ClaimResult)(nil),     // 7: pigeon.enroll.v1.ClaimResult
+	(*CACert)(nil),          // 8: pigeon.enroll.v1.CACert
+	(*CertBundle)(nil),      // 9: pigeon.enroll.v1.CertBundle
+	nil,                     // 10: pigeon.enroll.v1.ClaimResult.SecretsEntry
+	nil,                     // 11: pigeon.enroll.v1.ClaimResult.VarsEntry
+	nil,                     // 12: pigeon.enroll.v1.ClaimResult.CaEntry
+	nil,                     // 13: pigeon.enroll.v1.ClaimResult.CertsEntry
+	nil,                     // 14: pigeon.enroll.v1.ClaimResult.JwtsEntry
+	nil,                     // 15: pigeon.enroll.v1.ClaimResult.JwtKeysEntry
 }
 var file_proto_enroll_v1_enroll_proto_depIdxs = []int32{
-	1,  // 0: pigeon.enroll.v1.ClaimRequest.params:type_name -> pigeon.enroll.v1.ClaimParams
-	2,  // 1: pigeon.enroll.v1.ClaimParams.tpm:type_name -> pigeon.enroll.v1.TPMParams
-	3,  // 2: pigeon.enroll.v1.ClaimResponse.challenge:type_name -> pigeon.enroll.v1.TPMChallenge
-	5,  // 3: pigeon.enroll.v1.ClaimResponse.result:type_name -> pigeon.enroll.v1.ClaimResult
-	8,  // 4: pigeon.enroll.v1.ClaimResult.secrets:type_name -> pigeon.enroll.v1.ClaimResult.SecretsEntry
-	9,  // 5: pigeon.enroll.v1.ClaimResult.vars:type_name -> pigeon.enroll.v1.ClaimResult.VarsEntry
-	10, // 6: pigeon.enroll.v1.ClaimResult.ca:type_name -> pigeon.enroll.v1.ClaimResult.CaEntry
-	11, // 7: pigeon.enroll.v1.ClaimResult.certs:type_name -> pigeon.enroll.v1.ClaimResult.CertsEntry
-	12, // 8: pigeon.enroll.v1.ClaimResult.jwts:type_name -> pigeon.enroll.v1.ClaimResult.JwtsEntry
-	13, // 9: pigeon.enroll.v1.ClaimResult.jwt_keys:type_name -> pigeon.enroll.v1.ClaimResult.JwtKeysEntry
-	6,  // 10: pigeon.enroll.v1.ClaimResult.CaEntry.value:type_name -> pigeon.enroll.v1.CACert
-	7,  // 11: pigeon.enroll.v1.ClaimResult.CertsEntry.value:type_name -> pigeon.enroll.v1.CertBundle
-	0,  // 12: pigeon.enroll.v1.EnrollmentService.Claim:input_type -> pigeon.enroll.v1.ClaimRequest
-	4,  // 13: pigeon.enroll.v1.EnrollmentService.Claim:output_type -> pigeon.enroll.v1.ClaimResponse
-	13, // [13:14] is the sub-list for method output_type
-	12, // [12:13] is the sub-list for method input_type
+	3,  // 0: pigeon.enroll.v1.ClaimRequest.params:type_name -> pigeon.enroll.v1.ClaimParams
+	4,  // 1: pigeon.enroll.v1.ClaimParams.tpm:type_name -> pigeon.enroll.v1.TPMParams
+	5,  // 2: pigeon.enroll.v1.ClaimResponse.challenge:type_name -> pigeon.enroll.v1.TPMChallenge
+	7,  // 3: pigeon.enroll.v1.ClaimResponse.result:type_name -> pigeon.enroll.v1.ClaimResult
+	10, // 4: pigeon.enroll.v1.ClaimResult.secrets:type_name -> pigeon.enroll.v1.ClaimResult.SecretsEntry
+	11, // 5: pigeon.enroll.v1.ClaimResult.vars:type_name -> pigeon.enroll.v1.ClaimResult.VarsEntry
+	12, // 6: pigeon.enroll.v1.ClaimResult.ca:type_name -> pigeon.enroll.v1.ClaimResult.CaEntry
+	13, // 7: pigeon.enroll.v1.ClaimResult.certs:type_name -> pigeon.enroll.v1.ClaimResult.CertsEntry
+	14, // 8: pigeon.enroll.v1.ClaimResult.jwts:type_name -> pigeon.enroll.v1.ClaimResult.JwtsEntry
+	15, // 9: pigeon.enroll.v1.ClaimResult.jwt_keys:type_name -> pigeon.enroll.v1.ClaimResult.JwtKeysEntry
+	8,  // 10: pigeon.enroll.v1.ClaimResult.CaEntry.value:type_name -> pigeon.enroll.v1.CACert
+	9,  // 11: pigeon.enroll.v1.ClaimResult.CertsEntry.value:type_name -> pigeon.enroll.v1.CertBundle
+	2,  // 12: pigeon.enroll.v1.EnrollmentService.Claim:input_type -> pigeon.enroll.v1.ClaimRequest
+	0,  // 13: pigeon.enroll.v1.EnrollmentService.Publish:input_type -> pigeon.enroll.v1.PublishRequest
+	6,  // 14: pigeon.enroll.v1.EnrollmentService.Claim:output_type -> pigeon.enroll.v1.ClaimResponse
+	1,  // 15: pigeon.enroll.v1.EnrollmentService.Publish:output_type -> pigeon.enroll.v1.PublishResponse
+	14, // [14:16] is the sub-list for method output_type
+	12, // [12:14] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
 	12, // [12:12] is the sub-list for extension extendee
 	0,  // [0:12] is the sub-list for field type_name
@@ -727,11 +826,11 @@ func file_proto_enroll_v1_enroll_proto_init() {
 	if File_proto_enroll_v1_enroll_proto != nil {
 		return
 	}
-	file_proto_enroll_v1_enroll_proto_msgTypes[0].OneofWrappers = []any{
+	file_proto_enroll_v1_enroll_proto_msgTypes[2].OneofWrappers = []any{
 		(*ClaimRequest_Params)(nil),
 		(*ClaimRequest_ChallengeResponse)(nil),
 	}
-	file_proto_enroll_v1_enroll_proto_msgTypes[4].OneofWrappers = []any{
+	file_proto_enroll_v1_enroll_proto_msgTypes[6].OneofWrappers = []any{
 		(*ClaimResponse_Challenge)(nil),
 		(*ClaimResponse_Result)(nil),
 	}
@@ -741,7 +840,7 @@ func file_proto_enroll_v1_enroll_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_enroll_v1_enroll_proto_rawDesc), len(file_proto_enroll_v1_enroll_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
