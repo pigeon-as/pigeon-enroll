@@ -1,9 +1,10 @@
 package config
 
 import (
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/shoenig/test/must"
 )
 
 const validConfig = `
@@ -81,53 +82,23 @@ identity "worker" {
 
 func TestLoadValid(t *testing.T) {
 	cfg, err := Parse([]byte(validConfig), "test.hcl")
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if cfg.TrustDomain != "pigeon.as" {
-		t.Errorf("trust_domain = %q", cfg.TrustDomain)
-	}
-	if cfg.Listen != ":9443" {
-		t.Errorf("listen = %q", cfg.Listen)
-	}
-	if cfg.IdentityTTL != 720*time.Hour {
-		t.Errorf("identity_ttl = %v", cfg.IdentityTTL)
-	}
-	if len(cfg.Attestors) != 3 {
-		t.Errorf("attestors = %d, want 3", len(cfg.Attestors))
-	}
-	if cfg.Attestors["hmac"].Window != 30*time.Minute {
-		t.Errorf("hmac window = %v", cfg.Attestors["hmac"].Window)
-	}
-	if len(cfg.CAs) != 3 {
-		t.Errorf("cas = %d, want 3", len(cfg.CAs))
-	}
-	if cfg.CAs["mesh"].Validity != 10*365*24*time.Hour {
-		t.Errorf("mesh validity = %v", cfg.CAs["mesh"].Validity)
-	}
-	if cfg.PKIs["mesh_worker"].CARef != "mesh" {
-		t.Errorf("pki.mesh_worker.ca = %q", cfg.PKIs["mesh_worker"].CARef)
-	}
+	must.NoError(t, err)
+	must.Eq(t, "pigeon.as", cfg.TrustDomain)
+	must.Eq(t, ":9443", cfg.Listen)
+	must.EqOp(t, 720*time.Hour, cfg.IdentityTTL)
+	must.MapLen(t, 3, cfg.Attestors)
+	must.EqOp(t, 30*time.Minute, cfg.Attestors["hmac"].Window)
+	must.MapLen(t, 3, cfg.CAs)
+	must.EqOp(t, 10*365*24*time.Hour, cfg.CAs["mesh"].Validity)
+	must.Eq(t, "mesh", cfg.PKIs["mesh_worker"].CARef)
 	id := cfg.Identities["worker"]
-	if id == nil {
-		t.Fatal("identity worker missing")
-	}
-	if id.PKIRef != "identity_worker" || id.PolicyRef != "worker" {
-		t.Errorf("identity refs wrong: pki=%q policy=%q", id.PKIRef, id.PolicyRef)
-	}
-	want := []string{"tpm", "hmac", "bootstrap_cert"}
-	if len(id.Attestors) != 3 {
-		t.Fatalf("attestors = %v", id.Attestors)
-	}
-	for i, k := range want {
-		if id.Attestors[i] != k {
-			t.Errorf("attestors[%d] = %q, want %q", i, id.Attestors[i], k)
-		}
-	}
+	must.NotNil(t, id)
+	must.Eq(t, "identity_worker", id.PKIRef)
+	must.Eq(t, "worker", id.PolicyRef)
+	must.Eq(t, []string{"tpm", "hmac", "bootstrap_cert"}, id.Attestors)
 	p := cfg.Policies["worker"]
-	if p == nil || len(p.Paths) != 6 {
-		t.Fatalf("policy worker: %v", p)
-	}
+	must.NotNil(t, p)
+	must.SliceLen(t, 6, p.Paths)
 }
 
 func TestUnknownRefs(t *testing.T) {
@@ -182,12 +153,7 @@ identity "i" {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse([]byte(tc.body), "t.hcl")
-			if err == nil {
-				t.Fatal("expected error")
-			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("err = %q, want contains %q", err.Error(), tc.want)
-			}
+			must.ErrorContains(t, err, tc.want)
 		})
 	}
 }
@@ -195,10 +161,6 @@ identity "i" {
 func TestDurationShorthand(t *testing.T) {
 	cfg, err := Parse([]byte(`trust_domain = "x"
 ca "c" { validity = "2y" }`), "t.hcl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.CAs["c"].Validity != 2*365*24*time.Hour {
-		t.Errorf("validity = %v", cfg.CAs["c"].Validity)
-	}
+	must.NoError(t, err)
+	must.EqOp(t, 2*365*24*time.Hour, cfg.CAs["c"].Validity)
 }

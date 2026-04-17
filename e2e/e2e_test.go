@@ -186,7 +186,7 @@ func startServer(t *testing.T, cfgPath, keyPath, addr string) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("server at %s did not become ready in 10s", addr)
+	must.Unreachable(t, must.Sprintf("server at %s did not become ready in 10s", addr))
 }
 
 // register runs `pigeon-enroll register` with an HMAC token and returns the

@@ -2,12 +2,12 @@ package identity
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/attestor"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/policy"
+	"github.com/shoenig/test/must"
 )
 
 type stubAttestor struct{ kind string }
@@ -35,39 +35,29 @@ func baseFixture(t *testing.T) (*config.Config, *policy.Engine, map[string]attes
 		},
 	}
 	eng, err := policy.New(cfg.Policies)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must.NoError(t, err)
 	return cfg, eng, map[string]attestor.Attestor{"hmac": &stubAttestor{kind: "hmac"}}
 }
 
 func TestNewRegistryValid(t *testing.T) {
 	cfg, eng, ats := baseFixture(t)
 	r, err := New(cfg, eng, ats)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	must.NoError(t, err)
 	id, err := r.Lookup("worker")
-	if err != nil {
-		t.Fatalf("Lookup: %v", err)
-	}
-	if id.Name != "worker" || id.Policy != "worker" || id.PKI.Name != "worker" {
-		t.Fatalf("unexpected identity: %+v", id)
-	}
-	if len(id.Attestors) != 1 || id.Attestors[0].Kind() != "hmac" {
-		t.Fatalf("unexpected attestors: %+v", id.Attestors)
-	}
+	must.NoError(t, err)
+	must.Eq(t, "worker", id.Name)
+	must.Eq(t, "worker", id.Policy)
+	must.Eq(t, "worker", id.PKI.Name)
+	must.SliceLen(t, 1, id.Attestors)
+	must.Eq(t, "hmac", id.Attestors[0].Kind())
 }
 
 func TestLookupUnknown(t *testing.T) {
 	cfg, eng, ats := baseFixture(t)
 	r, err := New(cfg, eng, ats)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Lookup("ghost"); err == nil {
-		t.Fatal("expected error")
-	}
+	must.NoError(t, err)
+	_, err = r.Lookup("ghost")
+	must.Error(t, err)
 }
 
 func TestMissingReferences(t *testing.T) {
@@ -110,12 +100,7 @@ func TestMissingReferences(t *testing.T) {
 			cfg, eng, ats := baseFixture(t)
 			tc.mutate(cfg, ats)
 			_, err := New(cfg, eng, ats)
-			if err == nil {
-				t.Fatal("expected error")
-			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("error %q does not contain %q", err.Error(), tc.want)
-			}
+			must.ErrorContains(t, err, tc.want)
 		})
 	}
 }

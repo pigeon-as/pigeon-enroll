@@ -4,14 +4,13 @@ import (
 	"testing"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
+	"github.com/shoenig/test/must"
 )
 
 func mkEngine(t *testing.T, policies map[string]*config.Policy) *Engine {
 	t.Helper()
 	e, err := New(policies)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	must.NoError(t, err)
 	return e
 }
 
@@ -30,10 +29,7 @@ func TestMatchExact(t *testing.T) {
 		{"ca/*", "ca/mesh/cert", true},
 	}
 	for _, tc := range cases {
-		got := match(tc.pattern, tc.path)
-		if got != tc.want {
-			t.Errorf("match(%q, %q) = %v, want %v", tc.pattern, tc.path, got, tc.want)
-		}
+		must.EqOp(t, tc.want, match(tc.pattern, tc.path))
 	}
 }
 
@@ -51,25 +47,12 @@ func TestAllows(t *testing.T) {
 	}
 	e := mkEngine(t, pol)
 
-	mustAllow := func(path string, c Capability) {
-		t.Helper()
-		if !e.Allows("worker", path, c) {
-			t.Errorf("worker should allow %s on %q", c, path)
-		}
-	}
-	mustDeny := func(path string, c Capability) {
-		t.Helper()
-		if e.Allows("worker", path, c) {
-			t.Errorf("worker should DENY %s on %q", c, path)
-		}
-	}
-
-	mustAllow("ca/bootstrap", Read)
-	mustAllow("var/domain", Read)
-	mustAllow("pki/mesh_worker", Write)
-	mustDeny("pki/mesh_worker", Read)
-	mustDeny("ca/mesh", Read)
-	mustDeny("unknown/path", Read)
+	must.True(t, e.Allows("worker", "ca/bootstrap", Read))
+	must.True(t, e.Allows("worker", "var/domain", Read))
+	must.True(t, e.Allows("worker", "pki/mesh_worker", Write))
+	must.False(t, e.Allows("worker", "pki/mesh_worker", Read))
+	must.False(t, e.Allows("worker", "ca/mesh", Read))
+	must.False(t, e.Allows("worker", "unknown/path", Read))
 }
 
 func TestInherits(t *testing.T) {
@@ -90,15 +73,9 @@ func TestInherits(t *testing.T) {
 	}
 	e := mkEngine(t, pol)
 
-	if !e.Allows("server", "var/domain", Read) {
-		t.Error("server should inherit var/* from base")
-	}
-	if !e.Allows("server", "secret/root_token", Read) {
-		t.Error("server should allow its own rule")
-	}
-	if e.Allows("base", "secret/root_token", Read) {
-		t.Error("base should not see server rules")
-	}
+	must.True(t, e.Allows("server", "var/domain", Read))
+	must.True(t, e.Allows("server", "secret/root_token", Read))
+	must.False(t, e.Allows("base", "secret/root_token", Read))
 }
 
 func TestCycleDetection(t *testing.T) {
@@ -107,14 +84,10 @@ func TestCycleDetection(t *testing.T) {
 		"b": {Name: "b", Inherits: []string{"a"}},
 	}
 	_, err := New(pol)
-	if err == nil {
-		t.Fatal("expected cycle error")
-	}
+	must.Error(t, err)
 }
 
 func TestUnknownPolicy(t *testing.T) {
 	e := mkEngine(t, map[string]*config.Policy{})
-	if e.Allows("nope", "any/path", Read) {
-		t.Error("unknown policy must deny")
-	}
+	must.False(t, e.Allows("nope", "any/path", Read))
 }
