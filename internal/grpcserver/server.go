@@ -68,16 +68,16 @@ type Server struct {
 	rotator  *pki.CertRotator
 }
 
-// New constructs a Server. bootstrapCAs is consulted only by the
-// bootstrap_cert attestor during Register; Renew/Read/Write require a cert
-// signed by the identity CA (enforced in callerFromPeer).
+// New constructs a Server. The bootstrap CA pool, if any, flows to the
+// bootstrap_cert attestor (see attestor.Build) — the server itself never
+// needs it directly. Renew/Read/Write require a cert signed by the identity
+// CA (enforced in callerFromPeer).
 func New(
 	cfg *config.Config,
 	engine *policy.Engine,
 	registry *identity.Registry,
 	resolver *resource.Resolver,
 	ikm []byte,
-	_ *x509.CertPool,
 	opts Options,
 ) (*Server, error) {
 	if cfg == nil || engine == nil || registry == nil || resolver == nil {
@@ -175,7 +175,6 @@ func (s *Server) Register(stream grpc.BidiStreamingServer[enrollv1.RegisterReque
 		if _, err := a.Verify(ctx, ev, params.Subject, ch); err != nil {
 			s.log.Warn("register attestor failed",
 				"identity", params.Identity,
-				"subject", params.Subject,
 				"attestor", a.Kind(),
 				"error", err,
 			)

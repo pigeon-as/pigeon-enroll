@@ -26,7 +26,7 @@ import (
 func cmdServer(args []string) int {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	configPath := fs.String("config", "/etc/pigeon/enroll-server.hcl", "path to HCL config")
-	keyPath := fs.String("key", "/etc/pigeon/enrollment-key", "path to 32-byte enrollment key (HKDF IKM)")
+	keyPath := fs.String("key-path", "/etc/pigeon/enrollment-key", "path to 32-byte enrollment key (HKDF IKM)")
 	noncePath := fs.String("nonce-store", "/var/lib/pigeon/enroll-nonces", "path to nonce store file")
 	bootstrapCAPath := fs.String("bootstrap-ca", "", "optional PEM bundle of CAs for bootstrap_cert attestor")
 	hosts := fs.String("hosts", "", "comma-separated hostnames/IPs for server TLS cert SANs")
@@ -43,7 +43,7 @@ func cmdServer(args []string) int {
 		return 1
 	}
 
-	ikm, err := readIKM(*keyPath)
+	ikm, err := readEnrollmentKey(*keyPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "key: %v\n", err)
 		return 1
@@ -89,7 +89,7 @@ func cmdServer(args []string) int {
 		return 1
 	}
 
-	srv, err := grpcserver.New(cfg, engine, registry, resolver, ikm, bootstrapPool, grpcserver.Options{
+	srv, err := grpcserver.New(cfg, engine, registry, resolver, ikm, grpcserver.Options{
 		Hosts:  splitCSV(*hosts),
 		Logger: log,
 	})
@@ -126,25 +126,6 @@ func cmdServer(args []string) int {
 		}
 	}
 	return 0
-}
-
-func readIKM(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	data = trimTrailingNewline(data)
-	if len(data) != 32 {
-		return nil, fmt.Errorf("expected 32 raw bytes, got %d", len(data))
-	}
-	return data, nil
-}
-
-func trimTrailingNewline(b []byte) []byte {
-	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == '\r') {
-		b = b[:len(b)-1]
-	}
-	return b
 }
 
 func loadCAPool(path string) (*x509.CertPool, error) {

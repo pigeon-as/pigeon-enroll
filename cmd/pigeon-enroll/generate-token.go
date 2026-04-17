@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"time"
 
@@ -78,26 +77,4 @@ Flags:`)
 
 	fmt.Println(token.Generate(ikm, time.Now(), hmacAt.Window, *identityName))
 	return 0
-}
-
-// readEnrollmentKey reads 32 raw bytes from path. "-" means stdin.
-func readEnrollmentKey(path string) ([]byte, error) {
-	var data []byte
-	var err error
-	if path == "-" {
-		data, err = io.ReadAll(os.Stdin)
-	} else {
-		data, err = os.ReadFile(path)
-	}
-	if err != nil {
-		return nil, err
-	}
-	// Match server.go: trim trailing newlines (systemd-creds decrypt can add one).
-	for len(data) > 0 && (data[len(data)-1] == '\n' || data[len(data)-1] == '\r') {
-		data = data[:len(data)-1]
-	}
-	if len(data) != 32 {
-		return nil, fmt.Errorf("expected 32 raw bytes, got %d", len(data))
-	}
-	return data, nil
 }

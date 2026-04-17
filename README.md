@@ -1,6 +1,6 @@
 # pigeon-enroll
 
-Bootstrap enrollment server. Not a secrets manager. 
+Bootstrap enrollment server. Not a secrets manager.
 
 Hosts attest with a token,
 receive an identity mTLS cert, then read or write resources by path.
@@ -66,7 +66,7 @@ pigeon-enroll renew
 # Read a scalar
 pigeon-enroll read var/datacenter
 pigeon-enroll read ca/mesh > mesh-ca.pem
-pigeon-enroll read template/setup-worker | sh
+pigeon-enroll read template/enroll-worker > enroll.json
 
 # Sign a CSR
 pigeon-enroll write pki/mesh_worker csr=@csr.der > cert.pem
