@@ -65,12 +65,12 @@ pki "identity_worker" {
 template "mesh_json" { source = "/etc/pigeon/templates/mesh.json.tpl" }
 
 policy "worker" {
-  path "ca/bootstrap/cert"             { capabilities = ["read"] }
-  path "secret/gossip_key"             { capabilities = ["read"] }
-  path "var/*"                         { capabilities = ["read"] }
-  path "pki/mesh_worker"         { capabilities = ["write"] }
-  path "jwt/consul_auto_config/sign"   { capabilities = ["write"] }
-  path "template/mesh_json"            { capabilities = ["read"] }
+  path "ca/bootstrap"             { capabilities = ["read"] }
+  path "secret/gossip_key"        { capabilities = ["read"] }
+  path "var/*"                    { capabilities = ["read"] }
+  path "pki/mesh_worker"          { capabilities = ["write"] }
+  path "jwt/consul_auto_config"   { capabilities = ["write"] }
+  path "template/mesh_json"       { capabilities = ["read"] }
 }
 
 identity "worker" {

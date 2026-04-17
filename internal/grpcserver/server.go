@@ -156,6 +156,13 @@ func (s *Server) Register(stream grpc.BidiStreamingServer[enrollv1.RegisterReque
 		return status.Errorf(codes.NotFound, "%v", err)
 	}
 
+	// Bind HMAC evidence to the requested identity. A token issued for
+	// identity A must not be usable to register as identity B, even if B
+	// also accepts the hmac attestor.
+	if params.Hmac != nil && params.Hmac.Scope != params.Identity {
+		return status.Error(codes.PermissionDenied, "hmac scope does not match identity")
+	}
+
 	ev := attestor.Evidence{
 		TPM:           params.Tpm,
 		HMAC:          params.Hmac,

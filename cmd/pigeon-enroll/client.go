@@ -108,4 +108,3 @@ func identityBundlePath(dir string) string { return dir + "/bundle.pem" }
 func identityCertPath(dir string) string { return dir + "/cert.pem" }
 func identityKeyPath(dir string) string  { return dir + "/key.pem" }
 func identityCAPath(dir string) string   { return dir + "/ca.pem" }
-

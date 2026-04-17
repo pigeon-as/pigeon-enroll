@@ -26,9 +26,10 @@ Every path returns one scalar. `Request` carries `path` and an optional
 | `secret/<name>` | read | `read` | HKDF-derived bytes |
 | `ca/<name>` | read | `read` | CA certificate PEM |
 | `jwt_key/<name>` | read | `read` | JWT signing public key PEM |
-| `template/<name>` | read | `read` | rendered template |
+| `template/<name>` | read | `read` | HCL-rendered text. The body references other resources via `${kind.name}` (e.g. `${var.domain}`, `${secret.gossip_key}`). Each reference is re-authorized through the caller's policy — the caller must hold `read` on `template/<name>` **and** on every path the body references. Templates have no elevation and no side effects; `pki/` and `jwt/` are intentionally not addressable. |
 | `pki/<role>` | write | `write` | signed certificate PEM (CSR required) |
 | `jwt/<name>` | write | `write` | signed JWT |
+| `token/<identity>` | write | `write` | short-lived HMAC bootstrap token scoped to the target identity (one-time, TTL = `attestor.hmac.window`). Used by an authorized caller (e.g. the autoscaler) to mint a token for a freshly-ordered node. Requires the `hmac` attestor to be configured and the target identity to accept it. Vault analog: `auth/token/create/<role>`. SPIRE analog: `spire-server token generate`. |
 
 Capabilities are `read` and `write` (exact Vault match). `pki/<role>`
 **requires** `data["csr"]` (DER PKCS#10) — the server signs the caller's CSR
