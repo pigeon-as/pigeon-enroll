@@ -55,7 +55,7 @@ func TestGenerateServerCert(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
 	must.NoError(t, err)
 
-	certPEM, keyPEM, err := GenerateCert(ca, "enroll.internal", []string{"127.0.0.1", "enroll.internal"}, 30*24*time.Hour)
+	certPEM, keyPEM, err := GenerateCert(ca, "enroll.internal", []string{"127.0.0.1", "enroll.internal"}, "", 30*24*time.Hour)
 	must.NoError(t, err)
 
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
@@ -69,6 +69,7 @@ func TestGenerateServerCert(t *testing.T) {
 	must.SliceLen(t, 1, leaf.DNSNames)
 	must.EqOp(t, "enroll.internal", leaf.DNSNames[0])
 	must.EqOp(t, "enroll.internal", leaf.Subject.CommonName)
+	must.SliceLen(t, 0, leaf.Subject.OrganizationalUnit)
 
 	// With SANs: dual EKU (ServerAuth + ClientAuth)
 	must.SliceLen(t, 2, leaf.ExtKeyUsage)
@@ -85,7 +86,7 @@ func TestGenerateClientCert_Bundle(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
 	must.NoError(t, err)
 
-	bundle, err := GenerateClientCert(ca, 1*time.Hour)
+	bundle, err := GenerateClientCert(ca, "", 1*time.Hour)
 	must.NoError(t, err)
 
 	key, cert, pool, err := LoadClientBundle(bundle)
@@ -101,12 +102,46 @@ func TestGenerateClientCert_Bundle(t *testing.T) {
 	must.NoError(t, err)
 }
 
+func TestGenerateClientCert_Scope(t *testing.T) {
+	ca, err := DeriveCA(testIKM)
+	must.NoError(t, err)
+
+	bundle, err := GenerateClientCert(ca, "worker", 1*time.Hour)
+	must.NoError(t, err)
+
+	_, cert, pool, err := LoadClientBundle(bundle)
+	must.NoError(t, err)
+
+	must.SliceLen(t, 1, cert.Subject.OrganizationalUnit)
+	must.EqOp(t, "worker", cert.Subject.OrganizationalUnit[0])
+
+	_, err = cert.Verify(x509.VerifyOptions{Roots: pool, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}})
+	must.NoError(t, err)
+}
+
+func TestGenerateCert_Scope(t *testing.T) {
+	ca, err := DeriveCA(testIKM)
+	must.NoError(t, err)
+
+	certPEM, keyPEM, err := GenerateCert(ca, "pigeon-enroll", nil, "server", 1*time.Hour)
+	must.NoError(t, err)
+
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	must.NoError(t, err)
+	leaf, err := x509.ParseCertificate(tlsCert.Certificate[0])
+	must.NoError(t, err)
+
+	must.EqOp(t, "pigeon-enroll", leaf.Subject.CommonName)
+	must.SliceLen(t, 1, leaf.Subject.OrganizationalUnit)
+	must.EqOp(t, "server", leaf.Subject.OrganizationalUnit[0])
+}
+
 func TestRoundTrip_mTLS(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
 	must.NoError(t, err)
 
 	// Server side
-	serverCertPEM, serverKeyPEM, err := GenerateCert(ca, "pigeon-enroll", []string{"127.0.0.1"}, 30*24*time.Hour)
+	serverCertPEM, serverKeyPEM, err := GenerateCert(ca, "pigeon-enroll", []string{"127.0.0.1"}, "", 30*24*time.Hour)
 	must.NoError(t, err)
 	serverCert, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)
 	must.NoError(t, err)
@@ -122,7 +157,7 @@ func TestRoundTrip_mTLS(t *testing.T) {
 	}
 
 	// Client side
-	clientBundle, err := GenerateClientCert(ca, 1*time.Hour)
+	clientBundle, err := GenerateClientCert(ca, "", 1*time.Hour)
 	must.NoError(t, err)
 	clientKey, clientCert, clientCAPool, err := LoadClientBundle(clientBundle)
 	must.NoError(t, err)
@@ -191,7 +226,7 @@ func TestGenerateClientCert_NoSANs(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
 	must.NoError(t, err)
 
-	certPEM, keyPEM, err := GenerateCert(ca, "vault-agent", nil, 1*time.Hour)
+	certPEM, keyPEM, err := GenerateCert(ca, "vault-agent", nil, "", 1*time.Hour)
 	must.NoError(t, err)
 
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
@@ -215,7 +250,7 @@ func TestGenerateServerCert_CustomCN(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
 	must.NoError(t, err)
 
-	certPEM, keyPEM, err := GenerateCert(ca, "pigeon", []string{"localhost", "10.0.0.1"}, 24*time.Hour)
+	certPEM, keyPEM, err := GenerateCert(ca, "pigeon", []string{"localhost", "10.0.0.1"}, "", 24*time.Hour)
 	must.NoError(t, err)
 
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
@@ -291,7 +326,7 @@ func TestLoadCA_RoundTrip(t *testing.T) {
 	must.True(t, loaded.Key.Equal(ca.Key))
 
 	// Verify the loaded CA can sign certs.
-	certPEM, _, err := GenerateCert(loaded, "test", []string{"localhost"}, time.Hour)
+	certPEM, _, err := GenerateCert(loaded, "test", []string{"localhost"}, "", time.Hour)
 	must.NoError(t, err)
 	block, _ := pem.Decode(certPEM)
 	must.NotNil(t, block)
@@ -306,7 +341,7 @@ func TestLoadCA_RoundTrip(t *testing.T) {
 func TestLoadCA_NotCA(t *testing.T) {
 	ca, err := DeriveCA(testIKM)
 	must.NoError(t, err)
-	certPEM, keyPEM, err := GenerateCert(ca, "leaf", nil, time.Hour)
+	certPEM, keyPEM, err := GenerateCert(ca, "leaf", nil, "", time.Hour)
 	must.NoError(t, err)
 	var bundle []byte
 	bundle = append(bundle, certPEM...)
@@ -387,7 +422,7 @@ func TestSignCSR(t *testing.T) {
 	certPEM, err := SignCSR(
 		ca, clientKey.Public(),
 		"worker-01", []string{"mesh.internal"}, []net.IP{net.ParseIP("10.0.0.1")},
-		24*time.Hour, false, true,
+		24*time.Hour, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	)
 	must.NoError(t, err)
 

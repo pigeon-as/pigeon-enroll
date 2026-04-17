@@ -1,194 +1,172 @@
 # pigeon-enroll
 
-**Experimental** bootstrap enrollment server and client that derives bootstrap secrets from a shared enrollment key (HKDF) and distributes them to clients via mTLS, TPM attestation, and one-time HMAC tokens. Pluggable post-claim actions.
+Stage-0 bootstrap server. Hosts attest with a token, receive an identity
+mTLS cert, then read or write resources by path.
 
-**Not a secrets manager:** covers the minimum secrets needed before Vault is available. The enrollment key is static; all servers with the same key independently derive identical secrets. A separate HMAC signing key is derived from it for token operations.
+All cryptographic material is HKDF-derived from a single static enrollment
+key. Every server with the same key produces the same outputs.
 
-**Stage-0 bootstrap:** [pigeon-enroll](https://github.com/pigeon-as/pigeon-enroll) is a dumb pipe (token in, secrets out), [pigeon-template](https://github.com/pigeon-as/pigeon-template) is a dumb renderer (data in, config files out). Neither knows about the other. Neither forces a workflow.
+## RPCs
 
-## Usage
+| RPC | Auth | Purpose |
+|-----|------|---------|
+| `Register` | attestor token | First contact. Issue identity mTLS cert. |
+| `Renew` | identity cert | Rotate identity cert. |
+| `Read` | identity cert | Read a scalar resource by path. |
+| `Write` | identity cert | Write against a mutating resource (pki, jwt). |
 
-```bash
-# Server (reads /etc/pigeon/enroll-server.hcl by default)
-pigeon-enroll server
+## Paths
 
-# Generate a claim token
-pigeon-enroll generate-token [-scope=worker]
+Every path returns one scalar. `Request` carries `path` and an optional
+`data` map; `Response` carries `content`, `content_type`, and `ttl_seconds`.
 
-# Generate a TLS certificate bundle
-pigeon-enroll generate-cert -bundle /tmp/enroll-cert.pem
+| Path | Verb | Capability | Returns |
+|------|------|------------|---------|
+| `var/<name>` | read | `read` | literal string |
+| `secret/<name>` | read | `read` | HKDF-derived bytes |
+| `ca/<name>` | read | `read` | CA certificate PEM |
+| `jwt_key/<name>` | read | `read` | JWT signing public key PEM |
+| `template/<name>` | read | `read` | HCL-rendered text. The body references other resources via `${kind.name}` (e.g. `${var.domain}`, `${secret.gossip_key}`). Each reference is re-authorized through the caller's policy — the caller must hold `read` on `template/<name>` **and** on every path the body references. Templates have no elevation and no side effects; `pki/` and `jwt/` are intentionally not addressable. |
+| `pki/<role>` | write | `write` | signed certificate PEM (CSR required) |
+| `jwt/<name>` | write | `write` | signed JWT |
+| `token/<identity>` | write | `write` | short-lived HMAC bootstrap token scoped to the target identity (one-time, TTL = `attestor.hmac.window`). Used by an authorized caller (e.g. the autoscaler) to mint a token for a freshly-ordered node. Requires the `hmac` attestor to be configured and the target identity to accept it. Vault analog: `auth/token/create/<role>`. SPIRE analog: `spire-server token generate`. |
 
-# Claim (worker side, with mTLS + TPM attestation)
-pigeon-enroll claim -addr enroll:8443 \
-  -token <hmac> -tls /tmp/enroll-cert.pem \
-  -scope worker \
-  -output /encrypted/pigeon/enroll.json
+Capabilities are `read` and `write` (exact Vault match). `pki/<role>`
+**requires** `data["csr"]` (DER PKCS#10) — the server signs the caller's CSR
+and the private key never leaves the caller. This matches SPIFFE X509-SVID,
+ACME, and step-ca.
 
-# Claim (dev/testing only, no TPM)
-pigeon-enroll claim -addr enroll:8443 \
-  -token <hmac> -tls /tmp/enroll-cert.pem \
-  -skip-tpm \
-  -output /encrypted/pigeon/enroll.json
+## CLI
 
-# Render templates (worker side, one-shot after claim)
-pigeon-enroll render \
-  -config /etc/pigeon/render.hcl \
-  -vars /encrypted/pigeon/enroll.json
+Env vars override defaults (Vault convention):
 
-# Run all actions
-pigeon-enroll run-actions
-
-# Run a specific action
-pigeon-enroll run-actions -type=vault-init
+```
+ENROLL_ADDR             server address (host:port)
+ENROLL_CACERT           path to server CA PEM
+ENROLL_IDENTITY_DIR     directory with identity cert/key/ca (default /etc/pigeon/identity)
 ```
 
-## TLS
+```bash
+# Run the server
+pigeon-enroll server -config=/etc/pigeon/enroll-server.hcl
 
-mTLS is enabled by default — the CA is derived deterministically from the enrollment key via HKDF. Every server with the same key produces the same Ed25519 CA, no coordination needed. Server certs (`server_cert_ttl` default 30d) auto-rotate at 50% lifetime.
+# First contact
+pigeon-enroll register \
+  -identity=worker -subject=worker-01 \
+  -token=@/run/pigeon/enroll.token \
+  -tls=/run/pigeon/bootstrap.pem
 
-`generate-cert` outputs are explicit: `-bundle FILE` writes a PEM bundle (cert+key+ca), `-cert`/`-key`/`-ca` write individual files. `-bundle -` writes to stdout. EKU is inferred from SANs: `-dns`/`-ip` present → ServerAuth + ClientAuth, no SANs → ClientAuth only. `-ttl` sets validity (default 24h). `-base64` base64-encodes bundle output.
+# Rotate identity cert
+pigeon-enroll renew
 
-Use `-insecure` to skip server certificate verification. When the server requires mTLS, still pass `-tls` alongside `-insecure` to present a client certificate.
+# Read a scalar
+pigeon-enroll read var/datacenter
+pigeon-enroll read ca/mesh > mesh-ca.pem
+pigeon-enroll read template/setup-worker | sh
 
-## TPM Attestation
+# Sign a CSR (client owns the key — SPIFFE/ACME pattern)
+pigeon-enroll write pki/mesh_worker csr=@csr.der > cert.pem
 
-Claim performs TPM attestation via a bidirectional gRPC stream (SPIRE community plugin pattern):
+# Convenience: generate keypair locally, build CSR, write pki/<role>, save both
+pigeon-enroll issue pki/mesh_worker \
+  -out-cert=/etc/pigeon/mesh/cert.pem \
+  -out-key=/etc/pigeon/mesh/key.pem
 
-1. Client opens TPM, reads EK, creates ephemeral AK
-2. Client opens gRPC Claim stream and sends ClaimRequest with HMAC token + EK pub + EK cert (optional) + AK params
-3. Server validates EK identity, returns credential activation challenge
-4. Client activates credential (proves AK is on the same TPM as EK)
-5. Client sends ClaimRequest with activated secret → server verifies and returns secrets
+# Mint a JWT
+pigeon-enroll write jwt/consul_auto_config > token.jwt
 
-EK identity is validated via `ek_ca_path` (manufacturer CA cert chain) and/or `ek_hash_path` (SHA-256 pubkey hash allowlist). At least one must be configured when `require_tpm = true`.
-
-Use `pigeon-enroll ek-hash` to print the EK public key hash for populating the allowlist. Use `-skip-tpm` on the client for dev/testing only.
+# Utilities
+pigeon-enroll ek-hash    # SHA-256 of local TPM EK public key
+pigeon-enroll version
+```
 
 ## Config
 
 ```hcl
-listen       = ":8443"
-key_path     = "/encrypted/pigeon/enrollment-key"
-token_window = "30m"
-server_cert_ttl = "720h"
-audit_path   = "/var/log/pigeon-enroll/audit.jsonl"
-require_tpm  = true
+trust_domain   = "pigeon.as"
+listen         = ":8443"
+identity_ttl   = "720h"
+renew_fraction = 0.5
+key_path       = "/etc/pigeon/enrollment-key"
 
-# EK identity validation (SPIRE community TPM plugin pattern).
-# At least one required when require_tpm = true.
-ek_ca_path   = "/etc/pigeon/ek-ca"      # directory of manufacturer CA certs (PEM/DER)
-ek_hash_path = "/etc/pigeon/ek-hashes"   # file with one SHA-256 EK pubkey hash per line
-
-secret "secret_a" {
-  length   = 32
-  encoding = "base64"
+attestor "hmac" {
+  key_path = "/etc/pigeon/enrollment-key"
+  window   = "30m"
 }
 
-secret "secret_b" {
-  length   = 16
-  encoding = "hex"
-  scope    = "server"
+attestor "tpm" {
+  ek_ca_path   = "/etc/pigeon/ek-ca"
+  ek_hash_path = "/etc/pigeon/ek-hashes"
 }
 
-secrets_path = "/encrypted/pigeon/enroll.json"
+ca "identity" { cn = "pigeon identity CA" }
+ca "mesh"     { cn = "pigeon mesh CA" }
 
-vars = {
-  datacenter = "eu-west-gra"
-  seeds      = "10.0.0.1,10.0.0.2"
+secret "gossip_key" { length = 32, encoding = "base64" }
+
+var "datacenter" { value = "eu-west-gra" }
+
+pki "identity_worker" {
+  ca            = ca.identity
+  ttl           = "720h"
+  ext_key_usage = ["client_auth"]
 }
 
-action "vault-init" {
-  addr             = "https://127.0.0.1:8200"
-  secret_shares    = 1
-  secret_threshold = 1
-  output           = "/encrypted/vault/init.json"
-
-  token {
-    id          = "secret_a"
-    policies    = ["root"]
-    revoke_root = true
-  }
+pki "mesh_worker" {
+  ca            = ca.mesh
+  ttl           = "720h"
+  ext_key_usage = ["client_auth", "server_auth"]
+  dns_sans      = ["${subject}"]
 }
-```
 
-`secrets` are derived via HKDF-SHA256; `vars` are static key-value pairs. Both are returned in the claim response under separate keys. `secrets_path` persists derived secrets on first start and loads from disk on restart.
+jwt_key "consul_auto_config" {
+  issuer   = "pigeon-enroll"
+  audience = "consul-auto-config"
+  ttl      = "24h"
+}
 
-## API
+template "setup-worker" {
+  source = "/etc/pigeon/templates/setup-worker.sh.tpl"
+}
 
-gRPC service defined in `proto/enroll/v1/enroll.proto`.
+policy "worker" {
+  path "var/datacenter"     { capabilities = ["read"] }
+  path "secret/gossip_key"  { capabilities = ["read"] }
+  path "ca/mesh"            { capabilities = ["read"] }
+  path "pki/mesh_worker"    { capabilities = ["write"] }
+  path "jwt/consul_auto_config" { capabilities = ["write"] }
+  path "jwt_key/consul_auto_config" { capabilities = ["read"] }
+  path "template/setup-worker"  { capabilities = ["read"] }
+}
 
-### `EnrollmentService.Claim` (bidirectional stream)
-
-Bidirectional gRPC stream for TPM attestation and secret distribution. The client sends `ClaimRequest` messages and receives `ClaimResponse` messages:
-
-1. Client sends `ClaimRequest.params` with `token`, `scope`, `subject`, `tpm` (`ek_public`, `ek_cert`, `ak_public`, `ak_create_data`, `ak_create_attestation`, `ak_create_signature`), and optionally `csr_der`
-2. Server validates token and EK identity, returns `ClaimResponse.challenge` with `credential` and `secret`
-3. Client sends `ClaimRequest.challenge_response` with the activated secret
-4. Server verifies activation, returns `ClaimResponse.result` with `secrets`, `vars`, `ca`, `certs`, `jwts`, `jwt_keys`
-
-Without TPM (`-skip-tpm`, dev/testing): single-round — client sends token-only request, server returns secrets immediately.
-
-## Actions
-
-Pluggable post-claim lifecycle actions. Run via `run-actions` (all) or `run-actions -type=<type>` (specific).
-
-### vault-init
-
-Initializes Vault and creates a management token with a known HKDF-derived ID, so other tools can independently derive the same token without coordination. Idempotent — skips gracefully if Vault is already initialized.
-
-1. Polls Vault until reachable
-2. Initializes (Shamir or auto-unseal depending on config)
-3. Creates management token with `token.id` (HKDF-derived)
-4. Optionally revokes root token and redacts it from output
-
-```hcl
-action "vault-init" {
-  addr             = "https://127.0.0.1:8200"
-  secret_shares    = 1
-  secret_threshold = 1
-  output           = "/encrypted/vault/init.json"
-
-  token {
-    id          = "vault_management_token"
-    policies    = ["root"]
-    revoke_root = true
-  }
+identity "worker" {
+  attestors = [attestor.hmac, attestor.tpm]
+  pki       = pki.identity_worker
+  policy    = policy.worker
 }
 ```
 
-For auto-unseal, also set `recovery_shares` and `recovery_threshold`.
+## mTLS
 
-### luks-recovery
+All cert material is HKDF-derived. The `identity` CA signs both the server's
+own TLS cert and every identity cert issued to clients. Server certs
+auto-rotate at 50% of their TTL. Clients verify the server using the derived
+CA; the server verifies clients on Renew/Read/Write using the same CA.
 
-Adds a recovery passphrase to a LUKS2 keyslot for disaster recovery. Uses the volume key from an already unlocked dm-crypt device to authenticate. Fails if the keyslot is already occupied.
+## Attestors
 
-```hcl
-action "luks-recovery" {
-  device      = "/dev/md1"
-  mapped_name = "encrypted"
-  key_slot    = 1
-  secret      = "luks_recovery"
-}
-```
+- `hmac` — time-windowed token `hex(nonce) || hex(HMAC(k, counter || scope || nonce))`.
+  Dedicated HKDF-derived signing key, persistent nonce store, current +
+  previous window coverage. One-time use.
+- `tpm` — TPM 2.0 credential activation. EK identity validated against a CA
+  chain or hash allowlist (SPIRE pattern).
+- `bootstrap_cert` — mTLS with a caller cert signed by a trusted bootstrap CA.
 
-## Render
-
-One-shot HCL template rendering using `hclsyntax.ParseTemplate()` — Terraform's `templatefile()` engine. Template syntax: `${var}` for interpolation, `{{ }}` passes through as literal text.
-
-```hcl
-template {
-  source      = "/etc/pigeon/templates/consul.hcl.tpl"
-  destination = "/encrypted/consul/consul.hcl"
-  perms       = "0640"
-}
-```
-
-Variables come from the `-vars` JSON file, passed as-is to templates. Like Terraform's `templatefile(path, vars)`, the vars object can contain nested maps — templates navigate the structure directly (e.g. `${secrets.gossip_key}`, `${vars.datacenter}`).
-
-## Build
+## Build & Test
 
 ```bash
-make build    # Build binary → build/pigeon-enroll
+make build    # Build binary -> build/pigeon-enroll
 make test     # Run unit tests
 make vet      # Run go vet
+make e2e      # Run e2e tests (requires Linux)
 ```

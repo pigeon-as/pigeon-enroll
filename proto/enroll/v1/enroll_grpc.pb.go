@@ -19,108 +19,221 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	EnrollmentService_Claim_FullMethodName = "/pigeon.enroll.v1.EnrollmentService/Claim"
+	Enroll_Register_FullMethodName = "/pigeon.enroll.v1.Enroll/Register"
+	Enroll_Renew_FullMethodName    = "/pigeon.enroll.v1.Enroll/Renew"
+	Enroll_Read_FullMethodName     = "/pigeon.enroll.v1.Enroll/Read"
+	Enroll_Write_FullMethodName    = "/pigeon.enroll.v1.Enroll/Write"
 )
 
-// EnrollmentServiceClient is the client API for EnrollmentService service.
+// EnrollClient is the client API for Enroll service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// EnrollmentService provides secret enrollment via HMAC token authentication
-// with optional TPM attestation.
-//
-// Follows the SPIRE AttestAgent bidirectional stream pattern:
-// - TPM: params → challenge → challenge_response → result
-// - Token-only: params → result
-type EnrollmentServiceClient interface {
-	Claim(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ClaimRequest, ClaimResponse], error)
+type EnrollClient interface {
+	// Register performs node attestation and issues the identity certificate.
+	Register(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RegisterRequest, RegisterResponse], error)
+	// Renew re-issues the identity certificate for an already-attested caller.
+	Renew(ctx context.Context, in *RenewRequest, opts ...grpc.CallOption) (*RenewResponse, error)
+	// Read returns a scalar resource at path (idempotent, no side effects).
+	// Paths: var/<n>, secret/<n>, ca/<n>, jwt_key/<n>, template/<n>.
+	Read(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error)
+	// Write produces a fresh artifact at a mutating path.
+	// Paths: pki/<role> (data["csr"] required, DER PKCS#10), jwt/<n>.
+	Write(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error)
 }
 
-type enrollmentServiceClient struct {
+type enrollClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewEnrollmentServiceClient(cc grpc.ClientConnInterface) EnrollmentServiceClient {
-	return &enrollmentServiceClient{cc}
+func NewEnrollClient(cc grpc.ClientConnInterface) EnrollClient {
+	return &enrollClient{cc}
 }
 
-func (c *enrollmentServiceClient) Claim(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ClaimRequest, ClaimResponse], error) {
+func (c *enrollClient) Register(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RegisterRequest, RegisterResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &EnrollmentService_ServiceDesc.Streams[0], EnrollmentService_Claim_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Enroll_ServiceDesc.Streams[0], Enroll_Register_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[ClaimRequest, ClaimResponse]{ClientStream: stream}
+	x := &grpc.GenericClientStream[RegisterRequest, RegisterResponse]{ClientStream: stream}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type EnrollmentService_ClaimClient = grpc.BidiStreamingClient[ClaimRequest, ClaimResponse]
+type Enroll_RegisterClient = grpc.BidiStreamingClient[RegisterRequest, RegisterResponse]
 
-// EnrollmentServiceServer is the server API for EnrollmentService service.
-// All implementations must embed UnimplementedEnrollmentServiceServer
-// for forward compatibility.
-//
-// EnrollmentService provides secret enrollment via HMAC token authentication
-// with optional TPM attestation.
-//
-// Follows the SPIRE AttestAgent bidirectional stream pattern:
-// - TPM: params → challenge → challenge_response → result
-// - Token-only: params → result
-type EnrollmentServiceServer interface {
-	Claim(grpc.BidiStreamingServer[ClaimRequest, ClaimResponse]) error
-	mustEmbedUnimplementedEnrollmentServiceServer()
+func (c *enrollClient) Renew(ctx context.Context, in *RenewRequest, opts ...grpc.CallOption) (*RenewResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenewResponse)
+	err := c.cc.Invoke(ctx, Enroll_Renew_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
-// UnimplementedEnrollmentServiceServer must be embedded to have
+func (c *enrollClient) Read(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Response)
+	err := c.cc.Invoke(ctx, Enroll_Read_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *enrollClient) Write(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Response)
+	err := c.cc.Invoke(ctx, Enroll_Write_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// EnrollServer is the server API for Enroll service.
+// All implementations must embed UnimplementedEnrollServer
+// for forward compatibility.
+type EnrollServer interface {
+	// Register performs node attestation and issues the identity certificate.
+	Register(grpc.BidiStreamingServer[RegisterRequest, RegisterResponse]) error
+	// Renew re-issues the identity certificate for an already-attested caller.
+	Renew(context.Context, *RenewRequest) (*RenewResponse, error)
+	// Read returns a scalar resource at path (idempotent, no side effects).
+	// Paths: var/<n>, secret/<n>, ca/<n>, jwt_key/<n>, template/<n>.
+	Read(context.Context, *Request) (*Response, error)
+	// Write produces a fresh artifact at a mutating path.
+	// Paths: pki/<role> (data["csr"] required, DER PKCS#10), jwt/<n>.
+	Write(context.Context, *Request) (*Response, error)
+	mustEmbedUnimplementedEnrollServer()
+}
+
+// UnimplementedEnrollServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedEnrollmentServiceServer struct{}
+type UnimplementedEnrollServer struct{}
 
-func (UnimplementedEnrollmentServiceServer) Claim(grpc.BidiStreamingServer[ClaimRequest, ClaimResponse]) error {
-	return status.Error(codes.Unimplemented, "method Claim not implemented")
+func (UnimplementedEnrollServer) Register(grpc.BidiStreamingServer[RegisterRequest, RegisterResponse]) error {
+	return status.Error(codes.Unimplemented, "method Register not implemented")
 }
-func (UnimplementedEnrollmentServiceServer) mustEmbedUnimplementedEnrollmentServiceServer() {}
-func (UnimplementedEnrollmentServiceServer) testEmbeddedByValue()                           {}
+func (UnimplementedEnrollServer) Renew(context.Context, *RenewRequest) (*RenewResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Renew not implemented")
+}
+func (UnimplementedEnrollServer) Read(context.Context, *Request) (*Response, error) {
+	return nil, status.Error(codes.Unimplemented, "method Read not implemented")
+}
+func (UnimplementedEnrollServer) Write(context.Context, *Request) (*Response, error) {
+	return nil, status.Error(codes.Unimplemented, "method Write not implemented")
+}
+func (UnimplementedEnrollServer) mustEmbedUnimplementedEnrollServer() {}
+func (UnimplementedEnrollServer) testEmbeddedByValue()                {}
 
-// UnsafeEnrollmentServiceServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to EnrollmentServiceServer will
+// UnsafeEnrollServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to EnrollServer will
 // result in compilation errors.
-type UnsafeEnrollmentServiceServer interface {
-	mustEmbedUnimplementedEnrollmentServiceServer()
+type UnsafeEnrollServer interface {
+	mustEmbedUnimplementedEnrollServer()
 }
 
-func RegisterEnrollmentServiceServer(s grpc.ServiceRegistrar, srv EnrollmentServiceServer) {
-	// If the following call panics, it indicates UnimplementedEnrollmentServiceServer was
+func RegisterEnrollServer(s grpc.ServiceRegistrar, srv EnrollServer) {
+	// If the following call panics, it indicates UnimplementedEnrollServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&EnrollmentService_ServiceDesc, srv)
+	s.RegisterService(&Enroll_ServiceDesc, srv)
 }
 
-func _EnrollmentService_Claim_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(EnrollmentServiceServer).Claim(&grpc.GenericServerStream[ClaimRequest, ClaimResponse]{ServerStream: stream})
+func _Enroll_Register_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(EnrollServer).Register(&grpc.GenericServerStream[RegisterRequest, RegisterResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type EnrollmentService_ClaimServer = grpc.BidiStreamingServer[ClaimRequest, ClaimResponse]
+type Enroll_RegisterServer = grpc.BidiStreamingServer[RegisterRequest, RegisterResponse]
 
-// EnrollmentService_ServiceDesc is the grpc.ServiceDesc for EnrollmentService service.
+func _Enroll_Renew_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnrollServer).Renew(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Enroll_Renew_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnrollServer).Renew(ctx, req.(*RenewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Enroll_Read_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Request)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnrollServer).Read(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Enroll_Read_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnrollServer).Read(ctx, req.(*Request))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Enroll_Write_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Request)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnrollServer).Write(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Enroll_Write_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnrollServer).Write(ctx, req.(*Request))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// Enroll_ServiceDesc is the grpc.ServiceDesc for Enroll service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var EnrollmentService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "pigeon.enroll.v1.EnrollmentService",
-	HandlerType: (*EnrollmentServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+var Enroll_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "pigeon.enroll.v1.Enroll",
+	HandlerType: (*EnrollServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Renew",
+			Handler:    _Enroll_Renew_Handler,
+		},
+		{
+			MethodName: "Read",
+			Handler:    _Enroll_Read_Handler,
+		},
+		{
+			MethodName: "Write",
+			Handler:    _Enroll_Write_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "Claim",
-			Handler:       _EnrollmentService_Claim_Handler,
+			StreamName:    "Register",
+			Handler:       _Enroll_Register_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

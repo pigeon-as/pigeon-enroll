@@ -1,486 +1,166 @@
 package config
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/hashicorp/hcl/v2"
-	hcljson "github.com/hashicorp/hcl/v2/json"
-	"github.com/pigeon-as/pigeon-enroll/internal/action"
 	"github.com/shoenig/test/must"
 )
 
-func testBody(t *testing.T, jsonStr string) hcl.Body {
-	t.Helper()
-	f, diags := hcljson.Parse([]byte(jsonStr), "test.json")
-	if diags.HasErrors() {
-		t.Fatalf("parse test body: %s", diags.Error())
-	}
-	return f.Body
+const validConfig = `
+trust_domain  = "pigeon.as"
+listen        = ":9443"
+identity_ttl  = "720h"
+renew_fraction = 0.5
+
+attestor "tpm" {
+  ek_ca_path   = "/etc/pigeon/ek-ca"
+  ek_hash_path = "/etc/pigeon/ek-hashes"
+}
+attestor "hmac" {
+  key_path = "/etc/pigeon/enrollment-key"
+  window   = "30m"
+}
+attestor "bootstrap_cert" {}
+
+ca "identity" {
+  cn       = "pigeon identity CA"
+  validity = "10y"
+}
+ca "mesh" {
+  cn       = "pigeon mesh CA"
+  validity = "10y"
+}
+ca "bootstrap" {
+  cn       = "pigeon bootstrap CA"
+  validity = "10y"
 }
 
-func TestLoadDefaults(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.hcl")
-	os.WriteFile(path, []byte(`vars = { k = "v" }`), 0644)
+secret "gossip_key" {
+  length   = 32
+  encoding = "base64"
+}
 
-	cfg, err := Load(path)
+var "domain" { value = "infra.pigeon.as" }
+
+jwt_key "consul_auto_config" {
+  alg      = "EdDSA"
+  issuer   = "pigeon-enroll"
+  audience = "consul-auto-config"
+  ttl      = "24h"
+}
+
+pki "mesh_worker" {
+  ca            = ca.mesh
+  ttl           = "168h"
+  ext_key_usage = ["client_auth"]
+  dns_sans      = ["${subject}"]
+}
+
+pki "identity_worker" {
+  ca            = ca.identity
+  ttl           = "720h"
+}
+
+template "mesh_json" { source = "/etc/pigeon/templates/mesh.json.tpl" }
+
+policy "worker" {
+  path "ca/bootstrap"             { capabilities = ["read"] }
+  path "secret/gossip_key"        { capabilities = ["read"] }
+  path "var/*"                    { capabilities = ["read"] }
+  path "pki/mesh_worker"          { capabilities = ["write"] }
+  path "jwt/consul_auto_config"   { capabilities = ["write"] }
+  path "template/mesh_json"       { capabilities = ["read"] }
+}
+
+identity "worker" {
+  attestors = [attestor.tpm, attestor.hmac, attestor.bootstrap_cert]
+  pki       = pki.identity_worker
+  policy    = policy.worker
+}
+`
+
+func TestLoadValid(t *testing.T) {
+	cfg, err := Parse([]byte(validConfig), "test.hcl")
 	must.NoError(t, err)
-	must.EqOp(t, ":8443", cfg.Listen)
-	must.EqOp(t, "/etc/pigeon/enrollment-key", cfg.KeyPath)
-	must.EqOp(t, 30*time.Minute, cfg.TokenWindow)
-	must.EqOp(t, 720*time.Hour, cfg.ServerCertTTL)
+	must.Eq(t, "pigeon.as", cfg.TrustDomain)
+	must.Eq(t, ":9443", cfg.Listen)
+	must.EqOp(t, 720*time.Hour, cfg.IdentityTTL)
+	must.MapLen(t, 3, cfg.Attestors)
+	must.EqOp(t, 30*time.Minute, cfg.Attestors["hmac"].Window)
+	must.MapLen(t, 3, cfg.CAs)
+	must.EqOp(t, 10*365*24*time.Hour, cfg.CAs["mesh"].Validity)
+	must.Eq(t, "mesh", cfg.PKIs["mesh_worker"].CARef)
+	id := cfg.Identities["worker"]
+	must.NotNil(t, id)
+	must.Eq(t, "identity_worker", id.PKIRef)
+	must.Eq(t, "worker", id.PolicyRef)
+	must.Eq(t, []string{"tpm", "hmac", "bootstrap_cert"}, id.Attestors)
+	p := cfg.Policies["worker"]
+	must.NotNil(t, p)
+	must.SliceLen(t, 6, p.Paths)
 }
 
-func TestLoadTokenWindow(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.hcl")
-	os.WriteFile(path, []byte(`
-vars = { k = "v" }
-token_window = "15m"
-`), 0644)
-
-	cfg, err := Load(path)
-	must.NoError(t, err)
-	must.EqOp(t, 15*time.Minute, cfg.TokenWindow)
-}
-
-func TestLoadTokenWindowInvalid(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.hcl")
-	os.WriteFile(path, []byte(`
-vars = { k = "v" }
-token_window = "bogus"
-`), 0644)
-
-	_, err := Load(path)
-	must.Error(t, err)
-}
-
-func TestLoadTokenWindowTooSmall(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.hcl")
-	os.WriteFile(path, []byte(`
-vars = { k = "v" }
-token_window = "500ms"
-`), 0644)
-
-	_, err := Load(path)
-	must.Error(t, err)
-}
-
-func TestLoadCertTTL(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.hcl")
-	os.WriteFile(path, []byte(`
-vars = { k = "v" }
-server_cert_ttl = "48h"
-`), 0644)
-
-	cfg, err := Load(path)
-	must.NoError(t, err)
-	must.EqOp(t, 48*time.Hour, cfg.ServerCertTTL)
-}
-
-func TestLoadCertTTLInvalid(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.hcl")
-
-	os.WriteFile(path, []byte(`
-vars = { k = "v" }
-server_cert_ttl = "bogus"
-`), 0644)
-	_, err := Load(path)
-	must.Error(t, err)
-}
-
-func TestLoadCertTTLTooSmall(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.hcl")
-
-	os.WriteFile(path, []byte(`
-vars = { k = "v" }
-server_cert_ttl = "100ms"
-`), 0644)
-	_, err := Load(path)
-	must.Error(t, err)
-}
-
-func TestValidateSecretsOrVars(t *testing.T) {
-	err := validate(Config{TokenWindow: time.Minute, ServerCertTTL: time.Hour})
-	must.Error(t, err)
-}
-
-func TestValidateSecretSpec(t *testing.T) {
+func TestUnknownRefs(t *testing.T) {
 	tests := []struct {
 		name string
-		spec SecretSpec
-		ok   bool
+		body string
+		want string
 	}{
-		{"valid base64", SecretSpec{Name: "k", Length: 32, Encoding: "base64"}, true},
-		{"valid hex", SecretSpec{Name: "k", Length: 16, Encoding: "hex"}, true},
-		{"missing name", SecretSpec{Length: 32, Encoding: "base64"}, false},
-		{"zero length", SecretSpec{Name: "k", Length: 0, Encoding: "base64"}, false},
-		{"bad encoding", SecretSpec{Name: "k", Length: 32, Encoding: "raw"}, false},
+		{
+			name: "pki references unknown ca",
+			body: `trust_domain = "x"
+pki "p" {
+  ca = ca.missing
+}`,
+			want: "missing",
+		},
+		{
+			name: "identity references unknown pki",
+			body: `trust_domain = "x"
+ca "c" {}
+pki "p" {
+  ca = ca.c
+}
+policy "pol" {
+  path "x" { capabilities = ["read"] }
+}
+identity "i" {
+  attestors = []
+  pki       = pki.missing
+  policy    = policy.pol
+}`,
+			want: "missing",
+		},
+		{
+			name: "identity references unknown attestor",
+			body: `trust_domain = "x"
+ca "c" {}
+pki "p" {
+  ca = ca.c
+}
+policy "pol" {
+  path "x" { capabilities = ["read"] }
+}
+identity "i" {
+  attestors = [attestor.missing]
+  pki       = pki.p
+  policy    = policy.pol
+}`,
+			want: "attestor",
+		},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := Config{
-				TokenWindow:   time.Minute,
-				ServerCertTTL: time.Hour,
-				Secrets:       []SecretSpec{tt.spec},
-			}
-			err := validate(cfg)
-			if tt.ok {
-				must.NoError(t, err)
-			} else {
-				must.Error(t, err)
-			}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte(tc.body), "t.hcl")
+			must.ErrorContains(t, err, tc.want)
 		})
 	}
 }
 
-func TestValidateDuplicateSecretName(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Secrets: []SecretSpec{
-			{Name: "k", Length: 32, Encoding: "base64"},
-			{Name: "k", Length: 16, Encoding: "hex"},
-		},
-	}
-	must.Error(t, validate(cfg))
-}
-
-func TestValidateNameConflict(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Secrets:       []SecretSpec{{Name: "k", Length: 32, Encoding: "base64"}},
-		Vars:          map[string]string{"k": "v"},
-	}
-	must.Error(t, validate(cfg))
-}
-
-func TestValidateVaultTokenRefersToSecret(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Secrets:       []SecretSpec{{Name: "vault_token", Length: 32, Encoding: "hex"}},
-		Actions:       []action.Config{{Type: "vault-init", Body: testBody(t, `{"token": {"id": "vault_token"}}`)}},
-	}
-	must.NoError(t, validate(cfg))
-}
-
-func TestValidateVaultTokenRefersToMissingSecret(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Secrets:       []SecretSpec{{Name: "other", Length: 32, Encoding: "hex"}},
-		Actions:       []action.Config{{Type: "vault-init", Body: testBody(t, `{"token": {"id": "nonexistent"}}`)}},
-	}
-	must.Error(t, validate(cfg))
-}
-
-func TestLoadActionConfig(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.hcl")
-	os.WriteFile(path, []byte(`
-secret "mgmt" {
-  length   = 32
-  encoding = "hex"
-}
-
-action "vault-init" {
-  token {
-    id = "mgmt"
-  }
-}
-`), 0644)
-
-	cfg, err := Load(path)
+func TestDurationShorthand(t *testing.T) {
+	cfg, err := Parse([]byte(`trust_domain = "x"
+ca "c" { validity = "2y" }`), "t.hcl")
 	must.NoError(t, err)
-	must.SliceLen(t, 1, cfg.Actions)
-	must.EqOp(t, "vault-init", cfg.Actions[0].Type)
-}
-
-func TestCheckKeyFile(t *testing.T) {
-	dir := t.TempDir()
-	keyPath := filepath.Join(dir, "enrollment-key")
-
-	must.Error(t, CheckKeyFile(keyPath))
-
-	os.WriteFile(keyPath, []byte("0123456789abcdef0123456789abcdef"), 0600)
-	must.NoError(t, CheckKeyFile(keyPath))
-}
-
-func TestLoadCertBlock(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.hcl")
-	os.WriteFile(path, []byte(`
-ca "auth" {
-  scope = ["server"]
-}
-
-cert "auth_worker" {
-  ca          = "auth"
-  scope       = ["worker"]
-  ttl         = "720h"
-  client_auth = true
-  cn          = "worker"
-}
-
-vars = { k = "v" }
-`), 0644)
-
-	cfg, err := Load(path)
-	must.NoError(t, err)
-	must.SliceLen(t, 1, cfg.Certs)
-
-	c := cfg.Certs[0]
-	must.EqOp(t, "auth_worker", c.Name)
-	must.EqOp(t, "auth", c.CA)
-	must.EqOp(t, 720*time.Hour, c.TTL)
-	must.EqOp(t, "worker", c.CN)
-}
-
-func TestLoadCertBlockDNSSANs(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.hcl")
-	os.WriteFile(path, []byte(`
-ca "mesh" {
-  scope = ["server"]
-}
-
-cert "mesh_worker" {
-  ca          = "mesh"
-  scope       = ["worker"]
-  ttl         = "720h"
-  client_auth = true
-  server_auth = true
-  dns_sans    = ["mesh.pigeon.internal"]
-}
-
-vars = { k = "v" }
-`), 0644)
-
-	cfg, err := Load(path)
-	must.NoError(t, err)
-	must.SliceLen(t, 1, cfg.Certs)
-
-	c := cfg.Certs[0]
-	must.EqOp(t, "mesh_worker", c.Name)
-	must.EqOp(t, "", c.CN)
-	must.SliceLen(t, 1, c.DNSSANs)
-	must.EqOp(t, "mesh.pigeon.internal", c.DNSSANs[0])
-}
-
-func TestValidateCertMissingCA(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs:         []CertSpec{{Name: "c", CA: "nonexistent", Scope: []string{"worker"}, CN: "w", TTL: time.Hour}},
-	}
-	must.Error(t, validate(cfg))
-}
-
-func TestValidateCertEmptyScope(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs:         []CertSpec{{Name: "c", CA: "auth", CN: "w", TTL: time.Hour}},
-	}
-	must.Error(t, validate(cfg))
-}
-
-func TestValidateCertOptionalCN(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, TTL: time.Hour}},
-	}
-	must.NoError(t, validate(cfg))
-}
-
-func TestValidateCertTTLTooSmall(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Second}},
-	}
-	must.Error(t, validate(cfg))
-}
-
-func TestValidateCertNameConflictsWithCA(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs:         []CertSpec{{Name: "auth", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour}},
-	}
-	must.Error(t, validate(cfg))
-}
-
-func TestValidateCertIPSANsValid(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs: []CertSpec{{
-			Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour,
-			IPSANs: []string{"10.0.0.1", "::1"},
-		}},
-	}
-	must.NoError(t, validate(cfg))
-}
-
-func TestValidateCertIPSANsInvalid(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs: []CertSpec{{
-			Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour,
-			IPSANs: []string{"not-an-ip"},
-		}},
-	}
-	err := validate(cfg)
-	must.Error(t, err)
-	must.StrContains(t, err.Error(), "ip_sans entry \"not-an-ip\" is not a valid IP address")
-}
-
-func TestLoadJWTBlock(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.hcl")
-	os.WriteFile(path, []byte(`
-jwt "consul_auto_config" {
-  issuer   = "pigeon-enroll"
-  audience = "consul-auto-config"
-  ttl      = "24h"
-  scope    = "worker"
-}
-
-vars = { k = "v" }
-`), 0644)
-
-	cfg, err := Load(path)
-	must.NoError(t, err)
-	must.SliceLen(t, 1, cfg.JWTs)
-
-	j := cfg.JWTs[0]
-	must.EqOp(t, "consul_auto_config", j.Name)
-	must.EqOp(t, "pigeon-enroll", j.Issuer)
-	must.EqOp(t, "consul-auto-config", j.Audience)
-	must.EqOp(t, 24*time.Hour, j.TTL)
-	must.EqOp(t, "worker", j.Scope)
-}
-
-func TestValidateJWTMissingIssuer(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		JWTs:          []JWTSpec{{Name: "j", Audience: "a", Scope: "s", TTL: time.Hour}},
-	}
-	must.Error(t, validate(cfg))
-}
-
-func TestValidateJWTMissingScope(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		JWTs:          []JWTSpec{{Name: "j", Issuer: "i", Audience: "a", TTL: time.Hour}},
-	}
-	must.Error(t, validate(cfg))
-}
-
-func TestValidateJWTTTLTooSmall(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		JWTs:          []JWTSpec{{Name: "j", Issuer: "i", Audience: "a", Scope: "s", TTL: time.Second}},
-	}
-	must.Error(t, validate(cfg))
-}
-
-func TestValidateJWTDuplicateName(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		JWTs: []JWTSpec{
-			{Name: "j", Issuer: "i", Audience: "a", Scope: "s", TTL: time.Hour},
-			{Name: "j", Issuer: "i2", Audience: "a2", Scope: "s2", TTL: time.Hour},
-		},
-	}
-	must.Error(t, validate(cfg))
-}
-
-func TestValidateJWTOnlyConfig(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		JWTs:          []JWTSpec{{Name: "j", Issuer: "i", Audience: "a", Scope: "s", TTL: time.Hour}},
-	}
-	must.NoError(t, validate(cfg))
-}
-
-func TestValidateCertDNSSANsEmpty(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour, DNSSANs: []string{""}}},
-	}
-	must.Error(t, validate(cfg))
-}
-
-func TestValidateCertModePush(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour, Mode: "push"}},
-	}
-	must.NoError(t, validate(cfg))
-}
-
-func TestValidateCertModeCSR(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour, Mode: "csr"}},
-	}
-	must.NoError(t, validate(cfg))
-}
-
-func TestValidateCertModeInvalid(t *testing.T) {
-	cfg := Config{
-		TokenWindow:   time.Minute,
-		ServerCertTTL: time.Hour,
-		Vars:          map[string]string{"k": "v"},
-		CAs:           []CASpec{{Name: "auth"}},
-		Certs:         []CertSpec{{Name: "c", CA: "auth", Scope: []string{"worker"}, CN: "w", TTL: time.Hour, Mode: "bogus"}},
-	}
-	must.Error(t, validate(cfg))
+	must.EqOp(t, 2*365*24*time.Hour, cfg.CAs["c"].Validity)
 }
