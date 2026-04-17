@@ -69,6 +69,14 @@ type NamedCA struct {
 	KeyPEM  []byte
 }
 
+// DeriveCAByName returns a deterministic, signing-capable CA keyed to `name`.
+// Same HKDF derivation as DeriveNamedCA; the only difference is that the
+// return value is ready to sign leaves without a round-trip through PEM.
+func DeriveCAByName(ikm []byte, name string) (*CA, error) {
+	info := hkdfInfoCAPrefix + name + hkdfInfoCASuffix
+	return deriveCA(ikm, info, name)
+}
+
 // DeriveNamedCA produces a deterministic Ed25519 CA from the enrollment key.
 // The name is used in the HKDF info string for domain separation.
 // Ed25519 key derivation and signing are both fully deterministic, so every
@@ -150,17 +158,55 @@ func GenerateCert(ca *CA, cn string, hosts []string, scope string, ttl time.Dura
 	return generateLeaf(ca, cn, hosts, scope, ttl)
 }
 
+// IssueIdentityCert issues the pigeon-enroll identity cert. The caller's
+// subject is encoded as CN=cn, OU=[policy], O=[identity]. Renew reads O to
+// re-issue without re-attestation; Fetch/Sign read OU to look up the
+// capability policy. Keeping this one function authoritative means auditors
+// only need to read it (and SignIdentityCSR below) to know what shape the
+// identity cert has.
+func IssueIdentityCert(ca *CA, cn, policyName, identityName string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) (certPEM, keyPEM []byte, err error) {
+	tmpl := identityCertTemplate(cn, policyName, identityName, dnsSANs, ipSANs, ttl, eku)
+	return signLeaf(ca, tmpl)
+}
+
+// SignIdentityCSR signs a caller-supplied CSR as the pigeon-enroll identity
+// cert. Only the CSR's public key is used; Subject (CN/O/OU), SANs, EKU, and
+// TTL are all server-controlled (SPIRE pattern).
+func SignIdentityCSR(ca *CA, pub crypto.PublicKey, cn, policyName, identityName string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) (certPEM []byte, err error) {
+	tmpl := identityCertTemplate(cn, policyName, identityName, dnsSANs, ipSANs, ttl, eku)
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, fmt.Errorf("generate serial: %w", err)
+	}
+	tmpl.SerialNumber = serial
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, pub, ca.Key)
+	if err != nil {
+		return nil, fmt.Errorf("sign identity cert: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), nil
+}
+
+func identityCertTemplate(cn, policyName, identityName string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) *x509.Certificate {
+	now := time.Now()
+	return &x509.Certificate{
+		Subject: pkix.Name{
+			CommonName:         cn,
+			OrganizationalUnit: []string{policyName},
+			Organization:       []string{identityName},
+		},
+		NotBefore:   now.Add(-5 * time.Minute),
+		NotAfter:    now.Add(ttl),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: eku,
+		DNSNames:    dnsSANs,
+		IPAddresses: ipSANs,
+	}
+}
+
 // IssueCert creates an ephemeral Ed25519 leaf certificate with explicit EKU control.
 // Used by cert blocks to auto-issue leaf certs during claim. dnsSANs are added
 // as DNS subject alternative names and ipSANs as IP subject alternative names.
-func IssueCert(ca *CA, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, serverAuth, clientAuth bool) (certPEM, keyPEM []byte, err error) {
-	var eku []x509.ExtKeyUsage
-	if serverAuth {
-		eku = append(eku, x509.ExtKeyUsageServerAuth)
-	}
-	if clientAuth {
-		eku = append(eku, x509.ExtKeyUsageClientAuth)
-	}
+func IssueCert(ca *CA, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) (certPEM, keyPEM []byte, err error) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		Subject:     pkix.Name{CommonName: cn},
@@ -178,15 +224,7 @@ func IssueCert(ca *CA, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Du
 // template. Follows the SPIRE pattern: only the public key is extracted from the
 // CSR — subject, SANs, EKU, and validity are all set by the server. This prevents
 // the client from escalating privileges via crafted CSR fields.
-func SignCSR(ca *CA, pubKey crypto.PublicKey, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, serverAuth, clientAuth bool) (certPEM []byte, err error) {
-	var eku []x509.ExtKeyUsage
-	if serverAuth {
-		eku = append(eku, x509.ExtKeyUsageServerAuth)
-	}
-	if clientAuth {
-		eku = append(eku, x509.ExtKeyUsageClientAuth)
-	}
-
+func SignCSR(ca *CA, pubKey crypto.PublicKey, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) (certPEM []byte, err error) {
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
 		return nil, fmt.Errorf("generate serial: %w", err)
@@ -210,6 +248,23 @@ func SignCSR(ca *CA, pubKey crypto.PublicKey, cn string, dnsSANs []string, ipSAN
 	}
 
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), nil
+}
+
+// ParseExtKeyUsage converts a list of EKU name strings ("client_auth",
+// "server_auth") to x509.ExtKeyUsage values. Unknown names return an error.
+func ParseExtKeyUsage(names []string) ([]x509.ExtKeyUsage, error) {
+	out := make([]x509.ExtKeyUsage, 0, len(names))
+	for _, n := range names {
+		switch n {
+		case "client_auth":
+			out = append(out, x509.ExtKeyUsageClientAuth)
+		case "server_auth":
+			out = append(out, x509.ExtKeyUsageServerAuth)
+		default:
+			return nil, fmt.Errorf("unknown ext_key_usage %q", n)
+		}
+	}
+	return out, nil
 }
 
 // GenerateClientCert creates an ephemeral Ed25519 client certificate bundle

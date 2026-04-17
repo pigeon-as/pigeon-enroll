@@ -2,97 +2,189 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
+	"github.com/pigeon-as/pigeon-enroll/internal/attestor"
+	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/grpcserver"
-	"github.com/pigeon-as/pigeon-enroll/internal/pki"
-	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
-	pb "github.com/pigeon-as/pigeon-enroll/proto/enroll/v1"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
+	"github.com/pigeon-as/pigeon-enroll/internal/identity"
+	"github.com/pigeon-as/pigeon-enroll/internal/nonce"
+	"github.com/pigeon-as/pigeon-enroll/internal/policy"
+	"github.com/pigeon-as/pigeon-enroll/internal/resource"
 )
 
 func cmdServer(args []string) int {
-	flags := newFlagSet("server")
-	configPath := flags.String("config", defaultConfigPath, "Path to HCL config file")
-	keyPathFlag := flags.String("key-path", "", "Override enrollment key path from config")
-	logLevel := flags.String("log-level", "info", "Log level (debug, info, warn, error)")
-	flags.Parse(args)
-
-	logger, cfg, ikm, hmacKey, err := loadConfig(*configPath, *logLevel, *keyPathFlag)
-	if err != nil {
-		logger.Error(err.Error())
-		return 1
-	}
-	logger.Info("enrollment key loaded", "path", cfg.KeyPath)
-
-	hostname, err := os.Hostname()
-	if err != nil {
-		logger.Error("get hostname", "err", err)
-		return 1
+	fs := flag.NewFlagSet("server", flag.ContinueOnError)
+	configPath := fs.String("config", "/etc/pigeon/enroll-server.hcl", "path to HCL config")
+	keyPath := fs.String("key", "/etc/pigeon/enrollment-key", "path to 32-byte enrollment key (HKDF IKM)")
+	noncePath := fs.String("nonce-store", "/var/lib/pigeon/enroll-nonces", "path to nonce store file")
+	bootstrapCAPath := fs.String("bootstrap-ca", "", "optional PEM bundle of CAs for bootstrap_cert attestor")
+	hosts := fs.String("hosts", "", "comma-separated hostnames/IPs for server TLS cert SANs")
+	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
+	if err := fs.Parse(args); err != nil {
+		return 2
 	}
 
-	derived, cas, _, jwtKeys, err := secrets.Resolve(cfg.Secrets, cfg.CAs, cfg.Certs, cfg.JWTs, cfg.Vars, cfg.PersistPath, ikm, "server", hostname)
-	if err != nil {
-		logger.Error("resolve secrets", "err", err)
-		return 1
-	}
-	if derived != nil {
-		logger.Info("secrets resolved", "count", len(derived), "path", cfg.PersistPath)
-	}
+	log := newLogger(*logLevel)
 
-	// Derive mTLS credentials from enrollment key.
-	ca, err := pki.DeriveCA(ikm)
+	cfg, err := config.Load(*configPath)
 	if err != nil {
-		logger.Error("derive CA", "err", err)
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		return 1
 	}
 
-	srv, err := grpcserver.New(logger, cfg, hmacKey, derived, cas, jwtKeys, ca)
+	ikm, err := readIKM(*keyPath)
 	if err != nil {
-		logger.Error("create grpc server", "err", err)
+		fmt.Fprintf(os.Stderr, "key: %v\n", err)
 		return 1
 	}
 
-	caPool := x509.NewCertPool()
-	caPool.AddCert(ca.Cert)
-	rotator := pki.NewCertRotator(ca, []string{"pigeon-enroll"}, cfg.ServerCertTTL)
-
-	tlsCfg := &tls.Config{
-		MinVersion:     tls.VersionTLS13,
-		GetCertificate: rotator.GetCertificate,
-		ClientAuth:     tls.RequireAndVerifyClientCert,
-		ClientCAs:      caPool,
+	engine, err := policy.New(cfg.Policies)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "policy: %v\n", err)
+		return 1
 	}
 
-	grpcSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsCfg)))
-	pb.RegisterEnrollmentServiceServer(grpcSrv, srv)
+	nonces, err := nonce.New(2*time.Hour, *noncePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nonce store: %v\n", err)
+		return 1
+	}
+
+	var bootstrapPool *x509.CertPool
+	if *bootstrapCAPath != "" {
+		pool, err := loadCAPool(*bootstrapCAPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "bootstrap CA: %v\n", err)
+			return 1
+		}
+		bootstrapPool = pool
+	}
+
+	attestors, err := attestor.Build(cfg, nonces, bootstrapPool)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "attestors: %v\n", err)
+		return 1
+	}
+
+	registry, err := identity.New(cfg, engine, attestors)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "identity registry: %v\n", err)
+		return 1
+	}
+
+	resolver, err := resource.New(cfg, engine, ikm)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resource resolver: %v\n", err)
+		return 1
+	}
+
+	srv, err := grpcserver.New(cfg, engine, registry, resolver, ikm, bootstrapPool, grpcserver.Options{
+		Hosts:  splitCSV(*hosts),
+		Logger: log,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "server: %v\n", err)
+		return 1
+	}
 
 	lis, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
-		logger.Error("listen", "err", err)
+		fmt.Fprintf(os.Stderr, "listen %s: %v\n", cfg.Listen, err)
 		return 1
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	gs := srv.GRPCServer()
 
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	errCh := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		logger.Info("shutting down")
-		grpcSrv.GracefulStop()
+		log.Info("pigeon-enroll server listening", "addr", cfg.Listen, "trust_domain", cfg.TrustDomain)
+		errCh <- gs.Serve(lis)
 	}()
 
-	logger.Info("listening (gRPC mTLS)", "addr", cfg.Listen, "server_cert_ttl", cfg.ServerCertTTL)
-	if err := grpcSrv.Serve(lis); err != nil {
-		logger.Error("serve", "err", err)
-		return 1
+	select {
+	case <-ctx.Done():
+		log.Info("shutdown requested")
+		gs.GracefulStop()
+	case err := <-errCh:
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "serve: %v\n", err)
+			return 1
+		}
 	}
-
 	return 0
+}
+
+func readIKM(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	data = trimTrailingNewline(data)
+	if len(data) != 32 {
+		return nil, fmt.Errorf("expected 32 raw bytes, got %d", len(data))
+	}
+	return data, nil
+}
+
+func trimTrailingNewline(b []byte) []byte {
+	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == '\r') {
+		b = b[:len(b)-1]
+	}
+	return b
+}
+
+func loadCAPool(path string) (*x509.CertPool, error) {
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, errors.New("no PEM certs found")
+	}
+	return pool, nil
+}
+
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func newLogger(level string) *slog.Logger {
+	var lvl slog.Level
+	switch strings.ToLower(level) {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl}))
 }

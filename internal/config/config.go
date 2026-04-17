@@ -1,413 +1,590 @@
-// Package config loads and validates the pigeon-enroll HCL configuration.
+// Package config loads the pigeon-enroll server configuration (Decision 65).
+//
+// The HCL schema is Vault-shaped: five primitive resource kinds
+// (ca/secret/var/jwt_key/pki) plus templates/attestors/policies/identities.
+// References between blocks (e.g. pki.ca = ca.mesh, identity.pki = pki.X) are
+// native HCL expressions, validated against declared block names at load time.
 package config
 
 import (
 	"fmt"
-	"net"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/gohcl"
-	"github.com/hashicorp/hcl/v2/hclsimple"
-	"github.com/pigeon-as/pigeon-enroll/internal/action"
+	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/zclconf/go-cty/cty"
 )
 
-// SecretSpec describes a secret to derive from the enrollment key via HKDF.
-type SecretSpec struct {
-	Name     string `hcl:"name,label"`
-	Length   int    `hcl:"length"`
-	Encoding string `hcl:"encoding"` // "base64" or "hex"
-	Scope    string `hcl:"scope,optional"`
-}
-
-// CASpec describes a CA certificate to derive from the enrollment key via HKDF.
-type CASpec struct {
-	Name  string   `hcl:"name,label"`
-	Scope []string `hcl:"scope,optional"`
-}
-
-// CertSpec describes a leaf certificate to auto-issue during claim.
-// Follows the Vault PKI role pattern: issuance policy separate from CA.
-// If CN is empty, claim issuance uses the claim subject (node identity) as the
-// cert CN, while server-side self-issuance for a non-empty scope uses hostname.
-//
-// The dns_sans and ip_sans fields support HCL interpolation with a "subject"
-// variable that resolves to the claim subject at issuance time. Example:
-//
-//	dns_sans = ["vault.service.internal", "${subject}"]
-type CertSpec struct {
-	Name       string   `hcl:"name,label"`
-	CA         string   `hcl:"ca"`                   // must reference a ca block name
-	Scope      []string `hcl:"scope"`                 // who gets this cert auto-issued
-	TTLRaw     string   `hcl:"ttl"`                   // e.g. "720h"
-	TTL        time.Duration
-	Mode       string   `hcl:"mode,optional"`         // "push" (default): server generates keypair; "csr": worker generates keypair, submits CSR
-	ClientAuth *bool    `hcl:"client_auth,optional"`  // default true
-	ServerAuth *bool    `hcl:"server_auth,optional"`  // default false
-	CN         string   `hcl:"cn,optional"`           // static common name; if empty, claim uses subject, server self-issue uses hostname
-	Remain     hcl.Body `hcl:",remain"`               // deferred: dns_sans, ip_sans (decoded at claim time with subject variable)
-}
-
-// certSANs holds the deferred SAN fields from a cert block.
-// Decoded from CertSpec.Remain with an EvalContext providing the subject variable.
-type certSANs struct {
-	DNSSANs []string `hcl:"dns_sans,optional"`
-	IPSANs  []string `hcl:"ip_sans,optional"`
-}
-
-// ResolveSANs decodes the deferred dns_sans and ip_sans fields, evaluating
-// any HCL expressions with the provided subject variable. This allows
-// "${subject}" interpolation in SAN entries at claim time.
-func (cs CertSpec) ResolveSANs(subject string) ([]string, []net.IP, error) {
-	if cs.Remain == nil {
-		return nil, nil, nil
-	}
-	var sans certSANs
-	ctx := &hcl.EvalContext{
-		Variables: map[string]cty.Value{
-			"subject": cty.StringVal(subject),
-		},
-	}
-	diags := gohcl.DecodeBody(cs.Remain, ctx, &sans)
-	if diags.HasErrors() {
-		return nil, nil, fmt.Errorf("resolve SANs: %s", diags.Error())
-	}
-	for _, d := range sans.DNSSANs {
-		if d == "" {
-			return nil, nil, fmt.Errorf("dns_sans entries must not be empty strings")
-		}
-	}
-	var ipSANs []net.IP
-	for _, raw := range sans.IPSANs {
-		ip := net.ParseIP(raw)
-		if ip == nil {
-			return nil, nil, fmt.Errorf("ip_sans entry %q is not a valid IP address", raw)
-		}
-		ipSANs = append(ipSANs, ip)
-	}
-	return sans.DNSSANs, ipSANs, nil
-}
-
-// TemplateSpec describes a template rendered on demand via the Render RPC.
-// Each request generates a fresh HMAC token (scoped) and ephemeral client cert bundle.
-type TemplateSpec struct {
-	Name   string `hcl:"name,label"`
-	Source string `hcl:"source"` // path to HCL template file on disk
-	Scope  string `hcl:"scope"`  // HMAC token scope for the generated credential
-}
-
-// JWTSpec describes a JWT to sign and include in the claim response.
-// Key pair is derived from the enrollment key via HKDF (same pattern as CAs).
-type JWTSpec struct {
-	Name     string `hcl:"name,label"`
-	Issuer   string `hcl:"issuer"`
-	Audience string `hcl:"audience"`
-	TTLRaw   string `hcl:"ttl"`
-	TTL      time.Duration
-	Scope    string `hcl:"scope"` // who gets the signed JWT (e.g. "worker")
-}
-
-// Config holds the pigeon-enroll configuration.
+// Config is the top-level pigeon-enroll server config.
 type Config struct {
-	Listen           string `hcl:"listen,optional"`
-	KeyPath          string `hcl:"key_path,optional"`
-	NoncePath        string `hcl:"nonce_path,optional"`
-	TokenWindow      time.Duration
-	TokenWindowRaw   string `hcl:"token_window,optional"`
-	ServerCertTTL    time.Duration
-	ServerCertTTLRaw string `hcl:"server_cert_ttl,optional"`
-	ClientCertTTL    time.Duration
-	ClientCertTTLRaw string            `hcl:"client_cert_ttl,optional"`
-	Vars             map[string]string `hcl:"vars,optional"`
-	Secrets          []SecretSpec      `hcl:"secret,block"`
-	CAs              []CASpec          `hcl:"ca,block"`
-	Certs            []CertSpec        `hcl:"cert,block"`
-	JWTs             []JWTSpec         `hcl:"jwt,block"`
-	Templates        []TemplateSpec    `hcl:"template,block"`
-	PersistPath      string            `hcl:"persist_path,optional"`
-	Actions          []action.Config   `hcl:"action,block"`
-	RequireTPM       bool   `hcl:"require_tpm,optional"`
-	EKCAPath         string `hcl:"ek_ca_path,optional"`
-	EKHashPath       string `hcl:"ek_hash_path,optional"`
+	TrustDomain   string
+	Listen        string
+	IdentityTTL   time.Duration
+	RenewFraction float64
+
+	Attestors  map[string]*Attestor
+	CAs        map[string]*CA
+	Secrets    map[string]*Secret
+	Vars       map[string]*Var
+	JWTKeys    map[string]*JWTKey
+	PKIs       map[string]*PKI
+	Templates  map[string]*Template
+	Policies   map[string]*Policy
+	Identities map[string]*Identity
 }
 
-// Load reads an HCL config file and returns a validated Config with defaults applied.
-func Load(path string) (Config, error) {
-	var cfg Config
-	if err := hclsimple.DecodeFile(path, nil, &cfg); err != nil {
-		return Config{}, fmt.Errorf("parse config: %w", err)
+// Attestor is a pluggable NodeAttestor (SPIRE pattern).
+// Kind is the single HCL label ("tpm", "hmac", "bootstrap_cert").
+type Attestor struct {
+	Kind string
+
+	// TPM
+	EKCAPath   string
+	EKHashPath string
+
+	// HMAC
+	KeyPath string
+	Window  time.Duration
+}
+
+// CA is an HKDF-derived certificate authority (deterministic, never rotates).
+type CA struct {
+	Name     string
+	CN       string
+	Validity time.Duration
+}
+
+// Secret is an HKDF-derived secret value.
+type Secret struct {
+	Name     string
+	Length   int
+	Encoding string // "hex", "base64", "base64url", "raw"
+}
+
+// Var is a plaintext literal value exposed as a resource.
+type Var struct {
+	Name  string
+	Value string
+}
+
+// JWTKey is a named JWT signing key derived from the enrollment key.
+type JWTKey struct {
+	Name     string
+	Alg      string // "EdDSA"
+	Issuer   string
+	Audience string
+	TTL      time.Duration
+}
+
+// PKI is a Vault-style PKI role: issues ephemeral leaves from a declared CA.
+type PKI struct {
+	Name        string
+	CARef       string // resolved from ca = ca.<name>
+	TTL         time.Duration
+	ExtKeyUsage []string
+	// SAN/CN expressions are evaluated at issue time with `subject` in scope.
+	DNSSANsExpr hcl.Expression
+	IPSANsExpr  hcl.Expression
+	CNExpr      hcl.Expression
+}
+
+// Resolve evaluates the PKI role's CN, DNS SANs, and IP SANs with the given
+// subject bound as `${subject}`. Any field may be nil (not set in config).
+func (p *PKI) Resolve(subject string) (cn string, dnsSANs, ipSANs []string, err error) {
+	ectx := &hcl.EvalContext{
+		Variables: map[string]cty.Value{"subject": cty.StringVal(subject)},
+	}
+	cn = subject
+	if p.CNExpr != nil && !exprIsNil(p.CNExpr) {
+		v, diags := p.CNExpr.Value(ectx)
+		if diags.HasErrors() {
+			return "", nil, nil, fmt.Errorf("pki %q cn: %s", p.Name, diags.Error())
+		}
+		if v.Type() == cty.String {
+			cn = v.AsString()
+		}
+	}
+	dnsSANs, err = evalStringList(p.DNSSANsExpr, ectx, fmt.Sprintf("pki %q dns_sans", p.Name))
+	if err != nil {
+		return "", nil, nil, err
+	}
+	ipSANs, err = evalStringList(p.IPSANsExpr, ectx, fmt.Sprintf("pki %q ip_sans", p.Name))
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return cn, dnsSANs, ipSANs, nil
+}
+
+func exprIsNil(e hcl.Expression) bool {
+	if e == nil {
+		return true
+	}
+	// gohcl with `,optional` leaves the field as an empty literal expression
+	// that yields cty.NilVal / zero-length. We treat that as "not set".
+	r := e.Range()
+	return r.Start == r.End
+}
+
+func evalStringList(expr hcl.Expression, ectx *hcl.EvalContext, label string) ([]string, error) {
+	if expr == nil || exprIsNil(expr) {
+		return nil, nil
+	}
+	v, diags := expr.Value(ectx)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("%s: %s", label, diags.Error())
+	}
+	if v.IsNull() {
+		return nil, nil
+	}
+	if !v.Type().IsTupleType() && !v.Type().IsListType() {
+		return nil, fmt.Errorf("%s: expected list, got %s", label, v.Type().FriendlyName())
+	}
+	out := make([]string, 0, v.LengthInt())
+	it := v.ElementIterator()
+	for it.Next() {
+		_, ev := it.Element()
+		if ev.Type() != cty.String {
+			return nil, fmt.Errorf("%s: list element must be string", label)
+		}
+		out = append(out, ev.AsString())
+	}
+	return out, nil
+}
+
+// Template is a server-rendered HCL native template. Body is the raw template
+// text; resources referenced via ${kind.name} are resolved per-Fetch.
+type Template struct {
+	Name   string
+	Source string
+}
+
+// Policy is a Vault path/capability set.
+type Policy struct {
+	Name     string
+	Paths    []PathRule
+	Inherits []string
+}
+
+// PathRule is one `path "<glob>" { capabilities = [...] }` entry.
+type PathRule struct {
+	Pattern      string
+	Capabilities []string
+}
+
+// Identity binds attestors, a PKI role, and a policy.
+type Identity struct {
+	Name      string
+	Attestors []string // attestor kinds in order
+	PKIRef    string   // pki.<name>
+	PolicyRef string   // policy.<name>
+}
+
+// Load reads and validates an HCL config file.
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	return Parse(data, path)
+}
+
+// Parse parses HCL source bytes. `filename` is used only for diagnostics.
+func Parse(data []byte, filename string) (*Config, error) {
+	parser := hclparse.NewParser()
+	file, diags := parser.ParseHCL(data, filename)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("parse %s: %s", filename, diags.Error())
 	}
 
-	if cfg.Listen == "" {
+	// First pass: decode raw shape (references remain as hcl.Expression).
+	var raw rawConfig
+	if diags := gohcl.DecodeBody(file.Body, nil, &raw); diags.HasErrors() {
+		return nil, fmt.Errorf("decode %s: %s", filename, diags.Error())
+	}
+
+	cfg := &Config{
+		TrustDomain:   raw.TrustDomain,
+		Listen:        raw.Listen,
+		RenewFraction: raw.RenewFraction,
+		Attestors:     map[string]*Attestor{},
+		CAs:           map[string]*CA{},
+		Secrets:       map[string]*Secret{},
+		Vars:          map[string]*Var{},
+		JWTKeys:       map[string]*JWTKey{},
+		PKIs:          map[string]*PKI{},
+		Templates:     map[string]*Template{},
+		Policies:      map[string]*Policy{},
+		Identities:    map[string]*Identity{},
+	}
+
+	if raw.Listen == "" {
 		cfg.Listen = ":8443"
 	}
-	if cfg.KeyPath == "" {
-		cfg.KeyPath = "/etc/pigeon/enrollment-key"
-	}
-	if cfg.NoncePath == "" {
-		cfg.NoncePath = "/var/lib/pigeon-enroll/nonces"
-	}
-	d, err := parseDuration(cfg.TokenWindowRaw, 30*time.Minute)
-	if err != nil {
-		return Config{}, fmt.Errorf("parse token_window: %w", err)
-	}
-	cfg.TokenWindow = d
-
-	d, err = parseDuration(cfg.ServerCertTTLRaw, 30*24*time.Hour)
-	if err != nil {
-		return Config{}, fmt.Errorf("parse server_cert_ttl: %w", err)
-	}
-	cfg.ServerCertTTL = d
-
-	d, err = parseDuration(cfg.ClientCertTTLRaw, 24*time.Hour)
-	if err != nil {
-		return Config{}, fmt.Errorf("parse client_cert_ttl: %w", err)
-	}
-	cfg.ClientCertTTL = d
-
-	for i, c := range cfg.Certs {
-		if c.TTLRaw == "" {
-			return Config{}, fmt.Errorf("cert %q: ttl is required", c.Name)
-		}
-		d, err := time.ParseDuration(c.TTLRaw)
+	if raw.IdentityTTL != "" {
+		d, err := time.ParseDuration(raw.IdentityTTL)
 		if err != nil {
-			return Config{}, fmt.Errorf("cert %q: parse ttl: %w", c.Name, err)
+			return nil, fmt.Errorf("identity_ttl: %w", err)
 		}
-		cfg.Certs[i].TTL = d
-		if cfg.Certs[i].Mode == "" {
-			cfg.Certs[i].Mode = "push"
-		}
+		cfg.IdentityTTL = d
+	} else {
+		cfg.IdentityTTL = 720 * time.Hour
+	}
+	if cfg.RenewFraction == 0 {
+		cfg.RenewFraction = 0.5
 	}
 
-	for i, j := range cfg.JWTs {
-		if j.TTLRaw == "" {
-			return Config{}, fmt.Errorf("jwt %q: ttl is required", j.Name)
+	// Attestors
+	for _, a := range raw.Attestors {
+		if _, dup := cfg.Attestors[a.Kind]; dup {
+			return nil, fmt.Errorf("duplicate attestor %q", a.Kind)
 		}
-		d, err := time.ParseDuration(j.TTLRaw)
+		at, err := decodeAttestor(a)
 		if err != nil {
-			return Config{}, fmt.Errorf("jwt %q: parse ttl: %w", j.Name, err)
+			return nil, err
 		}
-		cfg.JWTs[i].TTL = d
+		cfg.Attestors[a.Kind] = at
 	}
 
-	if err := validate(cfg); err != nil {
-		return Config{}, err
+	// CAs
+	for _, c := range raw.CAs {
+		if _, dup := cfg.CAs[c.Name]; dup {
+			return nil, fmt.Errorf("duplicate ca %q", c.Name)
+		}
+		validity, err := parseDuration(c.Validity, "10y")
+		if err != nil {
+			return nil, fmt.Errorf("ca %q validity: %w", c.Name, err)
+		}
+		cfg.CAs[c.Name] = &CA{Name: c.Name, CN: c.CN, Validity: validity}
 	}
+
+	// Secrets
+	for _, s := range raw.Secrets {
+		if _, dup := cfg.Secrets[s.Name]; dup {
+			return nil, fmt.Errorf("duplicate secret %q", s.Name)
+		}
+		enc := s.Encoding
+		if enc == "" {
+			enc = "base64"
+		}
+		switch enc {
+		case "hex", "base64", "base64url", "raw":
+		default:
+			return nil, fmt.Errorf("secret %q: unknown encoding %q", s.Name, enc)
+		}
+		length := s.Length
+		if length == 0 {
+			length = 32
+		}
+		cfg.Secrets[s.Name] = &Secret{Name: s.Name, Length: length, Encoding: enc}
+	}
+
+	// Vars
+	for _, v := range raw.Vars {
+		if _, dup := cfg.Vars[v.Name]; dup {
+			return nil, fmt.Errorf("duplicate var %q", v.Name)
+		}
+		cfg.Vars[v.Name] = &Var{Name: v.Name, Value: v.Value}
+	}
+
+	// JWT keys
+	for _, j := range raw.JWTKeys {
+		if _, dup := cfg.JWTKeys[j.Name]; dup {
+			return nil, fmt.Errorf("duplicate jwt_key %q", j.Name)
+		}
+		alg := j.Alg
+		if alg == "" {
+			alg = "EdDSA"
+		}
+		if alg != "EdDSA" {
+			return nil, fmt.Errorf("jwt_key %q: only EdDSA supported, got %q", j.Name, alg)
+		}
+		ttl, err := parseDuration(j.TTL, "24h")
+		if err != nil {
+			return nil, fmt.Errorf("jwt_key %q ttl: %w", j.Name, err)
+		}
+		cfg.JWTKeys[j.Name] = &JWTKey{
+			Name:     j.Name,
+			Alg:      alg,
+			Issuer:   j.Issuer,
+			Audience: j.Audience,
+			TTL:      ttl,
+		}
+	}
+
+	// Templates
+	for _, t := range raw.Templates {
+		if _, dup := cfg.Templates[t.Name]; dup {
+			return nil, fmt.Errorf("duplicate template %q", t.Name)
+		}
+		if t.Source == "" {
+			return nil, fmt.Errorf("template %q: source is required", t.Name)
+		}
+		cfg.Templates[t.Name] = &Template{Name: t.Name, Source: t.Source}
+	}
+
+	// Policies
+	for _, p := range raw.Policies {
+		if _, dup := cfg.Policies[p.Name]; dup {
+			return nil, fmt.Errorf("duplicate policy %q", p.Name)
+		}
+		pol := &Policy{Name: p.Name, Inherits: p.Inherits}
+		for _, pr := range p.Paths {
+			if len(pr.Capabilities) == 0 {
+				return nil, fmt.Errorf("policy %q path %q: capabilities is required", p.Name, pr.Pattern)
+			}
+			for _, c := range pr.Capabilities {
+				switch c {
+				case "read", "write":
+				default:
+					return nil, fmt.Errorf("policy %q path %q: unknown capability %q", p.Name, pr.Pattern, c)
+				}
+			}
+			pol.Paths = append(pol.Paths, PathRule{Pattern: pr.Pattern, Capabilities: pr.Capabilities})
+		}
+		cfg.Policies[p.Name] = pol
+	}
+
+	// Second pass: resolve references in PKI and Identity using EvalContext.
+	ectx := buildEvalContext(cfg)
+
+	// PKIs (ca = ca.X)
+	for _, p := range raw.PKIs {
+		if _, dup := cfg.PKIs[p.Name]; dup {
+			return nil, fmt.Errorf("duplicate pki %q", p.Name)
+		}
+		caRef, err := evalRef(p.CA, "ca", ectx)
+		if err != nil {
+			return nil, fmt.Errorf("pki %q ca: %w", p.Name, err)
+		}
+		if _, ok := cfg.CAs[caRef]; !ok {
+			return nil, fmt.Errorf("pki %q: ca.%s not defined", p.Name, caRef)
+		}
+		ttl, err := parseDuration(p.TTL, "168h")
+		if err != nil {
+			return nil, fmt.Errorf("pki %q ttl: %w", p.Name, err)
+		}
+		eku := p.ExtKeyUsage
+		if len(eku) == 0 {
+			eku = []string{"client_auth"}
+		}
+		cfg.PKIs[p.Name] = &PKI{
+			Name:        p.Name,
+			CARef:       caRef,
+			TTL:         ttl,
+			ExtKeyUsage: eku,
+			DNSSANsExpr: p.DNSSANs,
+			IPSANsExpr:  p.IPSANs,
+			CNExpr:      p.CN,
+		}
+	}
+
+	// Rebuild EvalContext now that pki names are known.
+	ectx = buildEvalContext(cfg)
+
+	// Identities
+	for _, id := range raw.Identities {
+		if _, dup := cfg.Identities[id.Name]; dup {
+			return nil, fmt.Errorf("duplicate identity %q", id.Name)
+		}
+		attRefs, err := evalRefList(id.Attestors, "attestor", ectx)
+		if err != nil {
+			return nil, fmt.Errorf("identity %q attestors: %w", id.Name, err)
+		}
+		for _, k := range attRefs {
+			if _, ok := cfg.Attestors[k]; !ok {
+				return nil, fmt.Errorf("identity %q: attestor.%s not defined", id.Name, k)
+			}
+		}
+		pkiRef, err := evalRef(id.PKI, "pki", ectx)
+		if err != nil {
+			return nil, fmt.Errorf("identity %q pki: %w", id.Name, err)
+		}
+		if _, ok := cfg.PKIs[pkiRef]; !ok {
+			return nil, fmt.Errorf("identity %q: pki.%s not defined", id.Name, pkiRef)
+		}
+		polRef, err := evalRef(id.Policy, "policy", ectx)
+		if err != nil {
+			return nil, fmt.Errorf("identity %q policy: %w", id.Name, err)
+		}
+		if _, ok := cfg.Policies[polRef]; !ok {
+			return nil, fmt.Errorf("identity %q: policy.%s not defined", id.Name, polRef)
+		}
+		cfg.Identities[id.Name] = &Identity{
+			Name:      id.Name,
+			Attestors: attRefs,
+			PKIRef:    pkiRef,
+			PolicyRef: polRef,
+		}
+	}
+
+	// Validate policy inheritance.
+	for _, p := range cfg.Policies {
+		for _, inh := range p.Inherits {
+			if _, ok := cfg.Policies[inh]; !ok {
+				return nil, fmt.Errorf("policy %q: inherits unknown policy %q", p.Name, inh)
+			}
+		}
+	}
+
+	if cfg.TrustDomain == "" {
+		return nil, fmt.Errorf("trust_domain is required")
+	}
+
 	return cfg, nil
 }
 
-// parseDuration parses a Go duration string, returning defaultVal if raw is empty.
-func parseDuration(raw string, defaultVal time.Duration) (time.Duration, error) {
-	if raw == "" {
-		return defaultVal, nil
+func decodeAttestor(r rawAttestor) (*Attestor, error) {
+	a := &Attestor{Kind: r.Kind}
+	switch r.Kind {
+	case "tpm":
+		var body tpmAttestorBody
+		if diags := gohcl.DecodeBody(r.Body, nil, &body); diags.HasErrors() {
+			return nil, fmt.Errorf("attestor tpm: %s", diags.Error())
+		}
+		a.EKCAPath = body.EKCAPath
+		a.EKHashPath = body.EKHashPath
+	case "hmac":
+		var body hmacAttestorBody
+		if diags := gohcl.DecodeBody(r.Body, nil, &body); diags.HasErrors() {
+			return nil, fmt.Errorf("attestor hmac: %s", diags.Error())
+		}
+		if body.KeyPath == "" {
+			return nil, fmt.Errorf("attestor hmac: key_path is required")
+		}
+		a.KeyPath = body.KeyPath
+		win, err := parseDuration(body.Window, "30m")
+		if err != nil {
+			return nil, fmt.Errorf("attestor hmac window: %w", err)
+		}
+		a.Window = win
+	case "bootstrap_cert":
+		// No body fields.
+	default:
+		return nil, fmt.Errorf("unknown attestor kind %q", r.Kind)
 	}
-	return time.ParseDuration(raw)
+	return a, nil
 }
 
-func validate(cfg Config) error {
-	if cfg.TokenWindow < time.Second {
-		return fmt.Errorf("token_window must be at least 1s")
+func parseDuration(s, def string) (time.Duration, error) {
+	if s == "" {
+		s = def
 	}
-	if cfg.ServerCertTTL < time.Second {
-		return fmt.Errorf("server_cert_ttl must be at least 1s")
-	}
-	if len(cfg.Vars) == 0 && len(cfg.Secrets) == 0 && len(cfg.CAs) == 0 && len(cfg.JWTs) == 0 && len(cfg.Certs) == 0 && len(cfg.Actions) == 0 && len(cfg.Templates) == 0 {
-		return fmt.Errorf("config must define at least one of: vars, secret, ca, cert, jwt, template, or action")
-	}
-	seen := make(map[string]bool, len(cfg.Secrets)+len(cfg.Vars))
-	for _, s := range cfg.Secrets {
-		if s.Name == "" {
-			return fmt.Errorf("secrets: name is required")
-		}
-		if strings.ContainsAny(s.Name, " \x00") {
-			return fmt.Errorf("secret %q: name must not contain spaces or NUL", s.Name)
-		}
-		if strings.ContainsAny(s.Scope, " \x00") {
-			return fmt.Errorf("secret %q: scope must not contain spaces or NUL", s.Scope)
-		}
-		if s.Length <= 0 {
-			return fmt.Errorf("secret %q: length must be positive", s.Name)
-		}
-		if s.Length > 8160 {
-			return fmt.Errorf("secret %q: length must not exceed 8160 (HKDF-SHA256 maximum)", s.Name)
-		}
-		if s.Encoding != "base64" && s.Encoding != "hex" {
-			return fmt.Errorf("secret %q: encoding must be \"base64\" or \"hex\"", s.Name)
-		}
-		if seen[s.Name] {
-			return fmt.Errorf("secret %q: duplicate name", s.Name)
-		}
-		seen[s.Name] = true
-	}
-	for k := range cfg.Vars {
-		if seen[k] {
-			return fmt.Errorf("var %q conflicts with a secret entry", k)
-		}
-	}
-
-	caNames := make(map[string]bool, len(cfg.CAs))
-	for _, ca := range cfg.CAs {
-		if ca.Name == "" {
-			return fmt.Errorf("ca: name is required")
-		}
-		if caNames[ca.Name] {
-			return fmt.Errorf("ca %q: duplicate name", ca.Name)
-		}
-		for _, s := range ca.Scope {
-			if s == "" {
-				return fmt.Errorf("ca %q: scope entries must not be empty strings", ca.Name)
-			}
-		}
-		caNames[ca.Name] = true
-	}
-
-	certNames := make(map[string]bool, len(cfg.Certs))
-	for _, c := range cfg.Certs {
-		if c.Name == "" {
-			return fmt.Errorf("cert: name is required")
-		}
-		if certNames[c.Name] {
-			return fmt.Errorf("cert %q: duplicate name", c.Name)
-		}
-		if caNames[c.Name] {
-			return fmt.Errorf("cert %q: name conflicts with a ca block", c.Name)
-		}
-		certNames[c.Name] = true
-		if !caNames[c.CA] {
-			return fmt.Errorf("cert %q: ca %q is not defined", c.Name, c.CA)
-		}
-		if c.Mode != "" && c.Mode != "push" && c.Mode != "csr" {
-			return fmt.Errorf("cert %q: mode must be \"push\" or \"csr\"", c.Name)
-		}
-		if len(c.Scope) == 0 {
-			return fmt.Errorf("cert %q: scope must not be empty", c.Name)
-		}
-		for _, s := range c.Scope {
-			if s == "" {
-				return fmt.Errorf("cert %q: scope entries must not be empty strings", c.Name)
-			}
-		}
-		// Structural validation: decode deferred SANs with a placeholder to
-		// catch HCL syntax errors at load time rather than claim time.
-		if _, _, err := c.ResolveSANs("validate.placeholder"); err != nil {
-			return fmt.Errorf("cert %q: %w", c.Name, err)
-		}
-		if c.TTL < time.Minute {
-			return fmt.Errorf("cert %q: ttl must be at least 1m", c.Name)
-		}
-		serverAuth := c.ServerAuth != nil && *c.ServerAuth
-		clientAuth := c.ClientAuth == nil || *c.ClientAuth
-		if !serverAuth && !clientAuth {
-			return fmt.Errorf("cert %q: at least one of client_auth or server_auth must be true", c.Name)
-		}
-	}
-
-	jwtNames := make(map[string]bool, len(cfg.JWTs))
-	for _, j := range cfg.JWTs {
-		if j.Name == "" {
-			return fmt.Errorf("jwt: name is required")
-		}
-		if jwtNames[j.Name] {
-			return fmt.Errorf("jwt %q: duplicate name", j.Name)
-		}
-		jwtNames[j.Name] = true
-		if j.Issuer == "" {
-			return fmt.Errorf("jwt %q: issuer is required", j.Name)
-		}
-		if j.Audience == "" {
-			return fmt.Errorf("jwt %q: audience is required", j.Name)
-		}
-		if j.TTL < time.Minute {
-			return fmt.Errorf("jwt %q: ttl must be at least 1m", j.Name)
-		}
-		if j.Scope == "" {
-			return fmt.Errorf("jwt %q: scope is required", j.Name)
-		}
-	}
-
-	tplNames := make(map[string]bool, len(cfg.Templates))
-	for _, t := range cfg.Templates {
-		if t.Name == "" {
-			return fmt.Errorf("template: name is required")
-		}
-		if tplNames[t.Name] {
-			return fmt.Errorf("template %q: duplicate name", t.Name)
-		}
-		tplNames[t.Name] = true
-		if t.Source == "" {
-			return fmt.Errorf("template %q: source is required", t.Name)
-		}
-		if t.Scope == "" {
-			return fmt.Errorf("template %q: scope is required", t.Name)
-		}
-	}
-	if len(cfg.Templates) > 0 && cfg.ClientCertTTL < time.Minute {
-		return fmt.Errorf("client_cert_ttl must be at least 1m when templates are defined")
-	}
-
-	// Validate EK identity config (SPIRE pattern: at least one required when TPM is required).
-	if cfg.RequireTPM && cfg.EKCAPath == "" && cfg.EKHashPath == "" {
-		return fmt.Errorf("require_tpm is set but neither ek_ca_path nor ek_hash_path is configured")
-	}
-	if cfg.EKCAPath != "" {
-		info, err := os.Stat(cfg.EKCAPath)
+	// Accept "10y" shorthand (not supported by time.ParseDuration).
+	if strings.HasSuffix(s, "y") {
+		years, err := time.ParseDuration(strings.TrimSuffix(s, "y") + "h")
 		if err != nil {
-			return fmt.Errorf("ek_ca_path: %w", err)
+			return 0, err
 		}
-		if !info.IsDir() {
-			return fmt.Errorf("ek_ca_path must be a directory")
-		}
+		return years * 24 * 365, nil
 	}
-	if cfg.EKHashPath != "" {
-		info, err := os.Stat(cfg.EKHashPath)
+	if strings.HasSuffix(s, "d") {
+		days, err := time.ParseDuration(strings.TrimSuffix(s, "d") + "h")
 		if err != nil {
-			return fmt.Errorf("ek_hash_path: %w", err)
+			return 0, err
 		}
-		if info.IsDir() {
-			return fmt.Errorf("ek_hash_path must be a regular file")
-		}
+		return days * 24, nil
 	}
-
-	// Validate action configs: no duplicate types, reference known secrets.
-	actionTypes := make(map[string]bool, len(cfg.Actions))
-	for i, acfg := range cfg.Actions {
-		if acfg.Type == "" {
-			return fmt.Errorf("actions[%d]: type is required", i)
-		}
-		if actionTypes[acfg.Type] {
-			return fmt.Errorf("duplicate action type %q", acfg.Type)
-		}
-		actionTypes[acfg.Type] = true
-
-		a, err := action.New(acfg)
-		if err != nil {
-			return fmt.Errorf("action %q: %w", acfg.Type, err)
-		}
-		for _, name := range a.SecretNames() {
-			if !seen[name] {
-				return fmt.Errorf("action %q references secret %q which is not defined", acfg.Type, name)
-			}
-		}
-	}
-
-	return nil
+	return time.ParseDuration(s)
 }
 
-// CheckKeyFile verifies the enrollment key file exists and has safe permissions.
-func CheckKeyFile(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("enrollment key not found at %s: %w (must be provisioned by Terraform)", path, err)
+// buildEvalContext exposes declared block names as cty string values, so that
+// references like `ca = ca.mesh` evaluate to the string "mesh".
+func buildEvalContext(cfg *Config) *hcl.EvalContext {
+	vars := map[string]cty.Value{}
+
+	vars["attestor"] = refObject(cfg.Attestors)
+	vars["ca"] = refObjectCAs(cfg.CAs)
+	vars["pki"] = refObjectPKIs(cfg.PKIs)
+	vars["policy"] = refObjectPolicies(cfg.Policies)
+
+	return &hcl.EvalContext{Variables: vars}
+}
+
+// refObject builds an HCL reference object from a map of *Attestor. Empty map
+// becomes cty.EmptyObjectVal so that `attestor.missing` produces a clean
+// "unsupported attribute" error instead of "unknown variable".
+func refObject(m map[string]*Attestor) cty.Value {
+	if len(m) == 0 {
+		return cty.EmptyObjectVal
+	}
+	obj := make(map[string]cty.Value, len(m))
+	for k := range m {
+		obj[k] = cty.StringVal(k)
+	}
+	return cty.ObjectVal(obj)
+}
+
+func refObjectCAs(m map[string]*CA) cty.Value {
+	if len(m) == 0 {
+		return cty.EmptyObjectVal
+	}
+	obj := make(map[string]cty.Value, len(m))
+	for k := range m {
+		obj[k] = cty.StringVal(k)
+	}
+	return cty.ObjectVal(obj)
+}
+
+func refObjectPKIs(m map[string]*PKI) cty.Value {
+	if len(m) == 0 {
+		return cty.EmptyObjectVal
+	}
+	obj := make(map[string]cty.Value, len(m))
+	for k := range m {
+		obj[k] = cty.StringVal(k)
+	}
+	return cty.ObjectVal(obj)
+}
+
+func refObjectPolicies(m map[string]*Policy) cty.Value {
+	if len(m) == 0 {
+		return cty.EmptyObjectVal
+	}
+	obj := make(map[string]cty.Value, len(m))
+	for k := range m {
+		obj[k] = cty.StringVal(k)
+	}
+	return cty.ObjectVal(obj)
+}
+
+// evalRef evaluates a single-reference expression to the referenced name.
+// Accepts bare strings too (for programmatic use).
+func evalRef(expr hcl.Expression, expectedRoot string, ectx *hcl.EvalContext) (string, error) {
+	if expr == nil {
+		return "", fmt.Errorf("reference is required")
+	}
+	v, diags := expr.Value(ectx)
+	if diags.HasErrors() {
+		return "", fmt.Errorf("%s", diags.Error())
+	}
+	if v.Type() != cty.String {
+		return "", fmt.Errorf("expected %s.<name>, got %s", expectedRoot, v.Type().FriendlyName())
+	}
+	return v.AsString(), nil
+}
+
+func evalRefList(expr hcl.Expression, expectedRoot string, ectx *hcl.EvalContext) ([]string, error) {
+	if expr == nil {
+		return nil, fmt.Errorf("reference list is required")
+	}
+	v, diags := expr.Value(ectx)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("%s", diags.Error())
+	}
+	if !v.Type().IsTupleType() && !v.Type().IsListType() {
+		return nil, fmt.Errorf("expected list of %s.<name>, got %s", expectedRoot, v.Type().FriendlyName())
+	}
+	out := make([]string, 0, v.LengthInt())
+	it := v.ElementIterator()
+	for it.Next() {
+		_, ev := it.Element()
+		if ev.Type() != cty.String {
+			return nil, fmt.Errorf("list element must be %s.<name> reference", expectedRoot)
 		}
-		return fmt.Errorf("cannot access enrollment key at %s: %w", path, err)
+		out = append(out, ev.AsString())
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
-		return fmt.Errorf("enrollment key file %s has loose permissions %04o — must be 0600", path, info.Mode().Perm())
-	}
-	return nil
+	return out, nil
 }

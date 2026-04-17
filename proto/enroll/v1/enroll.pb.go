@@ -21,122 +21,32 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// RenderRequest identifies which server-side template to render.
-type RenderRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RenderRequest) Reset() {
-	*x = RenderRequest{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RenderRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RenderRequest) ProtoMessage() {}
-
-func (x *RenderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RenderRequest.ProtoReflect.Descriptor instead.
-func (*RenderRequest) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *RenderRequest) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-// RenderResponse contains the rendered template content.
-type RenderResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RenderResponse) Reset() {
-	*x = RenderResponse{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RenderResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RenderResponse) ProtoMessage() {}
-
-func (x *RenderResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RenderResponse.ProtoReflect.Descriptor instead.
-func (*RenderResponse) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *RenderResponse) GetContent() string {
-	if x != nil {
-		return x.Content
-	}
-	return ""
-}
-
-type ClaimRequest struct {
+type RegisterRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Step:
 	//
-	//	*ClaimRequest_Params
-	//	*ClaimRequest_ChallengeResponse
-	Step          isClaimRequest_Step `protobuf_oneof:"step"`
+	//	*RegisterRequest_Params
+	//	*RegisterRequest_ChallengeResponse
+	Step          isRegisterRequest_Step `protobuf_oneof:"step"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ClaimRequest) Reset() {
-	*x = ClaimRequest{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[2]
+func (x *RegisterRequest) Reset() {
+	*x = RegisterRequest{}
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ClaimRequest) String() string {
+func (x *RegisterRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ClaimRequest) ProtoMessage() {}
+func (*RegisterRequest) ProtoMessage() {}
 
-func (x *ClaimRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[2]
+func (x *RegisterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -147,84 +57,79 @@ func (x *ClaimRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ClaimRequest.ProtoReflect.Descriptor instead.
-func (*ClaimRequest) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{2}
+// Deprecated: Use RegisterRequest.ProtoReflect.Descriptor instead.
+func (*RegisterRequest) Descriptor() ([]byte, []int) {
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *ClaimRequest) GetStep() isClaimRequest_Step {
+func (x *RegisterRequest) GetStep() isRegisterRequest_Step {
 	if x != nil {
 		return x.Step
 	}
 	return nil
 }
 
-func (x *ClaimRequest) GetParams() *ClaimParams {
+func (x *RegisterRequest) GetParams() *RegisterParams {
 	if x != nil {
-		if x, ok := x.Step.(*ClaimRequest_Params); ok {
+		if x, ok := x.Step.(*RegisterRequest_Params); ok {
 			return x.Params
 		}
 	}
 	return nil
 }
 
-func (x *ClaimRequest) GetChallengeResponse() []byte {
+func (x *RegisterRequest) GetChallengeResponse() []byte {
 	if x != nil {
-		if x, ok := x.Step.(*ClaimRequest_ChallengeResponse); ok {
+		if x, ok := x.Step.(*RegisterRequest_ChallengeResponse); ok {
 			return x.ChallengeResponse
 		}
 	}
 	return nil
 }
 
-type isClaimRequest_Step interface {
-	isClaimRequest_Step()
+type isRegisterRequest_Step interface {
+	isRegisterRequest_Step()
 }
 
-type ClaimRequest_Params struct {
-	// Initial request with authentication and optional TPM data.
-	Params *ClaimParams `protobuf:"bytes,1,opt,name=params,proto3,oneof"`
+type RegisterRequest_Params struct {
+	Params *RegisterParams `protobuf:"bytes,1,opt,name=params,proto3,oneof"`
 }
 
-type ClaimRequest_ChallengeResponse struct {
-	// Response to a TPM credential activation challenge.
+type RegisterRequest_ChallengeResponse struct {
 	ChallengeResponse []byte `protobuf:"bytes,2,opt,name=challenge_response,json=challengeResponse,proto3,oneof"`
 }
 
-func (*ClaimRequest_Params) isClaimRequest_Step() {}
+func (*RegisterRequest_Params) isRegisterRequest_Step() {}
 
-func (*ClaimRequest_ChallengeResponse) isClaimRequest_Step() {}
+func (*RegisterRequest_ChallengeResponse) isRegisterRequest_Step() {}
 
-// ClaimParams is the initial message in a Claim stream.
-type ClaimParams struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	Token   string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
-	Scope   string                 `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"`
-	Subject string                 `protobuf:"bytes,3,opt,name=subject,proto3" json:"subject,omitempty"`
-	// If absent, claim is token-only (no TPM attestation).
-	Tpm *TPMParams `protobuf:"bytes,4,opt,name=tpm,proto3" json:"tpm,omitempty"`
-	// Optional CSR for cert blocks with mode = "csr".
-	// DER-encoded PKCS#10 CertificateRequest.
-	CsrDer        []byte `protobuf:"bytes,5,opt,name=csr_der,json=csrDer,proto3" json:"csr_der,omitempty"`
+type RegisterParams struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Identity      string                 `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
+	Subject       string                 `protobuf:"bytes,2,opt,name=subject,proto3" json:"subject,omitempty"`
+	CsrDer        []byte                 `protobuf:"bytes,3,opt,name=csr_der,json=csrDer,proto3" json:"csr_der,omitempty"`
+	Tpm           *TPMEvidence           `protobuf:"bytes,10,opt,name=tpm,proto3" json:"tpm,omitempty"`
+	Hmac          *HMACEvidence          `protobuf:"bytes,11,opt,name=hmac,proto3" json:"hmac,omitempty"`
+	BootstrapCert *BootstrapCertEvidence `protobuf:"bytes,12,opt,name=bootstrap_cert,json=bootstrapCert,proto3" json:"bootstrap_cert,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ClaimParams) Reset() {
-	*x = ClaimParams{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[3]
+func (x *RegisterParams) Reset() {
+	*x = RegisterParams{}
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ClaimParams) String() string {
+func (x *RegisterParams) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ClaimParams) ProtoMessage() {}
+func (*RegisterParams) ProtoMessage() {}
 
-func (x *ClaimParams) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[3]
+func (x *RegisterParams) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -235,79 +140,209 @@ func (x *ClaimParams) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ClaimParams.ProtoReflect.Descriptor instead.
-func (*ClaimParams) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{3}
+// Deprecated: Use RegisterParams.ProtoReflect.Descriptor instead.
+func (*RegisterParams) Descriptor() ([]byte, []int) {
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *ClaimParams) GetToken() string {
+func (x *RegisterParams) GetIdentity() string {
 	if x != nil {
-		return x.Token
+		return x.Identity
 	}
 	return ""
 }
 
-func (x *ClaimParams) GetScope() string {
-	if x != nil {
-		return x.Scope
-	}
-	return ""
-}
-
-func (x *ClaimParams) GetSubject() string {
+func (x *RegisterParams) GetSubject() string {
 	if x != nil {
 		return x.Subject
 	}
 	return ""
 }
 
-func (x *ClaimParams) GetTpm() *TPMParams {
-	if x != nil {
-		return x.Tpm
-	}
-	return nil
-}
-
-func (x *ClaimParams) GetCsrDer() []byte {
+func (x *RegisterParams) GetCsrDer() []byte {
 	if x != nil {
 		return x.CsrDer
 	}
 	return nil
 }
 
-// TPMParams carries TPM attestation data (go-attestation AttestationParameters).
-type TPMParams struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// PKIX DER-encoded EK public key.
-	EkPublic []byte `protobuf:"bytes,1,opt,name=ek_public,json=ekPublic,proto3" json:"ek_public,omitempty"`
-	// DER-encoded X.509 EK certificate (optional, for CA chain validation).
-	EkCert []byte `protobuf:"bytes,2,opt,name=ek_cert,json=ekCert,proto3" json:"ek_cert,omitempty"`
-	// AK canonical encoding (includes public key + signing parameters).
-	AkPublic []byte `protobuf:"bytes,3,opt,name=ak_public,json=akPublic,proto3" json:"ak_public,omitempty"`
-	// TPMS_CREATION_DATA encoding.
-	AkCreateData []byte `protobuf:"bytes,4,opt,name=ak_create_data,json=akCreateData,proto3" json:"ak_create_data,omitempty"`
-	// TPMS_ATTEST encoding.
-	AkCreateAttestation []byte `protobuf:"bytes,5,opt,name=ak_create_attestation,json=akCreateAttestation,proto3" json:"ak_create_attestation,omitempty"`
-	// TPMT_SIGNATURE encoding.
-	AkCreateSignature []byte `protobuf:"bytes,6,opt,name=ak_create_signature,json=akCreateSignature,proto3" json:"ak_create_signature,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+func (x *RegisterParams) GetTpm() *TPMEvidence {
+	if x != nil {
+		return x.Tpm
+	}
+	return nil
 }
 
-func (x *TPMParams) Reset() {
-	*x = TPMParams{}
+func (x *RegisterParams) GetHmac() *HMACEvidence {
+	if x != nil {
+		return x.Hmac
+	}
+	return nil
+}
+
+func (x *RegisterParams) GetBootstrapCert() *BootstrapCertEvidence {
+	if x != nil {
+		return x.BootstrapCert
+	}
+	return nil
+}
+
+type TPMEvidence struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	EkPublic            []byte                 `protobuf:"bytes,1,opt,name=ek_public,json=ekPublic,proto3" json:"ek_public,omitempty"`
+	EkCert              []byte                 `protobuf:"bytes,2,opt,name=ek_cert,json=ekCert,proto3" json:"ek_cert,omitempty"`
+	AkPublic            []byte                 `protobuf:"bytes,3,opt,name=ak_public,json=akPublic,proto3" json:"ak_public,omitempty"`
+	AkCreateData        []byte                 `protobuf:"bytes,4,opt,name=ak_create_data,json=akCreateData,proto3" json:"ak_create_data,omitempty"`
+	AkCreateAttestation []byte                 `protobuf:"bytes,5,opt,name=ak_create_attestation,json=akCreateAttestation,proto3" json:"ak_create_attestation,omitempty"`
+	AkCreateSignature   []byte                 `protobuf:"bytes,6,opt,name=ak_create_signature,json=akCreateSignature,proto3" json:"ak_create_signature,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *TPMEvidence) Reset() {
+	*x = TPMEvidence{}
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TPMEvidence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TPMEvidence) ProtoMessage() {}
+
+func (x *TPMEvidence) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TPMEvidence.ProtoReflect.Descriptor instead.
+func (*TPMEvidence) Descriptor() ([]byte, []int) {
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *TPMEvidence) GetEkPublic() []byte {
+	if x != nil {
+		return x.EkPublic
+	}
+	return nil
+}
+
+func (x *TPMEvidence) GetEkCert() []byte {
+	if x != nil {
+		return x.EkCert
+	}
+	return nil
+}
+
+func (x *TPMEvidence) GetAkPublic() []byte {
+	if x != nil {
+		return x.AkPublic
+	}
+	return nil
+}
+
+func (x *TPMEvidence) GetAkCreateData() []byte {
+	if x != nil {
+		return x.AkCreateData
+	}
+	return nil
+}
+
+func (x *TPMEvidence) GetAkCreateAttestation() []byte {
+	if x != nil {
+		return x.AkCreateAttestation
+	}
+	return nil
+}
+
+func (x *TPMEvidence) GetAkCreateSignature() []byte {
+	if x != nil {
+		return x.AkCreateSignature
+	}
+	return nil
+}
+
+type HMACEvidence struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	Scope         string                 `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HMACEvidence) Reset() {
+	*x = HMACEvidence{}
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HMACEvidence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HMACEvidence) ProtoMessage() {}
+
+func (x *HMACEvidence) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HMACEvidence.ProtoReflect.Descriptor instead.
+func (*HMACEvidence) Descriptor() ([]byte, []int) {
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *HMACEvidence) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+func (x *HMACEvidence) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+type BootstrapCertEvidence struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BootstrapCertEvidence) Reset() {
+	*x = BootstrapCertEvidence{}
 	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *TPMParams) String() string {
+func (x *BootstrapCertEvidence) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*TPMParams) ProtoMessage() {}
+func (*BootstrapCertEvidence) ProtoMessage() {}
 
-func (x *TPMParams) ProtoReflect() protoreflect.Message {
+func (x *BootstrapCertEvidence) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -319,54 +354,93 @@ func (x *TPMParams) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use TPMParams.ProtoReflect.Descriptor instead.
-func (*TPMParams) Descriptor() ([]byte, []int) {
+// Deprecated: Use BootstrapCertEvidence.ProtoReflect.Descriptor instead.
+func (*BootstrapCertEvidence) Descriptor() ([]byte, []int) {
 	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *TPMParams) GetEkPublic() []byte {
+type RegisterResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Step:
+	//
+	//	*RegisterResponse_Challenge
+	//	*RegisterResponse_Result
+	Step          isRegisterResponse_Step `protobuf_oneof:"step"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegisterResponse) Reset() {
+	*x = RegisterResponse{}
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterResponse) ProtoMessage() {}
+
+func (x *RegisterResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[5]
 	if x != nil {
-		return x.EkPublic
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterResponse.ProtoReflect.Descriptor instead.
+func (*RegisterResponse) Descriptor() ([]byte, []int) {
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *RegisterResponse) GetStep() isRegisterResponse_Step {
+	if x != nil {
+		return x.Step
 	}
 	return nil
 }
 
-func (x *TPMParams) GetEkCert() []byte {
+func (x *RegisterResponse) GetChallenge() *TPMChallenge {
 	if x != nil {
-		return x.EkCert
+		if x, ok := x.Step.(*RegisterResponse_Challenge); ok {
+			return x.Challenge
+		}
 	}
 	return nil
 }
 
-func (x *TPMParams) GetAkPublic() []byte {
+func (x *RegisterResponse) GetResult() *RegisterResult {
 	if x != nil {
-		return x.AkPublic
+		if x, ok := x.Step.(*RegisterResponse_Result); ok {
+			return x.Result
+		}
 	}
 	return nil
 }
 
-func (x *TPMParams) GetAkCreateData() []byte {
-	if x != nil {
-		return x.AkCreateData
-	}
-	return nil
+type isRegisterResponse_Step interface {
+	isRegisterResponse_Step()
 }
 
-func (x *TPMParams) GetAkCreateAttestation() []byte {
-	if x != nil {
-		return x.AkCreateAttestation
-	}
-	return nil
+type RegisterResponse_Challenge struct {
+	Challenge *TPMChallenge `protobuf:"bytes,1,opt,name=challenge,proto3,oneof"`
 }
 
-func (x *TPMParams) GetAkCreateSignature() []byte {
-	if x != nil {
-		return x.AkCreateSignature
-	}
-	return nil
+type RegisterResponse_Result struct {
+	Result *RegisterResult `protobuf:"bytes,2,opt,name=result,proto3,oneof"`
 }
 
-// TPMChallenge is a credential activation challenge (go-attestation EncryptedCredential).
+func (*RegisterResponse_Challenge) isRegisterResponse_Step() {}
+
+func (*RegisterResponse_Result) isRegisterResponse_Step() {}
+
 type TPMChallenge struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Credential    []byte                 `protobuf:"bytes,1,opt,name=credential,proto3" json:"credential,omitempty"`
@@ -377,7 +451,7 @@ type TPMChallenge struct {
 
 func (x *TPMChallenge) Reset() {
 	*x = TPMChallenge{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[5]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -389,7 +463,7 @@ func (x *TPMChallenge) String() string {
 func (*TPMChallenge) ProtoMessage() {}
 
 func (x *TPMChallenge) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[5]
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -402,7 +476,7 @@ func (x *TPMChallenge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TPMChallenge.ProtoReflect.Descriptor instead.
 func (*TPMChallenge) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{5}
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *TPMChallenge) GetCredential() []byte {
@@ -419,116 +493,31 @@ func (x *TPMChallenge) GetSecret() []byte {
 	return nil
 }
 
-type ClaimResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Step:
-	//
-	//	*ClaimResponse_Challenge
-	//	*ClaimResponse_Result
-	Step          isClaimResponse_Step `protobuf_oneof:"step"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+type RegisterResult struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	CertPem           []byte                 `protobuf:"bytes,1,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
+	KeyPem            []byte                 `protobuf:"bytes,2,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`
+	CaBundlePem       []byte                 `protobuf:"bytes,3,opt,name=ca_bundle_pem,json=caBundlePem,proto3" json:"ca_bundle_pem,omitempty"`
+	RenewAfterSeconds uint32                 `protobuf:"varint,4,opt,name=renew_after_seconds,json=renewAfterSeconds,proto3" json:"renew_after_seconds,omitempty"`
+	ExpiresInSeconds  uint32                 `protobuf:"varint,5,opt,name=expires_in_seconds,json=expiresInSeconds,proto3" json:"expires_in_seconds,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
-func (x *ClaimResponse) Reset() {
-	*x = ClaimResponse{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ClaimResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ClaimResponse) ProtoMessage() {}
-
-func (x *ClaimResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ClaimResponse.ProtoReflect.Descriptor instead.
-func (*ClaimResponse) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *ClaimResponse) GetStep() isClaimResponse_Step {
-	if x != nil {
-		return x.Step
-	}
-	return nil
-}
-
-func (x *ClaimResponse) GetChallenge() *TPMChallenge {
-	if x != nil {
-		if x, ok := x.Step.(*ClaimResponse_Challenge); ok {
-			return x.Challenge
-		}
-	}
-	return nil
-}
-
-func (x *ClaimResponse) GetResult() *ClaimResult {
-	if x != nil {
-		if x, ok := x.Step.(*ClaimResponse_Result); ok {
-			return x.Result
-		}
-	}
-	return nil
-}
-
-type isClaimResponse_Step interface {
-	isClaimResponse_Step()
-}
-
-type ClaimResponse_Challenge struct {
-	// Intermediate: TPM credential activation challenge.
-	Challenge *TPMChallenge `protobuf:"bytes,1,opt,name=challenge,proto3,oneof"`
-}
-
-type ClaimResponse_Result struct {
-	// Final: enrollment result with secrets.
-	Result *ClaimResult `protobuf:"bytes,2,opt,name=result,proto3,oneof"`
-}
-
-func (*ClaimResponse_Challenge) isClaimResponse_Step() {}
-
-func (*ClaimResponse_Result) isClaimResponse_Step() {}
-
-type ClaimResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Secrets       map[string]string      `protobuf:"bytes,1,rep,name=secrets,proto3" json:"secrets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Vars          map[string]string      `protobuf:"bytes,2,rep,name=vars,proto3" json:"vars,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Ca            map[string]*CACert     `protobuf:"bytes,3,rep,name=ca,proto3" json:"ca,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Certs         map[string]*CertBundle `protobuf:"bytes,4,rep,name=certs,proto3" json:"certs,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Jwts          map[string]string      `protobuf:"bytes,5,rep,name=jwts,proto3" json:"jwts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	JwtKeys       map[string]string      `protobuf:"bytes,6,rep,name=jwt_keys,json=jwtKeys,proto3" json:"jwt_keys,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ClaimResult) Reset() {
-	*x = ClaimResult{}
+func (x *RegisterResult) Reset() {
+	*x = RegisterResult{}
 	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ClaimResult) String() string {
+func (x *RegisterResult) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ClaimResult) ProtoMessage() {}
+func (*RegisterResult) ProtoMessage() {}
 
-func (x *ClaimResult) ProtoReflect() protoreflect.Message {
+func (x *RegisterResult) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -540,231 +529,348 @@ func (x *ClaimResult) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ClaimResult.ProtoReflect.Descriptor instead.
-func (*ClaimResult) Descriptor() ([]byte, []int) {
+// Deprecated: Use RegisterResult.ProtoReflect.Descriptor instead.
+func (*RegisterResult) Descriptor() ([]byte, []int) {
 	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *ClaimResult) GetSecrets() map[string]string {
-	if x != nil {
-		return x.Secrets
-	}
-	return nil
-}
-
-func (x *ClaimResult) GetVars() map[string]string {
-	if x != nil {
-		return x.Vars
-	}
-	return nil
-}
-
-func (x *ClaimResult) GetCa() map[string]*CACert {
-	if x != nil {
-		return x.Ca
-	}
-	return nil
-}
-
-func (x *ClaimResult) GetCerts() map[string]*CertBundle {
-	if x != nil {
-		return x.Certs
-	}
-	return nil
-}
-
-func (x *ClaimResult) GetJwts() map[string]string {
-	if x != nil {
-		return x.Jwts
-	}
-	return nil
-}
-
-func (x *ClaimResult) GetJwtKeys() map[string]string {
-	if x != nil {
-		return x.JwtKeys
-	}
-	return nil
-}
-
-// CACert holds a CA certificate and optionally its private key (scope-gated).
-type CACert struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CertPem       string                 `protobuf:"bytes,1,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
-	PrivateKeyPem string                 `protobuf:"bytes,2,opt,name=private_key_pem,json=privateKeyPem,proto3" json:"private_key_pem,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CACert) Reset() {
-	*x = CACert{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CACert) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CACert) ProtoMessage() {}
-
-func (x *CACert) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CACert.ProtoReflect.Descriptor instead.
-func (*CACert) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *CACert) GetCertPem() string {
+func (x *RegisterResult) GetCertPem() []byte {
 	if x != nil {
 		return x.CertPem
 	}
-	return ""
+	return nil
 }
 
-func (x *CACert) GetPrivateKeyPem() string {
-	if x != nil {
-		return x.PrivateKeyPem
-	}
-	return ""
-}
-
-// CertBundle holds a leaf certificate and optionally its private key.
-type CertBundle struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	CertPem string                 `protobuf:"bytes,1,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
-	// Present for push-mode certs; empty for CSR-mode (worker has the key).
-	KeyPem        string `protobuf:"bytes,2,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CertBundle) Reset() {
-	*x = CertBundle{}
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[9]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CertBundle) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CertBundle) ProtoMessage() {}
-
-func (x *CertBundle) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[9]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CertBundle.ProtoReflect.Descriptor instead.
-func (*CertBundle) Descriptor() ([]byte, []int) {
-	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{9}
-}
-
-func (x *CertBundle) GetCertPem() string {
-	if x != nil {
-		return x.CertPem
-	}
-	return ""
-}
-
-func (x *CertBundle) GetKeyPem() string {
+func (x *RegisterResult) GetKeyPem() []byte {
 	if x != nil {
 		return x.KeyPem
 	}
+	return nil
+}
+
+func (x *RegisterResult) GetCaBundlePem() []byte {
+	if x != nil {
+		return x.CaBundlePem
+	}
+	return nil
+}
+
+func (x *RegisterResult) GetRenewAfterSeconds() uint32 {
+	if x != nil {
+		return x.RenewAfterSeconds
+	}
+	return 0
+}
+
+func (x *RegisterResult) GetExpiresInSeconds() uint32 {
+	if x != nil {
+		return x.ExpiresInSeconds
+	}
+	return 0
+}
+
+type RenewRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CsrDer        []byte                 `protobuf:"bytes,1,opt,name=csr_der,json=csrDer,proto3" json:"csr_der,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenewRequest) Reset() {
+	*x = RenewRequest{}
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewRequest) ProtoMessage() {}
+
+func (x *RenewRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewRequest.ProtoReflect.Descriptor instead.
+func (*RenewRequest) Descriptor() ([]byte, []int) {
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *RenewRequest) GetCsrDer() []byte {
+	if x != nil {
+		return x.CsrDer
+	}
+	return nil
+}
+
+type RenewResponse struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	CertPem           []byte                 `protobuf:"bytes,1,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
+	KeyPem            []byte                 `protobuf:"bytes,2,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`
+	CaBundlePem       []byte                 `protobuf:"bytes,3,opt,name=ca_bundle_pem,json=caBundlePem,proto3" json:"ca_bundle_pem,omitempty"`
+	RenewAfterSeconds uint32                 `protobuf:"varint,4,opt,name=renew_after_seconds,json=renewAfterSeconds,proto3" json:"renew_after_seconds,omitempty"`
+	ExpiresInSeconds  uint32                 `protobuf:"varint,5,opt,name=expires_in_seconds,json=expiresInSeconds,proto3" json:"expires_in_seconds,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *RenewResponse) Reset() {
+	*x = RenewResponse{}
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewResponse) ProtoMessage() {}
+
+func (x *RenewResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewResponse.ProtoReflect.Descriptor instead.
+func (*RenewResponse) Descriptor() ([]byte, []int) {
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RenewResponse) GetCertPem() []byte {
+	if x != nil {
+		return x.CertPem
+	}
+	return nil
+}
+
+func (x *RenewResponse) GetKeyPem() []byte {
+	if x != nil {
+		return x.KeyPem
+	}
+	return nil
+}
+
+func (x *RenewResponse) GetCaBundlePem() []byte {
+	if x != nil {
+		return x.CaBundlePem
+	}
+	return nil
+}
+
+func (x *RenewResponse) GetRenewAfterSeconds() uint32 {
+	if x != nil {
+		return x.RenewAfterSeconds
+	}
+	return 0
+}
+
+func (x *RenewResponse) GetExpiresInSeconds() uint32 {
+	if x != nil {
+		return x.ExpiresInSeconds
+	}
+	return 0
+}
+
+// Request is the shared shape for Read and Write.
+// data is empty for Read; for Write it carries path-specific inputs
+// (e.g. pki/<role>: data["csr"] = DER PKCS#10).
+type Request struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Data          map[string][]byte      `protobuf:"bytes,2,rep,name=data,proto3" json:"data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Request) Reset() {
+	*x = Request{}
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Request) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Request) ProtoMessage() {}
+
+func (x *Request) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Request.ProtoReflect.Descriptor instead.
+func (*Request) Descriptor() ([]byte, []int) {
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *Request) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
 	return ""
+}
+
+func (x *Request) GetData() map[string][]byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type Response struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Content       []byte                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	ContentType   string                 `protobuf:"bytes,2,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	TtlSeconds    uint32                 `protobuf:"varint,3,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Response) Reset() {
+	*x = Response{}
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Response) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Response) ProtoMessage() {}
+
+func (x *Response) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_enroll_v1_enroll_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Response.ProtoReflect.Descriptor instead.
+func (*Response) Descriptor() ([]byte, []int) {
+	return file_proto_enroll_v1_enroll_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *Response) GetContent() []byte {
+	if x != nil {
+		return x.Content
+	}
+	return nil
+}
+
+func (x *Response) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *Response) GetTtlSeconds() uint32 {
+	if x != nil {
+		return x.TtlSeconds
+	}
+	return 0
 }
 
 var File_proto_enroll_v1_enroll_proto protoreflect.FileDescriptor
 
 const file_proto_enroll_v1_enroll_proto_rawDesc = "" +
 	"\n" +
-	"\x1cproto/enroll/v1/enroll.proto\x12\x10pigeon.enroll.v1\"#\n" +
-	"\rRenderRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"*\n" +
-	"\x0eRenderResponse\x12\x18\n" +
-	"\acontent\x18\x01 \x01(\tR\acontent\"\x80\x01\n" +
-	"\fClaimRequest\x127\n" +
-	"\x06params\x18\x01 \x01(\v2\x1d.pigeon.enroll.v1.ClaimParamsH\x00R\x06params\x12/\n" +
+	"\x1cproto/enroll/v1/enroll.proto\x12\x10pigeon.enroll.v1\"\x86\x01\n" +
+	"\x0fRegisterRequest\x12:\n" +
+	"\x06params\x18\x01 \x01(\v2 .pigeon.enroll.v1.RegisterParamsH\x00R\x06params\x12/\n" +
 	"\x12challenge_response\x18\x02 \x01(\fH\x00R\x11challengeResponseB\x06\n" +
-	"\x04step\"\x9b\x01\n" +
-	"\vClaimParams\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\x12\x14\n" +
-	"\x05scope\x18\x02 \x01(\tR\x05scope\x12\x18\n" +
-	"\asubject\x18\x03 \x01(\tR\asubject\x12-\n" +
-	"\x03tpm\x18\x04 \x01(\v2\x1b.pigeon.enroll.v1.TPMParamsR\x03tpm\x12\x17\n" +
-	"\acsr_der\x18\x05 \x01(\fR\x06csrDer\"\xe8\x01\n" +
-	"\tTPMParams\x12\x1b\n" +
+	"\x04step\"\x94\x02\n" +
+	"\x0eRegisterParams\x12\x1a\n" +
+	"\bidentity\x18\x01 \x01(\tR\bidentity\x12\x18\n" +
+	"\asubject\x18\x02 \x01(\tR\asubject\x12\x17\n" +
+	"\acsr_der\x18\x03 \x01(\fR\x06csrDer\x12/\n" +
+	"\x03tpm\x18\n" +
+	" \x01(\v2\x1d.pigeon.enroll.v1.TPMEvidenceR\x03tpm\x122\n" +
+	"\x04hmac\x18\v \x01(\v2\x1e.pigeon.enroll.v1.HMACEvidenceR\x04hmac\x12N\n" +
+	"\x0ebootstrap_cert\x18\f \x01(\v2'.pigeon.enroll.v1.BootstrapCertEvidenceR\rbootstrapCert\"\xea\x01\n" +
+	"\vTPMEvidence\x12\x1b\n" +
 	"\tek_public\x18\x01 \x01(\fR\bekPublic\x12\x17\n" +
 	"\aek_cert\x18\x02 \x01(\fR\x06ekCert\x12\x1b\n" +
 	"\tak_public\x18\x03 \x01(\fR\bakPublic\x12$\n" +
 	"\x0eak_create_data\x18\x04 \x01(\fR\fakCreateData\x122\n" +
 	"\x15ak_create_attestation\x18\x05 \x01(\fR\x13akCreateAttestation\x12.\n" +
-	"\x13ak_create_signature\x18\x06 \x01(\fR\x11akCreateSignature\"F\n" +
+	"\x13ak_create_signature\x18\x06 \x01(\fR\x11akCreateSignature\":\n" +
+	"\fHMACEvidence\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x12\x14\n" +
+	"\x05scope\x18\x02 \x01(\tR\x05scope\"\x17\n" +
+	"\x15BootstrapCertEvidence\"\x96\x01\n" +
+	"\x10RegisterResponse\x12>\n" +
+	"\tchallenge\x18\x01 \x01(\v2\x1e.pigeon.enroll.v1.TPMChallengeH\x00R\tchallenge\x12:\n" +
+	"\x06result\x18\x02 \x01(\v2 .pigeon.enroll.v1.RegisterResultH\x00R\x06resultB\x06\n" +
+	"\x04step\"F\n" +
 	"\fTPMChallenge\x12\x1e\n" +
 	"\n" +
 	"credential\x18\x01 \x01(\fR\n" +
 	"credential\x12\x16\n" +
-	"\x06secret\x18\x02 \x01(\fR\x06secret\"\x90\x01\n" +
-	"\rClaimResponse\x12>\n" +
-	"\tchallenge\x18\x01 \x01(\v2\x1e.pigeon.enroll.v1.TPMChallengeH\x00R\tchallenge\x127\n" +
-	"\x06result\x18\x02 \x01(\v2\x1d.pigeon.enroll.v1.ClaimResultH\x00R\x06resultB\x06\n" +
-	"\x04step\"\x9e\x06\n" +
-	"\vClaimResult\x12D\n" +
-	"\asecrets\x18\x01 \x03(\v2*.pigeon.enroll.v1.ClaimResult.SecretsEntryR\asecrets\x12;\n" +
-	"\x04vars\x18\x02 \x03(\v2'.pigeon.enroll.v1.ClaimResult.VarsEntryR\x04vars\x125\n" +
-	"\x02ca\x18\x03 \x03(\v2%.pigeon.enroll.v1.ClaimResult.CaEntryR\x02ca\x12>\n" +
-	"\x05certs\x18\x04 \x03(\v2(.pigeon.enroll.v1.ClaimResult.CertsEntryR\x05certs\x12;\n" +
-	"\x04jwts\x18\x05 \x03(\v2'.pigeon.enroll.v1.ClaimResult.JwtsEntryR\x04jwts\x12E\n" +
-	"\bjwt_keys\x18\x06 \x03(\v2*.pigeon.enroll.v1.ClaimResult.JwtKeysEntryR\ajwtKeys\x1a:\n" +
-	"\fSecretsEntry\x12\x10\n" +
+	"\x06secret\x18\x02 \x01(\fR\x06secret\"\xc6\x01\n" +
+	"\x0eRegisterResult\x12\x19\n" +
+	"\bcert_pem\x18\x01 \x01(\fR\acertPem\x12\x17\n" +
+	"\akey_pem\x18\x02 \x01(\fR\x06keyPem\x12\"\n" +
+	"\rca_bundle_pem\x18\x03 \x01(\fR\vcaBundlePem\x12.\n" +
+	"\x13renew_after_seconds\x18\x04 \x01(\rR\x11renewAfterSeconds\x12,\n" +
+	"\x12expires_in_seconds\x18\x05 \x01(\rR\x10expiresInSeconds\"'\n" +
+	"\fRenewRequest\x12\x17\n" +
+	"\acsr_der\x18\x01 \x01(\fR\x06csrDer\"\xc5\x01\n" +
+	"\rRenewResponse\x12\x19\n" +
+	"\bcert_pem\x18\x01 \x01(\fR\acertPem\x12\x17\n" +
+	"\akey_pem\x18\x02 \x01(\fR\x06keyPem\x12\"\n" +
+	"\rca_bundle_pem\x18\x03 \x01(\fR\vcaBundlePem\x12.\n" +
+	"\x13renew_after_seconds\x18\x04 \x01(\rR\x11renewAfterSeconds\x12,\n" +
+	"\x12expires_in_seconds\x18\x05 \x01(\rR\x10expiresInSeconds\"\x8f\x01\n" +
+	"\aRequest\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x127\n" +
+	"\x04data\x18\x02 \x03(\v2#.pigeon.enroll.v1.Request.DataEntryR\x04data\x1a7\n" +
+	"\tDataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +
-	"\tVarsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aO\n" +
-	"\aCaEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12.\n" +
-	"\x05value\x18\x02 \x01(\v2\x18.pigeon.enroll.v1.CACertR\x05value:\x028\x01\x1aV\n" +
-	"\n" +
-	"CertsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x122\n" +
-	"\x05value\x18\x02 \x01(\v2\x1c.pigeon.enroll.v1.CertBundleR\x05value:\x028\x01\x1a7\n" +
-	"\tJwtsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a:\n" +
-	"\fJwtKeysEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"K\n" +
-	"\x06CACert\x12\x19\n" +
-	"\bcert_pem\x18\x01 \x01(\tR\acertPem\x12&\n" +
-	"\x0fprivate_key_pem\x18\x02 \x01(\tR\rprivateKeyPem\"@\n" +
-	"\n" +
-	"CertBundle\x12\x19\n" +
-	"\bcert_pem\x18\x01 \x01(\tR\acertPem\x12\x17\n" +
-	"\akey_pem\x18\x02 \x01(\tR\x06keyPem2\xae\x01\n" +
-	"\x11EnrollmentService\x12L\n" +
-	"\x05Claim\x12\x1e.pigeon.enroll.v1.ClaimRequest\x1a\x1f.pigeon.enroll.v1.ClaimResponse(\x010\x01\x12K\n" +
-	"\x06Render\x12\x1f.pigeon.enroll.v1.RenderRequest\x1a .pigeon.enroll.v1.RenderResponseB=Z;github.com/pigeon-as/pigeon-enroll/proto/enroll/v1;enrollv1b\x06proto3"
+	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"h\n" +
+	"\bResponse\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\fR\acontent\x12!\n" +
+	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x1f\n" +
+	"\vttl_seconds\x18\x03 \x01(\rR\n" +
+	"ttlSeconds2\xa8\x02\n" +
+	"\x06Enroll\x12U\n" +
+	"\bRegister\x12!.pigeon.enroll.v1.RegisterRequest\x1a\".pigeon.enroll.v1.RegisterResponse(\x010\x01\x12H\n" +
+	"\x05Renew\x12\x1e.pigeon.enroll.v1.RenewRequest\x1a\x1f.pigeon.enroll.v1.RenewResponse\x12=\n" +
+	"\x04Read\x12\x19.pigeon.enroll.v1.Request\x1a\x1a.pigeon.enroll.v1.Response\x12>\n" +
+	"\x05Write\x12\x19.pigeon.enroll.v1.Request\x1a\x1a.pigeon.enroll.v1.ResponseB=Z;github.com/pigeon-as/pigeon-enroll/proto/enroll/v1;enrollv1b\x06proto3"
 
 var (
 	file_proto_enroll_v1_enroll_proto_rawDescOnce sync.Once
@@ -778,47 +884,43 @@ func file_proto_enroll_v1_enroll_proto_rawDescGZIP() []byte {
 	return file_proto_enroll_v1_enroll_proto_rawDescData
 }
 
-var file_proto_enroll_v1_enroll_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_proto_enroll_v1_enroll_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_proto_enroll_v1_enroll_proto_goTypes = []any{
-	(*RenderRequest)(nil),  // 0: pigeon.enroll.v1.RenderRequest
-	(*RenderResponse)(nil), // 1: pigeon.enroll.v1.RenderResponse
-	(*ClaimRequest)(nil),   // 2: pigeon.enroll.v1.ClaimRequest
-	(*ClaimParams)(nil),    // 3: pigeon.enroll.v1.ClaimParams
-	(*TPMParams)(nil),      // 4: pigeon.enroll.v1.TPMParams
-	(*TPMChallenge)(nil),   // 5: pigeon.enroll.v1.TPMChallenge
-	(*ClaimResponse)(nil),  // 6: pigeon.enroll.v1.ClaimResponse
-	(*ClaimResult)(nil),    // 7: pigeon.enroll.v1.ClaimResult
-	(*CACert)(nil),         // 8: pigeon.enroll.v1.CACert
-	(*CertBundle)(nil),     // 9: pigeon.enroll.v1.CertBundle
-	nil,                    // 10: pigeon.enroll.v1.ClaimResult.SecretsEntry
-	nil,                    // 11: pigeon.enroll.v1.ClaimResult.VarsEntry
-	nil,                    // 12: pigeon.enroll.v1.ClaimResult.CaEntry
-	nil,                    // 13: pigeon.enroll.v1.ClaimResult.CertsEntry
-	nil,                    // 14: pigeon.enroll.v1.ClaimResult.JwtsEntry
-	nil,                    // 15: pigeon.enroll.v1.ClaimResult.JwtKeysEntry
+	(*RegisterRequest)(nil),       // 0: pigeon.enroll.v1.RegisterRequest
+	(*RegisterParams)(nil),        // 1: pigeon.enroll.v1.RegisterParams
+	(*TPMEvidence)(nil),           // 2: pigeon.enroll.v1.TPMEvidence
+	(*HMACEvidence)(nil),          // 3: pigeon.enroll.v1.HMACEvidence
+	(*BootstrapCertEvidence)(nil), // 4: pigeon.enroll.v1.BootstrapCertEvidence
+	(*RegisterResponse)(nil),      // 5: pigeon.enroll.v1.RegisterResponse
+	(*TPMChallenge)(nil),          // 6: pigeon.enroll.v1.TPMChallenge
+	(*RegisterResult)(nil),        // 7: pigeon.enroll.v1.RegisterResult
+	(*RenewRequest)(nil),          // 8: pigeon.enroll.v1.RenewRequest
+	(*RenewResponse)(nil),         // 9: pigeon.enroll.v1.RenewResponse
+	(*Request)(nil),               // 10: pigeon.enroll.v1.Request
+	(*Response)(nil),              // 11: pigeon.enroll.v1.Response
+	nil,                           // 12: pigeon.enroll.v1.Request.DataEntry
 }
 var file_proto_enroll_v1_enroll_proto_depIdxs = []int32{
-	3,  // 0: pigeon.enroll.v1.ClaimRequest.params:type_name -> pigeon.enroll.v1.ClaimParams
-	4,  // 1: pigeon.enroll.v1.ClaimParams.tpm:type_name -> pigeon.enroll.v1.TPMParams
-	5,  // 2: pigeon.enroll.v1.ClaimResponse.challenge:type_name -> pigeon.enroll.v1.TPMChallenge
-	7,  // 3: pigeon.enroll.v1.ClaimResponse.result:type_name -> pigeon.enroll.v1.ClaimResult
-	10, // 4: pigeon.enroll.v1.ClaimResult.secrets:type_name -> pigeon.enroll.v1.ClaimResult.SecretsEntry
-	11, // 5: pigeon.enroll.v1.ClaimResult.vars:type_name -> pigeon.enroll.v1.ClaimResult.VarsEntry
-	12, // 6: pigeon.enroll.v1.ClaimResult.ca:type_name -> pigeon.enroll.v1.ClaimResult.CaEntry
-	13, // 7: pigeon.enroll.v1.ClaimResult.certs:type_name -> pigeon.enroll.v1.ClaimResult.CertsEntry
-	14, // 8: pigeon.enroll.v1.ClaimResult.jwts:type_name -> pigeon.enroll.v1.ClaimResult.JwtsEntry
-	15, // 9: pigeon.enroll.v1.ClaimResult.jwt_keys:type_name -> pigeon.enroll.v1.ClaimResult.JwtKeysEntry
-	8,  // 10: pigeon.enroll.v1.ClaimResult.CaEntry.value:type_name -> pigeon.enroll.v1.CACert
-	9,  // 11: pigeon.enroll.v1.ClaimResult.CertsEntry.value:type_name -> pigeon.enroll.v1.CertBundle
-	2,  // 12: pigeon.enroll.v1.EnrollmentService.Claim:input_type -> pigeon.enroll.v1.ClaimRequest
-	0,  // 13: pigeon.enroll.v1.EnrollmentService.Render:input_type -> pigeon.enroll.v1.RenderRequest
-	6,  // 14: pigeon.enroll.v1.EnrollmentService.Claim:output_type -> pigeon.enroll.v1.ClaimResponse
-	1,  // 15: pigeon.enroll.v1.EnrollmentService.Render:output_type -> pigeon.enroll.v1.RenderResponse
-	14, // [14:16] is the sub-list for method output_type
-	12, // [12:14] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	1,  // 0: pigeon.enroll.v1.RegisterRequest.params:type_name -> pigeon.enroll.v1.RegisterParams
+	2,  // 1: pigeon.enroll.v1.RegisterParams.tpm:type_name -> pigeon.enroll.v1.TPMEvidence
+	3,  // 2: pigeon.enroll.v1.RegisterParams.hmac:type_name -> pigeon.enroll.v1.HMACEvidence
+	4,  // 3: pigeon.enroll.v1.RegisterParams.bootstrap_cert:type_name -> pigeon.enroll.v1.BootstrapCertEvidence
+	6,  // 4: pigeon.enroll.v1.RegisterResponse.challenge:type_name -> pigeon.enroll.v1.TPMChallenge
+	7,  // 5: pigeon.enroll.v1.RegisterResponse.result:type_name -> pigeon.enroll.v1.RegisterResult
+	12, // 6: pigeon.enroll.v1.Request.data:type_name -> pigeon.enroll.v1.Request.DataEntry
+	0,  // 7: pigeon.enroll.v1.Enroll.Register:input_type -> pigeon.enroll.v1.RegisterRequest
+	8,  // 8: pigeon.enroll.v1.Enroll.Renew:input_type -> pigeon.enroll.v1.RenewRequest
+	10, // 9: pigeon.enroll.v1.Enroll.Read:input_type -> pigeon.enroll.v1.Request
+	10, // 10: pigeon.enroll.v1.Enroll.Write:input_type -> pigeon.enroll.v1.Request
+	5,  // 11: pigeon.enroll.v1.Enroll.Register:output_type -> pigeon.enroll.v1.RegisterResponse
+	9,  // 12: pigeon.enroll.v1.Enroll.Renew:output_type -> pigeon.enroll.v1.RenewResponse
+	11, // 13: pigeon.enroll.v1.Enroll.Read:output_type -> pigeon.enroll.v1.Response
+	11, // 14: pigeon.enroll.v1.Enroll.Write:output_type -> pigeon.enroll.v1.Response
+	11, // [11:15] is the sub-list for method output_type
+	7,  // [7:11] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_proto_enroll_v1_enroll_proto_init() }
@@ -826,13 +928,13 @@ func file_proto_enroll_v1_enroll_proto_init() {
 	if File_proto_enroll_v1_enroll_proto != nil {
 		return
 	}
-	file_proto_enroll_v1_enroll_proto_msgTypes[2].OneofWrappers = []any{
-		(*ClaimRequest_Params)(nil),
-		(*ClaimRequest_ChallengeResponse)(nil),
+	file_proto_enroll_v1_enroll_proto_msgTypes[0].OneofWrappers = []any{
+		(*RegisterRequest_Params)(nil),
+		(*RegisterRequest_ChallengeResponse)(nil),
 	}
-	file_proto_enroll_v1_enroll_proto_msgTypes[6].OneofWrappers = []any{
-		(*ClaimResponse_Challenge)(nil),
-		(*ClaimResponse_Result)(nil),
+	file_proto_enroll_v1_enroll_proto_msgTypes[5].OneofWrappers = []any{
+		(*RegisterResponse_Challenge)(nil),
+		(*RegisterResponse_Result)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -840,7 +942,7 @@ func file_proto_enroll_v1_enroll_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_enroll_v1_enroll_proto_rawDesc), len(file_proto_enroll_v1_enroll_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

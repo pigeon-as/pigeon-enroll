@@ -2,101 +2,93 @@ syntax = "proto3";
 package pigeon.enroll.v1;
 option go_package = "github.com/pigeon-as/pigeon-enroll/proto/enroll/v1;enrollv1";
 
-// EnrollmentService provides secret enrollment via HMAC token authentication
-// with optional TPM attestation.
-//
-// Follows the SPIRE AttestAgent bidirectional stream pattern:
-// - TPM: params → challenge → challenge_response → result
-// - Token-only: params → result
-service EnrollmentService {
-  rpc Claim(stream ClaimRequest) returns (stream ClaimResponse);
-
-  // Render returns a server-rendered template with fresh credentials embedded.
-  // Templates are defined in the server config via "template" blocks.
-  // The caller authenticates via mTLS (same as Claim).
-  rpc Render(RenderRequest) returns (RenderResponse);
+service Enroll {
+  // Register performs node attestation and issues the identity certificate.
+  rpc Register(stream RegisterRequest) returns (stream RegisterResponse);
+  // Renew re-issues the identity certificate for an already-attested caller.
+  rpc Renew(RenewRequest) returns (RenewResponse);
+  // Read returns a scalar resource at path (idempotent, no side effects).
+  // Paths: var/<n>, secret/<n>, ca/<n>, jwt_key/<n>, template/<n>.
+  rpc Read(Request) returns (Response);
+  // Write produces a fresh artifact at a mutating path.
+  // Paths: pki/<role> (data["csr"] required, DER PKCS#10), jwt/<n>.
+  rpc Write(Request) returns (Response);
 }
 
-// RenderRequest identifies which server-side template to render.
-message RenderRequest {
-  string name = 1;
-}
-
-// RenderResponse contains the rendered template content.
-message RenderResponse {
-  string content = 1;
-}
-
-message ClaimRequest {
+message RegisterRequest {
   oneof step {
-    // Initial request with authentication and optional TPM data.
-    ClaimParams params = 1;
-    // Response to a TPM credential activation challenge.
+    RegisterParams params = 1;
     bytes challenge_response = 2;
   }
 }
 
-// ClaimParams is the initial message in a Claim stream.
-message ClaimParams {
-  string token = 1;
-  string scope = 2;
-  string subject = 3;
-  // If absent, claim is token-only (no TPM attestation).
-  TPMParams tpm = 4;
-  // Optional CSR for cert blocks with mode = "csr".
-  // DER-encoded PKCS#10 CertificateRequest.
-  bytes csr_der = 5;
+message RegisterParams {
+  string identity = 1;
+  string subject = 2;
+  bytes csr_der = 3;
+  TPMEvidence tpm = 10;
+  HMACEvidence hmac = 11;
+  BootstrapCertEvidence bootstrap_cert = 12;
 }
 
-// TPMParams carries TPM attestation data (go-attestation AttestationParameters).
-message TPMParams {
-  // PKIX DER-encoded EK public key.
+message TPMEvidence {
   bytes ek_public = 1;
-  // DER-encoded X.509 EK certificate (optional, for CA chain validation).
   bytes ek_cert = 2;
-  // AK canonical encoding (includes public key + signing parameters).
   bytes ak_public = 3;
-  // TPMS_CREATION_DATA encoding.
   bytes ak_create_data = 4;
-  // TPMS_ATTEST encoding.
   bytes ak_create_attestation = 5;
-  // TPMT_SIGNATURE encoding.
   bytes ak_create_signature = 6;
 }
 
-// TPMChallenge is a credential activation challenge (go-attestation EncryptedCredential).
+message HMACEvidence {
+  string token = 1;
+  string scope = 2;
+}
+
+message BootstrapCertEvidence {}
+
+message RegisterResponse {
+  oneof step {
+    TPMChallenge challenge = 1;
+    RegisterResult result = 2;
+  }
+}
+
 message TPMChallenge {
   bytes credential = 1;
   bytes secret = 2;
 }
 
-message ClaimResponse {
-  oneof step {
-    // Intermediate: TPM credential activation challenge.
-    TPMChallenge challenge = 1;
-    // Final: enrollment result with secrets.
-    ClaimResult result = 2;
-  }
+message RegisterResult {
+  bytes cert_pem = 1;
+  bytes key_pem = 2;
+  bytes ca_bundle_pem = 3;
+  uint32 renew_after_seconds = 4;
+  uint32 expires_in_seconds = 5;
 }
 
-message ClaimResult {
-  map<string, string> secrets = 1;
-  map<string, string> vars = 2;
-  map<string, CACert> ca = 3;
-  map<string, CertBundle> certs = 4;
-  map<string, string> jwts = 5;
-  map<string, string> jwt_keys = 6;
+message RenewRequest {
+  bytes csr_der = 1;
 }
 
-// CACert holds a CA certificate and optionally its private key (scope-gated).
-message CACert {
-  string cert_pem = 1;
-  string private_key_pem = 2;
+message RenewResponse {
+  bytes cert_pem = 1;
+  bytes key_pem = 2;
+  bytes ca_bundle_pem = 3;
+  uint32 renew_after_seconds = 4;
+  uint32 expires_in_seconds = 5;
 }
 
-// CertBundle holds a leaf certificate and optionally its private key.
-message CertBundle {
-  string cert_pem = 1;
-  // Present for push-mode certs; empty for CSR-mode (worker has the key).
-  string key_pem = 2;
+// Request is the shared shape for Read and Write.
+// data is empty for Read; for Write it carries path-specific inputs
+// (e.g. pki/<role>: data["csr"] = DER PKCS#10).
+message Request {
+  string path = 1;
+  map<string, bytes> data = 2;
+}
+
+message Response {
+  bytes content = 1;
+  string content_type = 2;
+  uint32 ttl_seconds = 3;
 }

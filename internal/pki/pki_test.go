@@ -422,7 +422,7 @@ func TestSignCSR(t *testing.T) {
 	certPEM, err := SignCSR(
 		ca, clientKey.Public(),
 		"worker-01", []string{"mesh.internal"}, []net.IP{net.ParseIP("10.0.0.1")},
-		24*time.Hour, false, true,
+		24*time.Hour, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	)
 	must.NoError(t, err)
 

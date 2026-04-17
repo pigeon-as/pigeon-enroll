@@ -1,557 +1,432 @@
-// Package grpcserver implements the enrollment gRPC service.
-// Follows the SPIRE AttestAgent bidirectional stream pattern:
-// TPM attestation happens inline on the stream (no session store).
+// Package grpcserver implements the four Enroll RPCs over mTLS.
+//
+// The server has exactly four verbs:
+//
+// Register - node attestation, issue identity cert (bootstrap CA accepted on TLS)
+// Renew    - re-issue identity cert for already-attested caller (identity CA only)
+// Read     - read-only resource path -> bytes (identity CA only)
+// Write    - mutating resource path (pki/<role>, jwt/<n>) -> bytes (identity CA only)
+//
+// Caller context for Renew/Read/Write is extracted from the peer TLS cert:
+//
+// CN  -> subject
+// OU  -> policy name  (capability check)
+// O   -> identity name (PKI role lookup for Renew)
+//
+// pki.IssueIdentityCert and pki.SignIdentityCSR are the single authoritative
+// shaping points for that encoding.
 package grpcserver
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/subtle"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
-	"sync"
+	"strings"
 	"time"
 
-	"github.com/google/go-attestation/attest"
-	attestpkg "github.com/pigeon-as/pigeon-enroll/internal/attest"
+	"github.com/pigeon-as/pigeon-enroll/internal/attestor"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
-	jwtpkg "github.com/pigeon-as/pigeon-enroll/internal/jwt"
-	"github.com/pigeon-as/pigeon-enroll/internal/nonce"
+	"github.com/pigeon-as/pigeon-enroll/internal/identity"
 	"github.com/pigeon-as/pigeon-enroll/internal/pki"
-	"github.com/pigeon-as/pigeon-enroll/internal/render"
-	"github.com/pigeon-as/pigeon-enroll/internal/secrets"
-	"github.com/pigeon-as/pigeon-enroll/internal/token"
-	pb "github.com/pigeon-as/pigeon-enroll/proto/enroll/v1"
-	"github.com/zclconf/go-cty/cty"
-	"golang.org/x/time/rate"
+	"github.com/pigeon-as/pigeon-enroll/internal/policy"
+	"github.com/pigeon-as/pigeon-enroll/internal/resource"
+	enrollv1 "github.com/pigeon-as/pigeon-enroll/proto/enroll/v1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
-// Server implements the EnrollmentService gRPC service.
-type Server struct {
-	pb.UnimplementedEnrollmentServiceServer
+// serverCAName is the well-known CA under which the server's TLS listener
+// cert is issued. It is also the CA whose public cert is shipped to clients
+// via ConfigDrive so they can verify the server before Register.
+const serverCAName = "identity"
 
-	cfg       config.Config
-	secrets   map[string]string
-	ca        map[string]secrets.CAEntry
-	hmacKey   []byte
-	nonces    *nonce.Store
-	limiter   *ipRateLimiter
-	scopes    map[string]string
-	caScopes  map[string][]string
-	certCAs   map[string]*pki.CA
-	certSpecs []config.CertSpec
-	jwtKeys   map[string]secrets.JWTKeyEntry
-	jwtSpecs  []config.JWTSpec
-	templates map[string]config.TemplateSpec // keyed by name
-	mtlsCA    *pki.CA                        // mTLS CA for generating ephemeral client certs
-	clientTTL time.Duration                  // TTL for generated client certs
-	vars      map[string]string              // config vars passed to template rendering
-	logger    *slog.Logger
-	ek        *attestpkg.EKValidator
+// Options configures the server.
+type Options struct {
+	Hosts         []string
+	ServerCertTTL time.Duration
+	Logger        *slog.Logger
 }
 
-// New creates a new enrollment gRPC server.
-func New(logger *slog.Logger, cfg config.Config, hmacKey []byte, derivedSecrets map[string]string, cas map[string]secrets.CAEntry, jwtKeys map[string]secrets.JWTKeyEntry, mtlsCA *pki.CA) (*Server, error) {
-	scopes := make(map[string]string, len(cfg.Secrets))
-	for _, s := range cfg.Secrets {
-		if s.Scope != "" {
-			scopes[s.Name] = s.Scope
-		}
+// Server implements enrollv1.EnrollServer.
+type Server struct {
+	enrollv1.UnimplementedEnrollServer
+
+	cfg      *config.Config
+	engine   *policy.Engine
+	registry *identity.Registry
+	resolver *resource.Resolver
+	ikm      []byte
+	serverCA *pki.CA
+	log      *slog.Logger
+	rotator  *pki.CertRotator
+}
+
+// New constructs a Server. bootstrapCAs is consulted only by the
+// bootstrap_cert attestor during Register; Renew/Read/Write require a cert
+// signed by the identity CA (enforced in callerFromPeer).
+func New(
+	cfg *config.Config,
+	engine *policy.Engine,
+	registry *identity.Registry,
+	resolver *resource.Resolver,
+	ikm []byte,
+	_ *x509.CertPool,
+	opts Options,
+) (*Server, error) {
+	if cfg == nil || engine == nil || registry == nil || resolver == nil {
+		return nil, errors.New("nil dependency")
 	}
-	caScopes := make(map[string][]string, len(cfg.CAs))
-	for _, ca := range cfg.CAs {
-		if len(ca.Scope) > 0 {
-			caScopes[ca.Name] = ca.Scope
-		}
+	if len(ikm) == 0 {
+		return nil, errors.New("empty ikm")
+	}
+	if opts.ServerCertTTL <= 0 {
+		opts.ServerCertTTL = 24 * time.Hour
+	}
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
 	}
 
-	certCAs := make(map[string]*pki.CA, len(cfg.Certs))
-	for _, c := range cfg.Certs {
-		if _, ok := certCAs[c.CA]; ok {
-			continue
-		}
-		caEntry, ok := cas[c.CA]
-		if !ok {
-			return nil, fmt.Errorf("cert %q references unknown CA %q", c.Name, c.CA)
-		}
-		pemData := append([]byte(caEntry.CertPEM), []byte(caEntry.PrivateKeyPEM)...)
-		loadedCA, loadErr := pki.LoadCA(pemData)
-		if loadErr != nil {
-			return nil, fmt.Errorf("load CA %q for cert issuance: %w", c.CA, loadErr)
-		}
-		certCAs[c.CA] = loadedCA
-	}
-
-	ns, err := nonce.New(2*cfg.TokenWindow, cfg.NoncePath)
+	serverCA, err := pki.DeriveCAByName(ikm, serverCAName)
 	if err != nil {
-		return nil, fmt.Errorf("create nonce store: %w", err)
+		return nil, fmt.Errorf("derive server CA %q: %w", serverCAName, err)
 	}
 
-	var ekValidator *attestpkg.EKValidator
-	if cfg.EKCAPath != "" || cfg.EKHashPath != "" {
-		ekValidator, err = attestpkg.NewEKValidator(cfg.EKCAPath, cfg.EKHashPath)
-		if err != nil {
-			return nil, fmt.Errorf("create EK validator: %w", err)
-		}
-	}
-
-	tplMap := make(map[string]config.TemplateSpec, len(cfg.Templates))
-	for _, t := range cfg.Templates {
-		tplMap[t.Name] = t
-	}
+	rotator := pki.NewCertRotator(serverCA, opts.Hosts, opts.ServerCertTTL)
 
 	return &Server{
-		cfg:       cfg,
-		secrets:   derivedSecrets,
-		ca:        cas,
-		hmacKey:   hmacKey,
-		nonces:    ns,
-		limiter:   newIPRateLimiter(rate.Every(12*time.Second), 5),
-		scopes:    scopes,
-		caScopes:  caScopes,
-		certCAs:   certCAs,
-		certSpecs: cfg.Certs,
-		jwtKeys:   jwtKeys,
-		jwtSpecs:  cfg.JWTs,
-		templates: tplMap,
-		mtlsCA:    mtlsCA,
-		clientTTL: cfg.ClientCertTTL,
-		vars:      cfg.Vars,
-		logger:    logger,
-		ek:        ekValidator,
+		cfg:      cfg,
+		engine:   engine,
+		registry: registry,
+		resolver: resolver,
+		ikm:      ikm,
+		serverCA: serverCA,
+		log:      opts.Logger,
+		rotator:  rotator,
 	}, nil
 }
 
-// Claim implements the bidirectional streaming enrollment RPC.
-// SPIRE AttestAgent pattern: stream IS the session.
-func (s *Server) Claim(stream pb.EnrollmentService_ClaimServer) error {
-	ip := peerIP(stream.Context())
-
-	if !s.limiter.allow(ip) {
-		s.logger.Warn("claim denied", "ip", ip, "reason", "rate limited")
-		return status.Error(codes.ResourceExhausted, "too many requests")
+// TLSConfig returns the TLS config for the gRPC listener. Client certs are
+// requested but not auto-verified; Register accepts any (bootstrap_cert
+// attestor verifies explicitly), and Renew/Read/Write verify against the
+// identity CA in callerFromPeer.
+func (s *Server) TLSConfig() *tls.Config {
+	return &tls.Config{
+		MinVersion:     tls.VersionTLS13,
+		GetCertificate: s.rotator.GetCertificate,
+		ClientAuth:     tls.RequestClientCert,
 	}
+}
 
-	// Step 1: Receive initial params.
-	msg, err := stream.Recv()
+// GRPCServer returns a grpc.Server with the service registered and TLS
+// credentials applied. The caller owns Serve/GracefulStop.
+func (s *Server) GRPCServer() *grpc.Server {
+	creds := credentials.NewTLS(s.TLSConfig())
+	gs := grpc.NewServer(grpc.Creds(creds))
+	enrollv1.RegisterEnrollServer(gs, s)
+	return gs
+}
+
+// -----------------------------------------------------------------------------
+// Register
+
+func (s *Server) Register(stream grpc.BidiStreamingServer[enrollv1.RegisterRequest, enrollv1.RegisterResponse]) error {
+	ctx := stream.Context()
+
+	first, err := stream.Recv()
 	if err != nil {
-		return status.Error(codes.InvalidArgument, "expected initial params")
+		return status.Errorf(codes.InvalidArgument, "recv params: %v", err)
 	}
-	params := msg.GetParams()
+	params := first.GetParams()
 	if params == nil {
 		return status.Error(codes.InvalidArgument, "first message must be params")
 	}
-
-	// Step 2: Verify HMAC token.
-	if !token.Verify(s.hmacKey, params.Token, time.Now(), s.cfg.TokenWindow, params.Scope) {
-		s.logger.Warn("claim denied", "ip", ip, "scope", params.Scope, "reason", "invalid token")
-		return status.Error(codes.PermissionDenied, "invalid or expired token")
+	if params.Identity == "" || params.Subject == "" {
+		return status.Error(codes.InvalidArgument, "identity and subject required")
 	}
 
-	var ekHash string
+	id, err := s.registry.Lookup(params.Identity)
+	if err != nil {
+		return status.Errorf(codes.NotFound, "%v", err)
+	}
 
-	// Step 3: TPM attestation or token-only.
-	if params.Tpm != nil {
-		var err error
-		ekHash, err = s.attestTPM(stream, ip, params)
-		if err != nil {
-			return err // already a gRPC status error
+	ev := attestor.Evidence{
+		TPM:           params.Tpm,
+		HMAC:          params.Hmac,
+		BootstrapCert: params.BootstrapCert,
+		PeerCerts:     peerCerts(ctx),
+	}
+	ch := &streamChallenger{stream: stream}
+
+	for _, a := range id.Attestors {
+		if _, err := a.Verify(ctx, ev, params.Subject, ch); err != nil {
+			s.log.Warn("register attestor failed",
+				"identity", params.Identity,
+				"subject", params.Subject,
+				"attestor", a.Kind(),
+				"error", err,
+			)
+			return status.Errorf(codes.PermissionDenied, "%s: %v", a.Kind(), err)
 		}
-	} else if s.cfg.RequireTPM {
-		s.logger.Warn("claim denied", "ip", ip, "scope", params.Scope, "reason", "TPM attestation required")
-		return status.Error(codes.PermissionDenied, "TPM attestation required")
 	}
 
-	// Step 4: Consume one-time nonce.
-	ok, err := s.nonces.Check(params.Token)
+	certPEM, keyPEM, caCertPEM, err := s.issueIdentity(id, params.Subject, params.CsrDer)
 	if err != nil {
-		s.logger.Error("claim denied", "ip", ip, "reason", "nonce storage error", "err", err)
-		return status.Error(codes.Internal, "internal error")
-	}
-	if !ok {
-		s.logger.Warn("claim denied", "ip", ip, "reason", "token already used")
-		return status.Error(codes.PermissionDenied, "token already used")
+		return status.Errorf(codes.Internal, "%v", err)
 	}
 
-	// Step 5: Build and send result.
-	result, certNames, err := s.buildResult(params.Scope, params.Subject, params.CsrDer)
-	if err != nil {
-		s.logger.Error("claim denied", "ip", ip, "scope", params.Scope, "reason", err.Error())
-		return status.Error(codes.InvalidArgument, "invalid claim request")
-	}
+	s.log.Info("register ok",
+		"identity", id.Name,
+		"subject", params.Subject,
+		"policy", id.Policy,
+	)
 
-	s.logger.Info("claim ok", "ip", ip, "scope", params.Scope, "subject", params.Subject, "ek", ekHash, "tpm", params.Tpm != nil, "certs", certNames)
-
-	return stream.Send(&pb.ClaimResponse{
-		Step: &pb.ClaimResponse_Result{Result: result},
+	return stream.Send(&enrollv1.RegisterResponse{
+		Step: &enrollv1.RegisterResponse_Result{
+			Result: &enrollv1.RegisterResult{
+				CertPem:           certPEM,
+				KeyPem:            keyPEM,
+				CaBundlePem:       caCertPEM,
+				RenewAfterSeconds: uint32(id.PKI.TTL.Seconds()) / 2,
+				ExpiresInSeconds:  uint32(id.PKI.TTL.Seconds()),
+			},
+		},
 	})
 }
 
-// attestTPM performs inline TPM credential activation on the stream.
-// Returns the EK hash (for audit) or a gRPC status error.
-func (s *Server) attestTPM(stream pb.EnrollmentService_ClaimServer, ip string, params *pb.ClaimParams) (string, error) {
-	tpm := params.Tpm
+// -----------------------------------------------------------------------------
+// Renew
 
-	// Parse EK public key.
-	ekPub, err := x509.ParsePKIXPublicKey(tpm.EkPublic)
+func (s *Server) Renew(ctx context.Context, req *enrollv1.RenewRequest) (*enrollv1.RenewResponse, error) {
+	caller, err := s.callerFromPeer(ctx)
 	if err != nil {
-		return "", status.Error(codes.InvalidArgument, "invalid EK public key")
+		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
 	}
-
-	// Parse optional EK certificate.
-	var ekCert *x509.Certificate
-	if len(tpm.EkCert) > 0 {
-		ekCert, err = x509.ParseCertificate(tpm.EkCert)
-		if err != nil {
-			return "", status.Error(codes.InvalidArgument, "invalid EK certificate")
-		}
-	}
-
-	// Validate EK identity (SPIRE pattern).
-	if s.ek != nil {
-		if err := s.ek.Validate(ekPub, ekCert); err != nil {
-			s.logger.Error("claim denied", "ip", ip, "scope", params.Scope, "reason", "EK validation failed", "err", err)
-			code := codes.Internal
-			if errors.Is(err, attestpkg.ErrEKNotTrusted) {
-				code = codes.PermissionDenied
-			}
-			return "", status.Error(code, "EK validation failed")
-		}
-	}
-
-	// Build attestation parameters from proto.
-	akParams := attest.AttestationParameters{
-		Public:            tpm.AkPublic,
-		CreateData:        tpm.AkCreateData,
-		CreateAttestation: tpm.AkCreateAttestation,
-		CreateSignature:   tpm.AkCreateSignature,
-	}
-
-	// Generate credential activation challenge.
-	ap := attest.ActivationParameters{
-		EK:   ekPub,
-		AK:   akParams,
-		Rand: rand.Reader,
-	}
-	if err := ap.CheckAKParameters(); err != nil {
-		return "", status.Errorf(codes.InvalidArgument, "invalid AK parameters: %v", err)
-	}
-	secret, ec, err := ap.Generate()
+	id, err := s.registry.Lookup(caller.Identity)
 	if err != nil {
-		s.logger.Error("generate challenge failed", "ip", ip, "err", err)
-		return "", status.Error(codes.Internal, "attestation challenge failed")
+		return nil, status.Errorf(codes.NotFound, "%v", err)
 	}
 
-	// Compute EK hash for audit.
-	ekHash := attestpkg.EKHashFromKey(ekPub)
-
-	// Send challenge to client.
-	if err := stream.Send(&pb.ClaimResponse{
-		Step: &pb.ClaimResponse_Challenge{
-			Challenge: &pb.TPMChallenge{
-				Credential: ec.Credential,
-				Secret:     ec.Secret,
-			},
-		},
-	}); err != nil {
-		return "", err
-	}
-
-	// Receive challenge response.
-	msg, err := stream.Recv()
+	certPEM, keyPEM, caCertPEM, err := s.issueIdentity(id, caller.Subject, req.CsrDer)
 	if err != nil {
-		return "", status.Error(codes.InvalidArgument, "expected challenge response")
-	}
-	activated := msg.GetChallengeResponse()
-	if activated == nil {
-		return "", status.Error(codes.InvalidArgument, "expected challenge_response")
+		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
 
-	// Verify credential activation (constant-time).
-	if subtle.ConstantTimeCompare(secret, activated) != 1 {
-		s.logger.Warn("claim denied", "ip", ip, "scope", params.Scope, "ek", ekHash, "reason", "credential activation failed")
-		return "", status.Error(codes.PermissionDenied, "TPM attestation failed")
-	}
-
-	return ekHash, nil
+	s.log.Info("renew ok", "identity", id.Name, "subject", caller.Subject)
+	return &enrollv1.RenewResponse{
+		CertPem:           certPEM,
+		KeyPem:            keyPEM,
+		CaBundlePem:       caCertPEM,
+		RenewAfterSeconds: uint32(id.PKI.TTL.Seconds()) / 2,
+		ExpiresInSeconds:  uint32(id.PKI.TTL.Seconds()),
+	}, nil
 }
 
-// buildResult constructs the filtered claim result.
-func (s *Server) buildResult(scope, subject string, csrDER []byte) (*pb.ClaimResult, []string, error) {
-	// Filter secrets by scope.
-	filteredSecrets := make(map[string]string, len(s.secrets))
-	for name, val := range s.secrets {
-		sc := s.scopes[name]
-		if sc == "" || sc == scope {
-			filteredSecrets[name] = val
-		}
+// issueIdentity is shared by Register and Renew. If csrDER is non-empty, the
+// caller's public key is taken from the CSR; otherwise a fresh keypair is
+// generated and returned alongside the cert. Subject (CN/O/OU), SANs, EKU
+// and TTL are always server-controlled.
+func (s *Server) issueIdentity(id *identity.Identity, subject string, csrDER []byte) (certPEM, keyPEM, caCertPEM []byte, err error) {
+	ca, err := pki.DeriveCAByName(s.ikm, id.PKI.CARef)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("derive CA: %w", err)
+	}
+	cn, dnsSANs, ipSANsRaw, err := id.PKI.Resolve(subject)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("resolve pki: %w", err)
+	}
+	ipSANs, err := parseIPs(ipSANsRaw)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("ip_sans: %w", err)
+	}
+	eku, err := pki.ParseExtKeyUsage(id.PKI.ExtKeyUsage)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("ext_key_usage: %w", err)
 	}
 
-	// Vars are deployment-wide metadata (intentionally unscoped).
-	filteredVars := make(map[string]string, len(s.cfg.Vars))
-	for name, val := range s.cfg.Vars {
-		filteredVars[name] = val
-	}
-
-	// Filter CAs by scope.
-	filteredCAs := make(map[string]*pb.CACert, len(s.ca))
-	for name, val := range s.ca {
-		entry := &pb.CACert{CertPem: val.CertPEM}
-		if sc := s.caScopes[name]; len(sc) > 0 && scopeMatch(sc, scope) {
-			entry.PrivateKeyPem = val.PrivateKeyPEM
-		}
-		filteredCAs[name] = entry
-	}
-
-	// Parse optional CSR (for CSR-mode certs).
-	var csr *x509.CertificateRequest
 	if len(csrDER) > 0 {
-		var err error
-		csr, err = x509.ParseCertificateRequest(csrDER)
+		csr, err := x509.ParseCertificateRequest(csrDER)
 		if err != nil {
-			return nil, nil, fmt.Errorf("invalid CSR: %w", err)
+			return nil, nil, nil, fmt.Errorf("parse csr: %w", err)
 		}
 		if err := csr.CheckSignature(); err != nil {
-			return nil, nil, fmt.Errorf("CSR signature verification failed: %w", err)
+			return nil, nil, nil, fmt.Errorf("csr signature: %w", err)
 		}
-	}
-
-	// Issue leaf certs for matching cert blocks.
-	certs := make(map[string]*pb.CertBundle)
-	var certNames []string
-	for _, cs := range s.certSpecs {
-		if !scopeMatch(cs.Scope, scope) {
-			continue
-		}
-
-		cn := cs.CN
-		if cn == "" {
-			cn = subject
-		}
-		if cn == "" {
-			return nil, nil, fmt.Errorf("cert %q requires subject (no static cn)", cs.Name)
-		}
-
-		dnsSANs, ipSANs, err := cs.ResolveSANs(subject)
+		certPEM, err = pki.SignIdentityCSR(ca, csr.PublicKey, cn, id.Policy, id.Name, dnsSANs, ipSANs, id.PKI.TTL, eku)
 		if err != nil {
-			return nil, nil, fmt.Errorf("cert %q: %w", cs.Name, err)
+			return nil, nil, nil, fmt.Errorf("sign identity csr: %w", err)
 		}
-
-		serverAuth := cs.ServerAuth != nil && *cs.ServerAuth
-		clientAuth := cs.ClientAuth == nil || *cs.ClientAuth
-
-		if cs.Mode == "csr" {
-			// CSR-mode: sign the worker's public key.
-			if csr == nil {
-				return nil, nil, fmt.Errorf("csr_der is required for CSR-mode cert %q", cs.Name)
-			}
-			ca := s.certCAs[cs.CA]
-			certPEM, err := pki.SignCSR(ca, csr.PublicKey, cn, dnsSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
-			if err != nil {
-				return nil, nil, fmt.Errorf("sign CSR for %q: %w", cs.Name, err)
-			}
-			certs[cs.Name] = &pb.CertBundle{CertPem: string(certPEM)}
-		} else {
-			// Push-mode: server generates keypair.
-			ca := s.certCAs[cs.CA]
-			certPEM, keyPEM, err := pki.IssueCert(ca, cn, dnsSANs, ipSANs, cs.TTL, serverAuth, clientAuth)
-			if err != nil {
-				return nil, nil, fmt.Errorf("issue cert %q: %w", cs.Name, err)
-			}
-			certs[cs.Name] = &pb.CertBundle{CertPem: string(certPEM), KeyPem: string(keyPEM)}
-		}
-		certNames = append(certNames, cs.Name)
+		return certPEM, nil, ca.CertPEM, nil
 	}
 
-	// Sign JWTs for scope-matched specs; collect all public keys.
-	var jwts map[string]string
-	jwtKeys := make(map[string]string, len(s.jwtSpecs))
-	for _, spec := range s.jwtSpecs {
-		key, ok := s.jwtKeys[spec.Name]
-		if !ok {
-			continue
-		}
-		jwtKeys[spec.Name] = key.PublicKeyPEM
-		if spec.Scope == scope {
-			if subject == "" {
-				return nil, nil, fmt.Errorf("JWT %q requires subject", spec.Name)
-			}
-			signed, err := jwtpkg.Sign(key.PrivateKey, spec.Issuer, spec.Audience, subject, spec.TTL)
-			if err != nil {
-				return nil, nil, fmt.Errorf("sign JWT %q: %w", spec.Name, err)
-			}
-			if jwts == nil {
-				jwts = make(map[string]string)
-			}
-			jwts[spec.Name] = signed
-		}
+	certPEM, keyPEM, err = pki.IssueIdentityCert(ca, cn, id.Policy, id.Name, dnsSANs, ipSANs, id.PKI.TTL, eku)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("issue identity cert: %w", err)
 	}
-
-	return &pb.ClaimResult{
-		Secrets: filteredSecrets,
-		Vars:    filteredVars,
-		Ca:      filteredCAs,
-		Certs:   certs,
-		Jwts:    jwts,
-		JwtKeys: jwtKeys,
-	}, certNames, nil
+	return certPEM, keyPEM, ca.CertPEM, nil
 }
 
-// Render renders a server-side template with fresh credentials.
-// The caller authenticates via mTLS (same CA as Claim). Authorization is
-// enforced by checking the caller's cert OU against the template's scope
-// (Vault cert auth pattern: allowed_organizational_units).
-func (s *Server) Render(ctx context.Context, req *pb.RenderRequest) (*pb.RenderResponse, error) {
-	ip := peerIP(ctx)
+// -----------------------------------------------------------------------------
+// Read
 
-	if !s.limiter.allow(ip) {
-		s.logger.Warn("render denied", "ip", ip, "reason", "rate limited")
-		return nil, status.Error(codes.ResourceExhausted, "too many requests")
-	}
-
-	tpl, ok := s.templates[req.GetName()]
-	if !ok {
-		s.logger.Warn("render denied", "ip", ip, "name", req.GetName(), "reason", "unknown template")
-		return nil, status.Error(codes.NotFound, "unknown template")
-	}
-
-	// Authorize: if template has a scope, caller's cert OU must match.
-	// Unscoped templates are available to all callers (same pattern as secrets/certs).
-	if tpl.Scope != "" {
-		peerScope, err := peerCertScope(ctx)
-		if err != nil {
-			s.logger.Warn("render denied", "ip", ip, "name", req.GetName(), "reason", "no peer cert")
-			return nil, status.Error(codes.Unauthenticated, "client certificate required")
-		}
-		if peerScope != tpl.Scope {
-			s.logger.Warn("render denied", "ip", ip, "name", req.GetName(),
-				"reason", "scope mismatch", "peer_scope", peerScope, "template_scope", tpl.Scope)
-			return nil, status.Error(codes.PermissionDenied, "scope mismatch")
-		}
-	}
-
-	// Generate fresh HMAC token scoped to the template's scope.
-	tok := token.Generate(s.hmacKey, time.Now(), s.cfg.TokenWindow, tpl.Scope)
-
-	// Generate ephemeral client cert bundle with template scope embedded as OU.
-	certBundle, err := pki.GenerateClientCert(s.mtlsCA, tpl.Scope, s.clientTTL)
+func (s *Server) Read(ctx context.Context, req *enrollv1.Request) (*enrollv1.Response, error) {
+	caller, err := s.callerFromPeer(ctx)
 	if err != nil {
-		s.logger.Error("render failed", "ip", ip, "name", tpl.Name, "reason", "generate cert", "err", err)
-		return nil, status.Error(codes.Internal, "internal error")
+		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
 	}
-
-	// Build template variables: ${token}, ${cert}, ${vars.*}
-	tplVars := map[string]cty.Value{
-		"token": cty.StringVal(tok),
-		"cert":  cty.StringVal(string(certBundle)),
+	if req.Path == "" {
+		return nil, status.Error(codes.InvalidArgument, "path required")
 	}
-	if len(s.vars) > 0 {
-		varMap := make(map[string]cty.Value, len(s.vars))
-		for k, v := range s.vars {
-			varMap[k] = cty.StringVal(v)
-		}
-		tplVars["vars"] = cty.ObjectVal(varMap)
-	}
-
-	rendered, err := render.File(tpl.Source, tplVars)
+	resp, err := s.resolver.Read(&resource.Caller{
+		Identity: caller.Identity,
+		Policy:   caller.Policy,
+		Subject:  caller.Subject,
+	}, req.Path)
 	if err != nil {
-		s.logger.Error("render failed", "ip", ip, "name", tpl.Name, "reason", "render", "err", err)
-		return nil, status.Error(codes.Internal, "template render failed")
+		return nil, mapResolveError(err)
 	}
-
-	s.logger.Info("render", "ip", ip, "name", tpl.Name, "scope", tpl.Scope)
-	return &pb.RenderResponse{Content: string(rendered)}, nil
+	return &enrollv1.Response{
+		Content:     resp.Content,
+		ContentType: resp.ContentType,
+		TtlSeconds:  resp.TTLSeconds,
+	}, nil
 }
 
-// peerIP extracts the client IP from gRPC peer info.
-func peerIP(ctx context.Context) string {
+// -----------------------------------------------------------------------------
+// Write
+
+func (s *Server) Write(ctx context.Context, req *enrollv1.Request) (*enrollv1.Response, error) {
+	caller, err := s.callerFromPeer(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
+	}
+	if req.Path == "" {
+		return nil, status.Error(codes.InvalidArgument, "path required")
+	}
+	resp, err := s.resolver.Write(&resource.Caller{
+		Identity: caller.Identity,
+		Policy:   caller.Policy,
+		Subject:  caller.Subject,
+	}, req.Path, req.Data)
+	if err != nil {
+		return nil, mapResolveError(err)
+	}
+	return &enrollv1.Response{
+		Content:     resp.Content,
+		ContentType: resp.ContentType,
+		TtlSeconds:  resp.TTLSeconds,
+	}, nil
+}
+
+// -----------------------------------------------------------------------------
+// helpers
+
+type callerContext struct {
+	Identity string
+	Policy   string
+	Subject  string
+}
+
+// callerFromPeer extracts identity/policy/subject from the peer TLS cert and
+// verifies the cert was issued by the identity CA (rejecting bootstrap certs
+// on Renew/Read/Write).
+func (s *Server) callerFromPeer(ctx context.Context) (*callerContext, error) {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
-		return "unknown"
+		return nil, errors.New("no peer info")
 	}
-	host, _, err := net.SplitHostPort(p.Addr.String())
-	if err != nil {
-		return p.Addr.String()
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return nil, errors.New("peer is not TLS")
 	}
-	return host
+	if len(tlsInfo.State.PeerCertificates) == 0 {
+		return nil, errors.New("no client cert")
+	}
+	leaf := tlsInfo.State.PeerCertificates[0]
+
+	pool := x509.NewCertPool()
+	pool.AddCert(s.serverCA.Cert)
+	if _, err := leaf.Verify(x509.VerifyOptions{
+		Roots:     pool,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}); err != nil {
+		return nil, fmt.Errorf("client cert not signed by identity CA: %w", err)
+	}
+
+	if leaf.Subject.CommonName == "" || len(leaf.Subject.OrganizationalUnit) == 0 || len(leaf.Subject.Organization) == 0 {
+		return nil, errors.New("client cert missing CN/OU/O")
+	}
+	return &callerContext{
+		Identity: leaf.Subject.Organization[0],
+		Policy:   leaf.Subject.OrganizationalUnit[0],
+		Subject:  leaf.Subject.CommonName,
+	}, nil
 }
 
-// peerCertScope extracts the scope (first OU) from the peer's TLS client
-// certificate. Returns an error if no verified peer certificate is available.
-// Follows the Vault cert auth pattern: allowed_organizational_units.
-func peerCertScope(ctx context.Context) (string, error) {
+func peerCerts(ctx context.Context) []*x509.Certificate {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
-		return "", fmt.Errorf("no peer info")
+		return nil
 	}
-	ti, ok := p.AuthInfo.(credentials.TLSInfo)
-	if !ok || len(ti.State.VerifiedChains) == 0 || len(ti.State.VerifiedChains[0]) == 0 {
-		return "", fmt.Errorf("no verified peer certificate")
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return nil
 	}
-	leaf := ti.State.VerifiedChains[0][0]
-	if len(leaf.Subject.OrganizationalUnit) == 0 {
-		return "", fmt.Errorf("peer certificate has no OU")
-	}
-	return leaf.Subject.OrganizationalUnit[0], nil
+	return tlsInfo.State.PeerCertificates
 }
 
-func scopeMatch(allowed []string, scope string) bool {
-	for _, a := range allowed {
-		if a == scope {
-			return true
+func parseIPs(raw []string) ([]net.IP, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]net.IP, 0, len(raw))
+	for _, s := range raw {
+		ip := net.ParseIP(s)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid IP %q", s)
 		}
+		out = append(out, ip)
 	}
-	return false
+	return out, nil
 }
 
-// ipRateLimiter tracks per-IP request rates.
-type ipRateLimiter struct {
-	mu        sync.Mutex
-	limiters  map[string]*limiterEntry
-	limit     rate.Limit
-	burst     int
-	lastPurge time.Time
-}
-
-type limiterEntry struct {
-	limiter  *rate.Limiter
-	lastSeen time.Time
-}
-
-func newIPRateLimiter(r rate.Limit, burst int) *ipRateLimiter {
-	return &ipRateLimiter{
-		limiters: make(map[string]*limiterEntry),
-		limit:    r,
-		burst:    burst,
+// mapResolveError turns a resource.Resolve error into a gRPC status.
+func mapResolveError(err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "permission denied"):
+		return status.Error(codes.PermissionDenied, msg)
+	case strings.Contains(msg, "not found"):
+		return status.Error(codes.NotFound, msg)
+	default:
+		return status.Error(codes.InvalidArgument, msg)
 	}
 }
 
-func (l *ipRateLimiter) allow(ip string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+// streamChallenger implements attestor.Challenger over the Register stream.
+type streamChallenger struct {
+	stream grpc.BidiStreamingServer[enrollv1.RegisterRequest, enrollv1.RegisterResponse]
+}
 
-	if time.Since(l.lastPurge) > 5*time.Minute {
-		cutoff := time.Now().Add(-10 * time.Minute)
-		for k, e := range l.limiters {
-			if e.lastSeen.Before(cutoff) {
-				delete(l.limiters, k)
-			}
-		}
-		l.lastPurge = time.Now()
+func (c *streamChallenger) Challenge(_ context.Context, ch *enrollv1.TPMChallenge) ([]byte, error) {
+	if err := c.stream.Send(&enrollv1.RegisterResponse{
+		Step: &enrollv1.RegisterResponse_Challenge{Challenge: ch},
+	}); err != nil {
+		return nil, err
 	}
-
-	e, exists := l.limiters[ip]
-	if !exists {
-		e = &limiterEntry{limiter: rate.NewLimiter(l.limit, l.burst)}
-		l.limiters[ip] = e
+	req, err := c.stream.Recv()
+	if err != nil {
+		return nil, err
 	}
-	e.lastSeen = time.Now()
-	return e.limiter.Allow()
+	resp, ok := req.Step.(*enrollv1.RegisterRequest_ChallengeResponse)
+	if !ok {
+		return nil, errors.New("expected challenge response")
+	}
+	return resp.ChallengeResponse, nil
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -8,7 +9,7 @@ import (
 )
 
 func cmdEKHash(args []string) int {
-	newFlagSet("ek-hash").Parse(args)
+	flag.NewFlagSet("ek-hash", flag.ExitOnError).Parse(args)
 
 	if !tpm.Available() {
 		fmt.Fprintln(os.Stderr, "error: no TPM available on this host")
