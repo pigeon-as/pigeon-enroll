@@ -40,9 +40,9 @@ ACME, and step-ca.
 Env vars override defaults (Vault convention):
 
 ```
-PIGEON_ENROLL_ADDR             server address (host:port)
-PIGEON_ENROLL_CACERT           path to server CA PEM
-PIGEON_ENROLL_IDENTITY_DIR     directory with identity cert/key/ca (default /etc/pigeon/identity)
+ENROLL_ADDR             server address (host:port)
+ENROLL_CACERT           path to server CA PEM
+ENROLL_IDENTITY_DIR     directory with identity cert/key/ca (default /etc/pigeon/identity)
 ```
 
 ```bash

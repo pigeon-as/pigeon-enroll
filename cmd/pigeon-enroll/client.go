@@ -17,9 +17,9 @@ import (
 // clientFlags holds the server-dial flags common to all subcommands. Values
 // are overridable via env vars (Vault convention):
 //
-//	PIGEON_ENROLL_ADDR
-//	PIGEON_ENROLL_CACERT
-//	PIGEON_ENROLL_IDENTITY_DIR
+//	ENROLL_ADDR
+//	ENROLL_CACERT
+//	ENROLL_IDENTITY_DIR
 type clientFlags struct {
 	addr        string
 	ca          string
@@ -29,13 +29,13 @@ type clientFlags struct {
 // registerClientFlags attaches the shared flags to fs with env-var defaults.
 func registerClientFlags(fs *flag.FlagSet) *clientFlags {
 	c := &clientFlags{}
-	fs.StringVar(&c.addr, "addr", envDefault("PIGEON_ENROLL_ADDR", ""),
-		"server address host:port (env: PIGEON_ENROLL_ADDR)")
-	fs.StringVar(&c.ca, "ca", envDefault("PIGEON_ENROLL_CACERT", ""),
-		"path to server CA PEM bundle (env: PIGEON_ENROLL_CACERT)")
+	fs.StringVar(&c.addr, "addr", envDefault("ENROLL_ADDR", ""),
+		"server address host:port (env: ENROLL_ADDR)")
+	fs.StringVar(&c.ca, "ca", envDefault("ENROLL_CACERT", ""),
+		"path to server CA PEM bundle (env: ENROLL_CACERT)")
 	fs.StringVar(&c.identityDir, "identity-dir",
-		envDefault("PIGEON_ENROLL_IDENTITY_DIR", "/etc/pigeon/identity"),
-		"directory holding identity cert.pem / key.pem / ca.pem (env: PIGEON_ENROLL_IDENTITY_DIR)")
+		envDefault("ENROLL_IDENTITY_DIR", "/etc/pigeon/identity"),
+		"directory holding identity cert.pem / key.pem / ca.pem (env: ENROLL_IDENTITY_DIR)")
 	return c
 }
 
@@ -67,10 +67,10 @@ func readValueOrFile(v string) ([]byte, error) {
 //     (identity cert).
 func dialServer(addr, caPath, bundlePath string) (*grpc.ClientConn, error) {
 	if addr == "" {
-		return nil, errors.New("-addr is required (or set PIGEON_ENROLL_ADDR)")
+		return nil, errors.New("-addr is required (or set ENROLL_ADDR)")
 	}
 	if caPath == "" {
-		return nil, errors.New("-ca is required (or set PIGEON_ENROLL_CACERT)")
+		return nil, errors.New("-ca is required (or set ENROLL_CACERT)")
 	}
 
 	caPEM, err := os.ReadFile(caPath)
