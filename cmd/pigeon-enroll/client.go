@@ -99,9 +99,16 @@ func dialServer(addr, caPath, bundlePath string) (*grpc.ClientConn, error) {
 
 	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS13,
-		// Disable default name-based verification; SPIFFE ID check below
-		// handles trust. Chain is built against `pool` explicitly.
-		InsecureSkipVerify: true,
+		// SPIFFE verification pattern (canonical in go-spiffe / SPIRE /
+		// Istio): InsecureSkipVerify disables Go's default hostname match,
+		// and VerifyPeerCertificate below re-implements trust — it builds
+		// the chain against the caller's CA pool, enforces NotBefore /
+		// NotAfter / ExtKeyUsage via leaf.Verify, and requires the leaf
+		// carry the expected SPIFFE ID as a URI SAN. This is strictly
+		// stronger than default verification, not weaker: CodeQL's
+		// `go/disabled-certificate-check` fires on the field name alone
+		// without reasoning about the custom hook.
+		InsecureSkipVerify: true, //nolint:gosec // SPIFFE, see VerifyPeerCertificate
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			return verifySPIFFEServer(rawCerts, pool, expectedID)
 		},

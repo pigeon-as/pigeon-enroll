@@ -14,11 +14,11 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
-	"net/url"
 	"fmt"
 	"io"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -117,9 +117,8 @@ func writeIdentityCA(t *testing.T, ikm []byte) string {
 	return path
 }
 
-func writeConfig(t *testing.T, listen, keyPath string) string {
+func writeConfig(t *testing.T, listen string) string {
 	t.Helper()
-	_ = keyPath // signing key is HKDF-derived from the IKM the server loads
 	cfg := fmt.Sprintf(`
 trust_domain   = "pigeon.test"
 listen         = "%s"
@@ -289,7 +288,7 @@ func TestVersion(t *testing.T) {
 func TestRegister_IssuesIdentityCert(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
@@ -310,7 +309,7 @@ func TestRegister_IssuesIdentityCert(t *testing.T) {
 func TestRead_VarAndSecret(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
@@ -331,7 +330,7 @@ func TestRead_VarAndSecret(t *testing.T) {
 func TestWrite_PKIRole(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
@@ -366,7 +365,7 @@ func TestWrite_PKIRole(t *testing.T) {
 func TestRead_DeniedPath(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
@@ -381,7 +380,7 @@ func TestRead_DeniedPath(t *testing.T) {
 func TestRenew_IssuesLaterExpiry(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
@@ -405,7 +404,7 @@ func TestRenew_IssuesLaterExpiry(t *testing.T) {
 
 func TestGenerateToken_RejectsUnknownIdentity(t *testing.T) {
 	_, keyPath := randomIKM(t)
-	cfgPath := writeConfig(t, "", keyPath)
+	cfgPath := writeConfig(t, "")
 
 	out := runExpectErr(t, "generate-token",
 		"-config="+cfgPath,
@@ -418,7 +417,7 @@ func TestGenerateToken_RejectsUnknownIdentity(t *testing.T) {
 func TestNonceReplay(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	tok := mintToken(t, keyPath, cfgPath, "worker")
@@ -446,7 +445,7 @@ func TestNonceReplay(t *testing.T) {
 func TestScopeBinding(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	workerTok := mintToken(t, keyPath, cfgPath, "worker")
@@ -465,7 +464,7 @@ func TestScopeBinding(t *testing.T) {
 func TestCSR_SubjectOverridden(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
@@ -490,7 +489,7 @@ func TestCSR_SubjectOverridden(t *testing.T) {
 func TestWrite_DeniedPath(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
