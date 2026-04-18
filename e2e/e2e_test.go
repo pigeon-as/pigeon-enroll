@@ -185,12 +185,13 @@ identity "control_plane" {
 func startServer(t *testing.T, cfgPath, keyPath, addr string) {
 	t.Helper()
 	noncePath := filepath.Join(t.TempDir(), "nonces")
+	bindingsPath := filepath.Join(t.TempDir(), "bindings")
 	cmd := exec.Command(binary,
 		"server",
 		"-config="+cfgPath,
 		"-key-path="+keyPath,
 		"-nonce-store="+noncePath,
-		"-hosts=127.0.0.1",
+		"-bindings-store="+bindingsPath,
 		"-log-level=debug",
 	)
 	cmd.Stdout = os.Stdout
