@@ -10,7 +10,6 @@ import (
 const validConfig = `
 trust_domain  = "pigeon.as"
 listen        = ":9443"
-identity_ttl  = "720h"
 renew_fraction = 0.5
 
 attestor "tpm" {
@@ -85,7 +84,6 @@ func TestLoadValid(t *testing.T) {
 	must.NoError(t, err)
 	must.Eq(t, "pigeon.as", cfg.TrustDomain)
 	must.Eq(t, ":9443", cfg.Listen)
-	must.EqOp(t, 720*time.Hour, cfg.IdentityTTL)
 	must.MapLen(t, 3, cfg.Attestors)
 	must.EqOp(t, 30*time.Minute, cfg.Attestors["hmac"].Window)
 	must.MapLen(t, 3, cfg.CAs)

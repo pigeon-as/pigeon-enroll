@@ -283,9 +283,6 @@ func (r *Resolver) writePKI(caller *Caller, role string, data map[string][]byte)
 	if err != nil {
 		return nil, fmt.Errorf("parse csr: %w", err)
 	}
-	if err := csr.CheckSignature(); err != nil {
-		return nil, fmt.Errorf("csr signature: %w", err)
-	}
 	cn, dnsSANs, ipSANsRaw, err := spec.Resolve(caller.Subject)
 	if err != nil {
 		return nil, err
@@ -302,7 +299,7 @@ func (r *Resolver) writePKI(caller *Caller, role string, data map[string][]byte)
 	if err != nil {
 		return nil, err
 	}
-	certPEM, err := pki.SignCSR(ca, csr.PublicKey, cn, dnsSANs, ipSANs, spec.TTL, eku)
+	certPEM, err := pki.SignCSR(ca, csr, cn, dnsSANs, ipSANs, spec.TTL, eku)
 	if err != nil {
 		return nil, fmt.Errorf("sign csr: %w", err)
 	}

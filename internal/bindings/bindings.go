@@ -72,12 +72,17 @@ func (s *Store) Lookup(ekHash string) (Record, bool) {
 // Bind records a first-time binding for ekHash → identity. It is an error
 // to call Bind for an EK that already has a record; callers should Lookup
 // first and use Touch for known-same-identity refresh.
+//
+// Persistence order is disk-first: the JSONL append is fsynced before the
+// in-memory map is updated. A crash between append and mutation is safe
+// (replay on restart reconstructs the map); a failed append leaves the
+// map untouched, preserving binding immutability across transient IO errors.
 func (s *Store) Bind(ekHash, identity string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.recs[ekHash]; ok {
 		if existing.Identity != identity {
-			return fmt.Errorf("%w: bound to %q", ErrIdentityMismatch, existing.Identity)
+			return fmt.Errorf("%w %q", ErrIdentityMismatch, existing.Identity)
 		}
 		return s.touchLocked(ekHash)
 	}
@@ -88,8 +93,11 @@ func (s *Store) Bind(ekHash, identity string) error {
 		FirstSeen: now,
 		LastSeen:  now,
 	}
+	if err := s.appendLocked(rec); err != nil {
+		return err
+	}
 	s.recs[ekHash] = rec
-	return s.appendLocked(rec)
+	return nil
 }
 
 // Touch refreshes the last_seen timestamp for an existing binding. Returns
@@ -102,7 +110,7 @@ func (s *Store) Touch(ekHash, identity string) error {
 		return fmt.Errorf("ek not bound")
 	}
 	if rec.Identity != identity {
-		return fmt.Errorf("%w: bound to %q", ErrIdentityMismatch, rec.Identity)
+		return fmt.Errorf("%w %q", ErrIdentityMismatch, rec.Identity)
 	}
 	return s.touchLocked(ekHash)
 }
@@ -132,8 +140,11 @@ func (s *Store) List() []Record {
 func (s *Store) touchLocked(ekHash string) error {
 	rec := s.recs[ekHash]
 	rec.LastSeen = time.Now().UTC()
+	if err := s.appendLocked(rec); err != nil {
+		return err
+	}
 	s.recs[ekHash] = rec
-	return s.appendLocked(rec)
+	return nil
 }
 
 func (s *Store) loadFile() error {

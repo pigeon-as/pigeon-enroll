@@ -57,7 +57,15 @@ func cmdServer(args []string) int {
 		return 1
 	}
 
-	nonces, err := nonce.New(2*time.Hour, *noncePath)
+	// Nonces must outlive any token that could still be accepted. The hmac
+	// attestor accepts the current and previous window (so 2x window), and
+	// we keep nonces for at least that long — otherwise a purged nonce
+	// could be replayed against a still-valid token.
+	nonceMax := 2 * time.Hour
+	if a, ok := cfg.Attestors["hmac"]; ok && a.Window > 0 {
+		nonceMax = 2 * a.Window
+	}
+	nonces, err := nonce.New(nonceMax, *noncePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nonce store: %v\n", err)
 		return 1

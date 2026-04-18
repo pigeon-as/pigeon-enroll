@@ -20,6 +20,15 @@ var testIKM = []byte{
 	0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
 }
 
+func buildCSR(t *testing.T, priv ed25519.PrivateKey) *x509.CertificateRequest {
+	t.Helper()
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, priv)
+	must.NoError(t, err)
+	csr, err := x509.ParseCertificateRequest(der)
+	must.NoError(t, err)
+	return csr
+}
+
 func TestDeriveCA_Deterministic(t *testing.T) {
 	ca1, err := DeriveCA(testIKM, "identity")
 	must.NoError(t, err)
@@ -113,11 +122,12 @@ func TestIssueIdentityCert_SubjectShape(t *testing.T) {
 func TestSignIdentityCSR_UsesCallerPublicKey(t *testing.T) {
 	ca, err := DeriveCA(testIKM, "identity")
 	must.NoError(t, err)
-	callerPub, _, err := ed25519.GenerateKey(rand.Reader)
+	callerPub, callerPriv, err := ed25519.GenerateKey(rand.Reader)
 	must.NoError(t, err)
+	csr := buildCSR(t, callerPriv)
 
 	certPEM, err := SignIdentityCSR(
-		ca, callerPub, "worker-01", "worker", "worker",
+		ca, csr, "worker-01", "worker", "worker",
 		nil, nil,
 		time.Hour, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	)
@@ -133,11 +143,12 @@ func TestSignIdentityCSR_UsesCallerPublicKey(t *testing.T) {
 func TestSignCSR_SubjectAndSANs(t *testing.T) {
 	ca, err := DeriveCA(testIKM, "mesh")
 	must.NoError(t, err)
-	callerPub, _, err := ed25519.GenerateKey(rand.Reader)
+	callerPub, callerPriv, err := ed25519.GenerateKey(rand.Reader)
 	must.NoError(t, err)
+	csr := buildCSR(t, callerPriv)
 
 	certPEM, err := SignCSR(
-		ca, callerPub,
+		ca, csr,
 		"worker-01",
 		[]string{"mesh.internal"}, []net.IP{net.ParseIP("10.0.0.1")},
 		time.Hour, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},

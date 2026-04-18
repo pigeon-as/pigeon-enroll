@@ -180,12 +180,15 @@ func (s *Server) Register(stream grpc.BidiStreamingServer[enrollv1.RegisterReque
 	// requested identity, TPM credential activation alone is sufficient —
 	// no fresh HMAC token or bootstrap cert needed. A different-identity
 	// binding is refused unconditionally, blocking identity-hopping even if
-	// an operator accidentally mints a token for the wrong identity.
+	// an operator accidentally mints a token for the wrong identity. The
+	// bypass only applies when the identity actually configures a TPM
+	// attestor — otherwise a misconfigured identity (TPM removed after
+	// first bind) would skip every attestor and reissue without proof.
 	ekHash, known := s.recogniseEK(params.Tpm, params.Identity)
 	if known < 0 {
 		return status.Error(codes.PermissionDenied, "ek bound to a different identity")
 	}
-	tpmBound := known == 1
+	tpmBound := known == 1 && identityHasTPMAttestor(id)
 
 	for _, a := range id.Attestors {
 		if tpmBound && a.Kind() != "tpm" {
@@ -256,7 +259,7 @@ func (s *Server) Renew(ctx context.Context, req *enrollv1.RenewRequest) (*enroll
 		CertPem:           certPEM,
 		KeyPem:            keyPEM,
 		CaBundlePem:       caCertPEM,
-		RenewAfterSeconds: uint32(id.PKI.TTL.Seconds()) / 2,
+		RenewAfterSeconds: uint32(id.PKI.TTL.Seconds() * s.cfg.RenewFraction),
 		ExpiresInSeconds:  uint32(id.PKI.TTL.Seconds()),
 	}, nil
 }
@@ -288,10 +291,7 @@ func (s *Server) issueIdentity(id *identity.Identity, subject string, csrDER []b
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("parse csr: %w", err)
 		}
-		if err := csr.CheckSignature(); err != nil {
-			return nil, nil, nil, fmt.Errorf("csr signature: %w", err)
-		}
-		certPEM, err = pki.SignIdentityCSR(ca, csr.PublicKey, cn, id.Policy, id.Name, dnsSANs, ipSANs, id.PKI.TTL, eku)
+		certPEM, err = pki.SignIdentityCSR(ca, csr, cn, id.Policy, id.Name, dnsSANs, ipSANs, id.PKI.TTL, eku)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("sign identity csr: %w", err)
 		}
@@ -429,6 +429,17 @@ func parseIPs(raw []string) ([]net.IP, error) {
 	return out, nil
 }
 
+// identityHasTPMAttestor reports whether the identity's attestor list
+// includes a TPM attestor.
+func identityHasTPMAttestor(id *identity.Identity) bool {
+	for _, a := range id.Attestors {
+		if a.Kind() == "tpm" {
+			return true
+		}
+	}
+	return false
+}
+
 // recogniseEK computes the EK hash (if TPM evidence is present) and checks
 // it against the binding store. Return values:
 //
@@ -466,7 +477,11 @@ func (s *Server) mapResolveError(err error) error {
 		s.log.Debug("resolve not found", "error", err)
 		return status.Error(codes.NotFound, "not found")
 	default:
-		return status.Error(codes.InvalidArgument, err.Error())
+		// Raw err.Error() would leak resource shape (e.g. "pki X references
+		// unknown ca Y") to unauthenticated probes. Keep detail in the log,
+		// send a generic code to the caller.
+		s.log.Debug("resolve invalid", "error", err)
+		return status.Error(codes.InvalidArgument, "invalid argument")
 	}
 }
 

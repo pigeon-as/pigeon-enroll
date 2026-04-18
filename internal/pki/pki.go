@@ -110,16 +110,25 @@ func IssueIdentityCert(ca *CA, cn, policyName, identityName string, dnsSANs []st
 
 // SignIdentityCSR signs a caller-supplied CSR as the pigeon-enroll identity
 // cert. Only the CSR's public key is used; Subject (CN/O/OU), SANs, EKU, and
-// TTL are all server-controlled (SPIRE pattern).
-func SignIdentityCSR(ca *CA, pub crypto.PublicKey, cn, policyName, identityName string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) ([]byte, error) {
-	return signCSR(ca, pub, identityCertTemplate(cn, policyName, identityName, dnsSANs, ipSANs, ttl, eku))
+// TTL are all server-controlled (SPIRE pattern). The CSR's self-signature
+// is verified inside — callers pass the parsed request, not a bare pubkey,
+// so proof-of-possession is impossible to accidentally skip.
+func SignIdentityCSR(ca *CA, csr *x509.CertificateRequest, cn, policyName, identityName string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) ([]byte, error) {
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("csr signature: %w", err)
+	}
+	return signCSR(ca, csr.PublicKey, identityCertTemplate(cn, policyName, identityName, dnsSANs, ipSANs, ttl, eku))
 }
 
 // SignCSR signs a CSR with a server-controlled template. Only the public
 // key is extracted from the CSR — subject, SANs, EKU, and validity are all
 // set by the server. Same privilege-escalation protection as SignIdentityCSR,
-// without the identity-shape (OU/O) encoding.
-func SignCSR(ca *CA, pubKey crypto.PublicKey, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) ([]byte, error) {
+// without the identity-shape (OU/O) encoding. The CSR's self-signature is
+// verified inside.
+func SignCSR(ca *CA, csr *x509.CertificateRequest, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) ([]byte, error) {
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("csr signature: %w", err)
+	}
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		Subject:     pkix.Name{CommonName: cn},
@@ -130,7 +139,7 @@ func SignCSR(ca *CA, pubKey crypto.PublicKey, cn string, dnsSANs []string, ipSAN
 		DNSNames:    dnsSANs,
 		IPAddresses: ipSANs,
 	}
-	return signCSR(ca, pubKey, tmpl)
+	return signCSR(ca, csr.PublicKey, tmpl)
 }
 
 // ParseExtKeyUsage converts a list of EKU name strings ("client_auth",

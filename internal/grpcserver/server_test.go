@@ -54,8 +54,10 @@ func TestMapResolveError(t *testing.T) {
 	}{
 		{fmt.Errorf("var foo: %w", resource.ErrNotFound), codes.NotFound, "not found"},
 		{fmt.Errorf("read on var/foo (policy %q): %w", "worker", resource.ErrPermissionDenied), codes.PermissionDenied, "permission denied"},
-		{errors.New("bad path"), codes.InvalidArgument, "bad path"},
-		{errors.New("secret not found"), codes.InvalidArgument, "secret not found"}, // string-contains alone is NOT enough
+		// Arbitrary resolver errors are collapsed to a generic message so we
+		// don't leak resource shape to unauthenticated probes.
+		{errors.New("pki X references unknown ca Y"), codes.InvalidArgument, "invalid argument"},
+		{errors.New("secret not found"), codes.InvalidArgument, "invalid argument"}, // string-contains alone is NOT enough
 	}
 	for _, c := range cases {
 		got := s.mapResolveError(c.in)

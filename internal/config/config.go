@@ -22,7 +22,6 @@ import (
 type Config struct {
 	TrustDomain   string
 	Listen        string
-	IdentityTTL   time.Duration
 	RenewFraction float64
 
 	Attestors  map[string]*Attestor
@@ -223,16 +222,7 @@ func Parse(data []byte, filename string) (*Config, error) {
 	if raw.Listen == "" {
 		cfg.Listen = ":8443"
 	}
-	if raw.IdentityTTL != "" {
-		d, err := time.ParseDuration(raw.IdentityTTL)
-		if err != nil {
-			return nil, fmt.Errorf("identity_ttl: %w", err)
-		}
-		cfg.IdentityTTL = d
-	} else {
-		cfg.IdentityTTL = 720 * time.Hour
-	}
-	if cfg.RenewFraction == 0 {
+	if cfg.RenewFraction <= 0 || cfg.RenewFraction >= 1 {
 		cfg.RenewFraction = 0.5
 	}
 
