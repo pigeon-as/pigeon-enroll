@@ -493,53 +493,20 @@ func parseDuration(s, def string) (time.Duration, error) {
 // buildEvalContext exposes declared block names as cty string values, so that
 // references like `ca = ca.mesh` evaluate to the string "mesh".
 func buildEvalContext(cfg *Config) *hcl.EvalContext {
-	vars := map[string]cty.Value{}
-
-	vars["attestor"] = refObject(cfg.Attestors)
-	vars["ca"] = refObjectCAs(cfg.CAs)
-	vars["pki"] = refObjectPKIs(cfg.PKIs)
-	vars["policy"] = refObjectPolicies(cfg.Policies)
-
-	return &hcl.EvalContext{Variables: vars}
+	return &hcl.EvalContext{
+		Variables: map[string]cty.Value{
+			"attestor": refObject(cfg.Attestors),
+			"ca":       refObject(cfg.CAs),
+			"pki":      refObject(cfg.PKIs),
+			"policy":   refObject(cfg.Policies),
+		},
+	}
 }
 
-// refObject builds an HCL reference object from a map of *Attestor. Empty map
-// becomes cty.EmptyObjectVal so that `attestor.missing` produces a clean
+// refObject builds an HCL reference object from a map keyed by block name.
+// Empty map becomes cty.EmptyObjectVal so `kind.missing` produces a clean
 // "unsupported attribute" error instead of "unknown variable".
-func refObject(m map[string]*Attestor) cty.Value {
-	if len(m) == 0 {
-		return cty.EmptyObjectVal
-	}
-	obj := make(map[string]cty.Value, len(m))
-	for k := range m {
-		obj[k] = cty.StringVal(k)
-	}
-	return cty.ObjectVal(obj)
-}
-
-func refObjectCAs(m map[string]*CA) cty.Value {
-	if len(m) == 0 {
-		return cty.EmptyObjectVal
-	}
-	obj := make(map[string]cty.Value, len(m))
-	for k := range m {
-		obj[k] = cty.StringVal(k)
-	}
-	return cty.ObjectVal(obj)
-}
-
-func refObjectPKIs(m map[string]*PKI) cty.Value {
-	if len(m) == 0 {
-		return cty.EmptyObjectVal
-	}
-	obj := make(map[string]cty.Value, len(m))
-	for k := range m {
-		obj[k] = cty.StringVal(k)
-	}
-	return cty.ObjectVal(obj)
-}
-
-func refObjectPolicies(m map[string]*Policy) cty.Value {
+func refObject[V any](m map[string]V) cty.Value {
 	if len(m) == 0 {
 		return cty.EmptyObjectVal
 	}

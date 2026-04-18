@@ -150,7 +150,7 @@ func (r *Resolver) Write(caller *Caller, path string, data map[string][]byte) (*
 func (r *Resolver) readVar(name string) (*Response, error) {
 	v, ok := r.cfg.Vars[name]
 	if !ok {
-		return nil, fmt.Errorf("var %q not found", name)
+		return nil, fmt.Errorf("var %q: %w", name, ErrNotFound)
 	}
 	return &Response{Content: []byte(v.Value), ContentType: "text/plain"}, nil
 }
@@ -158,7 +158,7 @@ func (r *Resolver) readVar(name string) (*Response, error) {
 func (r *Resolver) readSecret(name string) (*Response, error) {
 	spec, ok := r.cfg.Secrets[name]
 	if !ok {
-		return nil, fmt.Errorf("secret %q not found", name)
+		return nil, fmt.Errorf("secret %q: %w", name, ErrNotFound)
 	}
 	raw := make([]byte, spec.Length)
 	info := "pigeon-enroll derive " + name
@@ -175,9 +175,9 @@ func (r *Resolver) readSecret(name string) (*Response, error) {
 
 func (r *Resolver) readCA(name string) (*Response, error) {
 	if _, ok := r.cfg.CAs[name]; !ok {
-		return nil, fmt.Errorf("ca %q not found", name)
+		return nil, fmt.Errorf("ca %q: %w", name, ErrNotFound)
 	}
-	ca, err := pki.DeriveNamedCA(r.ikm, name)
+	ca, err := pki.DeriveCA(r.ikm, name)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +186,7 @@ func (r *Resolver) readCA(name string) (*Response, error) {
 
 func (r *Resolver) readJWTKey(name string) (*Response, error) {
 	if _, ok := r.cfg.JWTKeys[name]; !ok {
-		return nil, fmt.Errorf("jwt_key %q not found", name)
+		return nil, fmt.Errorf("jwt_key %q: %w", name, ErrNotFound)
 	}
 	pub, _, err := pki.DeriveJWTKey(r.ikm, name)
 	if err != nil {
@@ -214,7 +214,7 @@ var templateKinds = map[string]struct{}{
 func (r *Resolver) readTemplate(caller *Caller, name string) (*Response, error) {
 	tpl, ok := r.cfg.Templates[name]
 	if !ok {
-		return nil, fmt.Errorf("template %q not found", name)
+		return nil, fmt.Errorf("template %q: %w", name, ErrNotFound)
 	}
 	src, err := os.ReadFile(tpl.Source)
 	if err != nil {
@@ -270,7 +270,7 @@ func (r *Resolver) readTemplate(caller *Caller, name string) (*Response, error) 
 func (r *Resolver) writePKI(caller *Caller, role string, data map[string][]byte) (*Response, error) {
 	spec, ok := r.cfg.PKIs[role]
 	if !ok {
-		return nil, fmt.Errorf("pki %q not found", role)
+		return nil, fmt.Errorf("pki %q: %w", role, ErrNotFound)
 	}
 	if _, ok := r.cfg.CAs[spec.CARef]; !ok {
 		return nil, fmt.Errorf("pki %q references unknown ca %q", role, spec.CARef)
@@ -298,7 +298,7 @@ func (r *Resolver) writePKI(caller *Caller, role string, data map[string][]byte)
 	if err != nil {
 		return nil, fmt.Errorf("pki %q ext_key_usage: %w", role, err)
 	}
-	ca, err := pki.DeriveCAByName(r.ikm, spec.CARef)
+	ca, err := pki.DeriveCA(r.ikm, spec.CARef)
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +316,7 @@ func (r *Resolver) writePKI(caller *Caller, role string, data map[string][]byte)
 func (r *Resolver) writeJWT(caller *Caller, name string) (*Response, error) {
 	spec, ok := r.cfg.JWTKeys[name]
 	if !ok {
-		return nil, fmt.Errorf("jwt %q not found", name)
+		return nil, fmt.Errorf("jwt %q: %w", name, ErrNotFound)
 	}
 	_, priv, err := pki.DeriveJWTKey(r.ikm, name)
 	if err != nil {
@@ -343,7 +343,7 @@ func (r *Resolver) writeJWT(caller *Caller, name string) (*Response, error) {
 func (r *Resolver) writeToken(identity string) (*Response, error) {
 	id, ok := r.cfg.Identities[identity]
 	if !ok {
-		return nil, fmt.Errorf("identity %q not found", identity)
+		return nil, fmt.Errorf("identity %q: %w", identity, ErrNotFound)
 	}
 	hmacAt, ok := r.cfg.Attestors["hmac"]
 	if !ok {
@@ -357,7 +357,7 @@ func (r *Resolver) writeToken(identity string) (*Response, error) {
 		}
 	}
 	if !accepted {
-		return nil, fmt.Errorf("identity %q does not accept the hmac attestor", identity)
+		return nil, fmt.Errorf("identity %q does not accept the hmac attestor: %w", identity, ErrPermissionDenied)
 	}
 	tok := token.Generate(r.ikm, time.Now(), hmacAt.Window, identity)
 	return &Response{
@@ -380,7 +380,7 @@ func splitPath(path string) (kind, name string, err error) {
 
 func (r *Resolver) check(caller *Caller, path string, cap policy.Capability) error {
 	if !r.engine.Allows(caller.Policy, path, cap) {
-		return fmt.Errorf("permission denied: %s on %s (policy %q)", cap, path, caller.Policy)
+		return fmt.Errorf("%s on %s (policy %q): %w", cap, path, caller.Policy, ErrPermissionDenied)
 	}
 	return nil
 }
