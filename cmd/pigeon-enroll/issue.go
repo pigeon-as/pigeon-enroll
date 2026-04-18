@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 	enrollv1 "github.com/pigeon-as/pigeon-enroll/proto/enroll/v1"
 )
 
@@ -85,11 +86,11 @@ Flags:`)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
-	if err := writeFileAtomic(*certPath, resp.Content, 0o644); err != nil {
+	if err := atomicfile.Write(*certPath, resp.Content, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "write %s: %v\n", *certPath, err)
 		return 1
 	}
-	if err := writeFileAtomic(*keyPath, keyPEM, 0o600); err != nil {
+	if err := atomicfile.Write(*keyPath, keyPEM, 0o600); err != nil {
 		fmt.Fprintf(os.Stderr, "write %s: %v\n", *keyPath, err)
 		return 1
 	}

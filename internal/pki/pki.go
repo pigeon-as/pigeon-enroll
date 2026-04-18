@@ -10,10 +10,6 @@
 //
 // Ed25519 is used for all keys (CA and leaf). CA keys are deterministic via
 // NewKeyFromSeed; leaf keys are ephemeral via GenerateKey.
-//
-// References:
-//   - Vault PKI secrets engine: https://developer.hashicorp.com/vault/docs/secrets/pki
-//   - RFC 5869 (HKDF): https://datatracker.ietf.org/doc/html/rfc5869
 package pki
 
 import (
@@ -36,15 +32,11 @@ import (
 )
 
 const (
-	hkdfInfoCAKey = "pigeon-enroll ca key v1"
-
-	// hkdfInfoCAPrefix is the HKDF info prefix for named CA derivation.
-	// Full info string: "pigeon-enroll ca <name> key v1".
+	// Full CA info string: "pigeon-enroll ca <name> key v1".
 	hkdfInfoCAPrefix = "pigeon-enroll ca "
 	hkdfInfoCASuffix = " key v1"
 
-	// hkdfInfoJWTPrefix is the HKDF info prefix for JWT key derivation.
-	// Full info string: "pigeon-enroll jwt <name> key v1".
+	// Full JWT info string: "pigeon-enroll jwt <name> key v1".
 	hkdfInfoJWTPrefix = "pigeon-enroll jwt "
 	hkdfInfoJWTSuffix = " key v1"
 )
@@ -56,74 +48,21 @@ type CA struct {
 	Key     ed25519.PrivateKey
 }
 
-// DeriveCA produces a fully deterministic Ed25519 CA from the enrollment key.
-// Every server with the same IKM produces byte-identical CA certs (fixed validity
-// window, deterministic serial, Ed25519 deterministic signing).
-func DeriveCA(ikm []byte) (*CA, error) {
-	return deriveCA(ikm, hkdfInfoCAKey, "pigeon-enroll CA")
-}
-
-// NamedCA holds a deterministic Ed25519 CA certificate and private key in PEM format.
-type NamedCA struct {
-	CertPEM []byte
-	KeyPEM  []byte
-}
-
-// DeriveCAByName returns a deterministic, signing-capable CA keyed to `name`.
-// Same HKDF derivation as DeriveNamedCA; the only difference is that the
-// return value is ready to sign leaves without a round-trip through PEM.
-func DeriveCAByName(ikm []byte, name string) (*CA, error) {
-	info := hkdfInfoCAPrefix + name + hkdfInfoCASuffix
-	return deriveCA(ikm, info, name)
-}
-
-// DeriveNamedCA produces a deterministic Ed25519 CA from the enrollment key.
-// The name is used in the HKDF info string for domain separation.
-// Ed25519 key derivation and signing are both fully deterministic, so every
-// server with the same IKM produces byte-identical CA certs.
-func DeriveNamedCA(ikm []byte, name string) (*NamedCA, error) {
-	info := hkdfInfoCAPrefix + name + hkdfInfoCASuffix
-	ca, err := deriveCA(ikm, info, name)
-	if err != nil {
-		return nil, fmt.Errorf("derive CA for %q: %w", name, err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(ca.Key)
-	if err != nil {
-		return nil, fmt.Errorf("marshal CA key for %q: %w", name, err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	return &NamedCA{CertPEM: ca.CertPEM, KeyPEM: keyPEM}, nil
-}
-
-// DeriveJWTKey produces a deterministic Ed25519 key pair from the enrollment key.
-// The name is used in the HKDF info string for domain separation.
-// Same HKDF pattern as DeriveNamedCA, but returns a raw key pair (no cert wrapping).
-func DeriveJWTKey(ikm []byte, name string) (ed25519.PublicKey, ed25519.PrivateKey, error) {
-	info := hkdfInfoJWTPrefix + name + hkdfInfoJWTSuffix
+// DeriveCA returns a deterministic, signing-capable CA keyed to `name`.
+// Every server with the same IKM produces byte-identical CA certs (fixed
+// validity window, deterministic serial, Ed25519 deterministic signing).
+func DeriveCA(ikm []byte, name string) (*CA, error) {
 	seed := make([]byte, ed25519.SeedSize)
-	r := hkdf.New(sha256.New, ikm, nil, []byte(info))
-	if _, err := io.ReadFull(r, seed); err != nil {
-		return nil, nil, fmt.Errorf("derive JWT key %q: %w", name, err)
-	}
-	key := ed25519.NewKeyFromSeed(seed)
-	return key.Public().(ed25519.PublicKey), key, nil
-}
-
-// deriveCA is the shared implementation for DeriveCA and DeriveNamedCA.
-func deriveCA(ikm []byte, info string, cn string) (*CA, error) {
-	seed := make([]byte, ed25519.SeedSize)
-	r := hkdf.New(sha256.New, ikm, nil, []byte(info))
+	r := hkdf.New(sha256.New, ikm, nil, []byte(hkdfInfoCAPrefix+name+hkdfInfoCASuffix))
 	if _, err := io.ReadFull(r, seed); err != nil {
 		return nil, fmt.Errorf("derive CA seed: %w", err)
 	}
 	key := ed25519.NewKeyFromSeed(seed)
 
 	h := sha256.Sum256(seed)
-	serial := new(big.Int).SetBytes(h[:16])
-
 	tmpl := &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: cn},
+		SerialNumber:          new(big.Int).SetBytes(h[:16]),
+		Subject:               pkix.Name{CommonName: name},
 		NotBefore:             time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
 		NotAfter:              time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
@@ -132,81 +71,55 @@ func deriveCA(ikm []byte, info string, cn string) (*CA, error) {
 		MaxPathLen:            0,
 		MaxPathLenZero:        true,
 	}
-
 	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
 	if err != nil {
 		return nil, fmt.Errorf("create CA cert: %w", err)
 	}
-
 	cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
 		return nil, fmt.Errorf("parse CA cert: %w", err)
 	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	return &CA{Cert: cert, CertPEM: certPEM, Key: key}, nil
+	return &CA{
+		Cert:    cert,
+		CertPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}),
+		Key:     key,
+	}, nil
 }
 
-// GenerateCert creates an ephemeral Ed25519 certificate signed by the CA.
-// EKU is inferred from inputs (mkcert approach):
-//   - hosts non-empty → ServerAuth + ClientAuth (dual EKU)
-//   - hosts empty → ClientAuth only
-//
-// If scope is non-empty, it is embedded as OrganizationalUnit in the cert
-// subject (Vault cert auth pattern: allowed_organizational_units).
-func GenerateCert(ca *CA, cn string, hosts []string, scope string, ttl time.Duration) (certPEM, keyPEM []byte, err error) {
-	return generateLeaf(ca, cn, hosts, scope, ttl)
+// DeriveJWTKey produces a deterministic Ed25519 key pair from the enrollment
+// key. The name is used in the HKDF info string for domain separation.
+func DeriveJWTKey(ikm []byte, name string) (ed25519.PublicKey, ed25519.PrivateKey, error) {
+	seed := make([]byte, ed25519.SeedSize)
+	r := hkdf.New(sha256.New, ikm, nil, []byte(hkdfInfoJWTPrefix+name+hkdfInfoJWTSuffix))
+	if _, err := io.ReadFull(r, seed); err != nil {
+		return nil, nil, fmt.Errorf("derive JWT key %q: %w", name, err)
+	}
+	key := ed25519.NewKeyFromSeed(seed)
+	return key.Public().(ed25519.PublicKey), key, nil
 }
 
 // IssueIdentityCert issues the pigeon-enroll identity cert. The caller's
 // subject is encoded as CN=cn, OU=[policy], O=[identity]. Renew reads O to
-// re-issue without re-attestation; Fetch/Sign read OU to look up the
+// re-issue without re-attestation; Read/Write read OU to look up the
 // capability policy. Keeping this one function authoritative means auditors
 // only need to read it (and SignIdentityCSR below) to know what shape the
 // identity cert has.
 func IssueIdentityCert(ca *CA, cn, policyName, identityName string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) (certPEM, keyPEM []byte, err error) {
-	tmpl := identityCertTemplate(cn, policyName, identityName, dnsSANs, ipSANs, ttl, eku)
-	return signLeaf(ca, tmpl)
+	return signLeaf(ca, identityCertTemplate(cn, policyName, identityName, dnsSANs, ipSANs, ttl, eku))
 }
 
 // SignIdentityCSR signs a caller-supplied CSR as the pigeon-enroll identity
 // cert. Only the CSR's public key is used; Subject (CN/O/OU), SANs, EKU, and
 // TTL are all server-controlled (SPIRE pattern).
-func SignIdentityCSR(ca *CA, pub crypto.PublicKey, cn, policyName, identityName string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) (certPEM []byte, err error) {
-	tmpl := identityCertTemplate(cn, policyName, identityName, dnsSANs, ipSANs, ttl, eku)
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, fmt.Errorf("generate serial: %w", err)
-	}
-	tmpl.SerialNumber = serial
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, pub, ca.Key)
-	if err != nil {
-		return nil, fmt.Errorf("sign identity cert: %w", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), nil
+func SignIdentityCSR(ca *CA, pub crypto.PublicKey, cn, policyName, identityName string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) ([]byte, error) {
+	return signCSR(ca, pub, identityCertTemplate(cn, policyName, identityName, dnsSANs, ipSANs, ttl, eku))
 }
 
-func identityCertTemplate(cn, policyName, identityName string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) *x509.Certificate {
-	now := time.Now()
-	return &x509.Certificate{
-		Subject: pkix.Name{
-			CommonName:         cn,
-			OrganizationalUnit: []string{policyName},
-			Organization:       []string{identityName},
-		},
-		NotBefore:   now.Add(-5 * time.Minute),
-		NotAfter:    now.Add(ttl),
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: eku,
-		DNSNames:    dnsSANs,
-		IPAddresses: ipSANs,
-	}
-}
-
-// IssueCert creates an ephemeral Ed25519 leaf certificate with explicit EKU control.
-// Used by cert blocks to auto-issue leaf certs during claim. dnsSANs are added
-// as DNS subject alternative names and ipSANs as IP subject alternative names.
-func IssueCert(ca *CA, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) (certPEM, keyPEM []byte, err error) {
+// SignCSR signs a CSR with a server-controlled template. Only the public
+// key is extracted from the CSR — subject, SANs, EKU, and validity are all
+// set by the server. Same privilege-escalation protection as SignIdentityCSR,
+// without the identity-shape (OU/O) encoding.
+func SignCSR(ca *CA, pubKey crypto.PublicKey, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) ([]byte, error) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		Subject:     pkix.Name{CommonName: cn},
@@ -217,37 +130,7 @@ func IssueCert(ca *CA, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Du
 		DNSNames:    dnsSANs,
 		IPAddresses: ipSANs,
 	}
-	return signLeaf(ca, tmpl)
-}
-
-// SignCSR signs a certificate using the CSR's public key with a server-controlled
-// template. Follows the SPIRE pattern: only the public key is extracted from the
-// CSR — subject, SANs, EKU, and validity are all set by the server. This prevents
-// the client from escalating privileges via crafted CSR fields.
-func SignCSR(ca *CA, pubKey crypto.PublicKey, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) (certPEM []byte, err error) {
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, fmt.Errorf("generate serial: %w", err)
-	}
-
-	now := time.Now()
-	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: cn},
-		NotBefore:    now.Add(-5 * time.Minute),
-		NotAfter:     now.Add(ttl),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  eku,
-		DNSNames:     dnsSANs,
-		IPAddresses:  ipSANs,
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, pubKey, ca.Key)
-	if err != nil {
-		return nil, fmt.Errorf("sign CSR cert: %w", err)
-	}
-
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), nil
+	return signCSR(ca, pubKey, tmpl)
 }
 
 // ParseExtKeyUsage converts a list of EKU name strings ("client_auth",
@@ -265,228 +148,6 @@ func ParseExtKeyUsage(names []string) ([]x509.ExtKeyUsage, error) {
 		}
 	}
 	return out, nil
-}
-
-// GenerateClientCert creates an ephemeral Ed25519 client certificate bundle
-// (cert + key + CA cert) signed by the CA.
-// If scope is non-empty, it is embedded as OrganizationalUnit in the cert
-// subject (Vault cert auth pattern: allowed_organizational_units).
-// Returns the PEM bundle as a single byte slice.
-func GenerateClientCert(ca *CA, scope string, ttl time.Duration) ([]byte, error) {
-	certPEM, keyPEM, err := generateLeaf(ca, "pigeon-enroll", nil, scope, ttl)
-	if err != nil {
-		return nil, err
-	}
-	// Bundle: client cert + client key + CA cert
-	var bundle []byte
-	bundle = append(bundle, certPEM...)
-	bundle = append(bundle, keyPEM...)
-	bundle = append(bundle, ca.CertPEM...)
-	return bundle, nil
-}
-
-// LoadCA parses a PEM file containing a CA certificate and private key and
-// returns a CA struct suitable for GenerateCert. The PEM file must contain
-// exactly one CERTIFICATE block (which must be a CA) and one PRIVATE KEY block.
-func LoadCA(pemData []byte) (*CA, error) {
-	var certDER, keyDER []byte
-	var keyType string
-
-	rest := pemData
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		switch block.Type {
-		case "CERTIFICATE":
-			if certDER != nil {
-				return nil, fmt.Errorf("multiple certificates in CA file")
-			}
-			certDER = block.Bytes
-		case "PRIVATE KEY", "EC PRIVATE KEY":
-			if keyDER != nil {
-				return nil, fmt.Errorf("multiple private keys in CA file")
-			}
-			keyDER = block.Bytes
-			keyType = block.Type
-		}
-	}
-
-	if certDER == nil {
-		return nil, fmt.Errorf("no certificate found in CA file")
-	}
-	if keyDER == nil {
-		return nil, fmt.Errorf("no private key found in CA file")
-	}
-
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		return nil, fmt.Errorf("parse CA cert: %w", err)
-	}
-	if !cert.IsCA {
-		return nil, fmt.Errorf("certificate is not a CA")
-	}
-
-	signer, err := parsePrivateKey(keyDER, keyType)
-	if err != nil {
-		return nil, fmt.Errorf("parse CA key: %w", err)
-	}
-
-	edKey, ok := signer.(ed25519.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("CA key must be Ed25519, got %T", signer)
-	}
-
-	// Verify cert and key form a matching pair.
-	certPub, ok := cert.PublicKey.(ed25519.PublicKey)
-	if !ok || !certPub.Equal(edKey.Public()) {
-		return nil, fmt.Errorf("CA certificate and private key do not match")
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	return &CA{Cert: cert, CertPEM: certPEM, Key: edKey}, nil
-}
-
-// LoadClientBundle parses a PEM bundle (client cert + key + CA cert) and returns
-// a tls-ready private key, certificate, and CA pool.
-// Accepts PKCS#8 ("PRIVATE KEY") and SEC1 ("EC PRIVATE KEY") key encodings.
-func LoadClientBundle(bundlePEM []byte) (crypto.Signer, *x509.Certificate, *x509.CertPool, error) {
-	var certDER, keyDER []byte
-	var keyType string
-	var hasCA bool
-	pool := x509.NewCertPool()
-
-	rest := bundlePEM
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		switch block.Type {
-		case "CERTIFICATE":
-			if certDER == nil {
-				certDER = block.Bytes
-			} else {
-				caCert, err := x509.ParseCertificate(block.Bytes)
-				if err != nil {
-					return nil, nil, nil, fmt.Errorf("parse CA cert in bundle: %w", err)
-				}
-				pool.AddCert(caCert)
-				hasCA = true
-			}
-		case "PRIVATE KEY", "EC PRIVATE KEY":
-			keyDER = block.Bytes
-			keyType = block.Type
-		}
-	}
-
-	if certDER == nil {
-		return nil, nil, nil, fmt.Errorf("no certificate found in bundle")
-	}
-	if keyDER == nil {
-		return nil, nil, nil, fmt.Errorf("no private key found in bundle")
-	}
-	if !hasCA {
-		return nil, nil, nil, fmt.Errorf("no CA certificate found in bundle")
-	}
-
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("parse client cert: %w", err)
-	}
-
-	key, err := parsePrivateKey(keyDER, keyType)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("parse client key: %w", err)
-	}
-
-	return key, cert, pool, nil
-}
-
-// parsePrivateKey parses a DER-encoded private key. Tries PKCS#8 first for
-// "PRIVATE KEY" blocks, SEC1 for "EC PRIVATE KEY" blocks.
-func parsePrivateKey(der []byte, pemType string) (crypto.Signer, error) {
-	if pemType == "PRIVATE KEY" {
-		parsed, err := x509.ParsePKCS8PrivateKey(der)
-		if err != nil {
-			return nil, err
-		}
-		s, ok := parsed.(crypto.Signer)
-		if !ok {
-			return nil, fmt.Errorf("PKCS#8 key is %T, not a signer", parsed)
-		}
-		return s, nil
-	}
-	// SEC1 (EC PRIVATE KEY)
-	key, err := x509.ParseECPrivateKey(der)
-	if err != nil {
-		return nil, err
-	}
-	return key, nil
-}
-
-func generateLeaf(ca *CA, cn string, hosts []string, scope string, validity time.Duration) (certPEM, keyPEM []byte, err error) {
-	// Infer EKU from inputs: SANs present → server+client, otherwise client-only.
-	eku := []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-	if len(hosts) > 0 {
-		eku = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
-	}
-
-	subject := pkix.Name{CommonName: cn}
-	if scope != "" {
-		subject.OrganizationalUnit = []string{scope}
-	}
-
-	now := time.Now()
-	tmpl := &x509.Certificate{
-		Subject:     subject,
-		NotBefore:   now.Add(-5 * time.Minute),
-		NotAfter:    now.Add(validity),
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: eku,
-	}
-
-	for _, h := range hosts {
-		if ip := net.ParseIP(h); ip != nil {
-			tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
-		} else {
-			tmpl.DNSNames = append(tmpl.DNSNames, h)
-		}
-	}
-
-	return signLeaf(ca, tmpl)
-}
-
-// signLeaf generates an ephemeral Ed25519 key, assigns a random serial, and
-// signs the certificate template with the CA. Returns PEM-encoded cert and key.
-func signLeaf(ca *CA, tmpl *x509.Certificate) (certPEM, keyPEM []byte, err error) {
-	_, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate leaf key: %w", err)
-	}
-
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate serial: %w", err)
-	}
-	tmpl.SerialNumber = serial
-
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, key.Public(), ca.Key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("sign leaf cert: %w", err)
-	}
-
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("marshal leaf key: %w", err)
-	}
-
-	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	return certPEM, keyPEM, nil
 }
 
 // CertRotator lazily generates and caches a server TLS certificate,
@@ -515,7 +176,27 @@ func (r *CertRotator) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, er
 		return r.cached, nil
 	}
 
-	certPEM, keyPEM, err := GenerateCert(r.ca, "pigeon-enroll", r.hosts, "", r.ttl)
+	eku := []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+	var ipSANs []net.IP
+	var dnsSANs []string
+	for _, h := range r.hosts {
+		if ip := net.ParseIP(h); ip != nil {
+			ipSANs = append(ipSANs, ip)
+		} else {
+			dnsSANs = append(dnsSANs, h)
+		}
+	}
+	now := time.Now()
+	tmpl := &x509.Certificate{
+		Subject:     pkix.Name{CommonName: "pigeon-enroll"},
+		NotBefore:   now.Add(-5 * time.Minute),
+		NotAfter:    now.Add(r.ttl),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: eku,
+		DNSNames:    dnsSANs,
+		IPAddresses: ipSANs,
+	}
+	certPEM, keyPEM, err := signLeaf(r.ca, tmpl)
 	if err != nil {
 		return nil, err
 	}
@@ -524,6 +205,65 @@ func (r *CertRotator) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, er
 		return nil, err
 	}
 	r.cached = &tlsCert
-	r.expires = time.Now().Add(r.ttl / 2) // renew at 50% lifetime
+	r.expires = time.Now().Add(r.ttl / 2)
 	return r.cached, nil
+}
+
+// identityCertTemplate builds the x509 template for an identity cert with
+// subject CN=cn, OU=[policyName], O=[identityName].
+func identityCertTemplate(cn, policyName, identityName string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) *x509.Certificate {
+	now := time.Now()
+	return &x509.Certificate{
+		Subject: pkix.Name{
+			CommonName:         cn,
+			OrganizationalUnit: []string{policyName},
+			Organization:       []string{identityName},
+		},
+		NotBefore:   now.Add(-5 * time.Minute),
+		NotAfter:    now.Add(ttl),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: eku,
+		DNSNames:    dnsSANs,
+		IPAddresses: ipSANs,
+	}
+}
+
+// signLeaf generates an ephemeral Ed25519 key, assigns a random serial, and
+// signs the certificate template with the CA. Returns PEM-encoded cert and key.
+func signLeaf(ca *CA, tmpl *x509.Certificate) (certPEM, keyPEM []byte, err error) {
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate leaf key: %w", err)
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate serial: %w", err)
+	}
+	tmpl.SerialNumber = serial
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, key.Public(), ca.Key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sign leaf cert: %w", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal leaf key: %w", err)
+	}
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	return certPEM, keyPEM, nil
+}
+
+// signCSR signs a caller-supplied public key with the given template, using
+// a server-generated random serial.
+func signCSR(ca *CA, pubKey crypto.PublicKey, tmpl *x509.Certificate) ([]byte, error) {
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, fmt.Errorf("generate serial: %w", err)
+	}
+	tmpl.SerialNumber = serial
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, pubKey, ca.Key)
+	if err != nil {
+		return nil, fmt.Errorf("sign CSR cert: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), nil
 }

@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/attestor"
@@ -68,16 +67,16 @@ type Server struct {
 	rotator  *pki.CertRotator
 }
 
-// New constructs a Server. bootstrapCAs is consulted only by the
-// bootstrap_cert attestor during Register; Renew/Read/Write require a cert
-// signed by the identity CA (enforced in callerFromPeer).
+// New constructs a Server. The bootstrap CA pool, if any, flows to the
+// bootstrap_cert attestor (see attestor.Build) — the server itself never
+// needs it directly. Renew/Read/Write require a cert signed by the identity
+// CA (enforced in callerFromPeer).
 func New(
 	cfg *config.Config,
 	engine *policy.Engine,
 	registry *identity.Registry,
 	resolver *resource.Resolver,
 	ikm []byte,
-	_ *x509.CertPool,
 	opts Options,
 ) (*Server, error) {
 	if cfg == nil || engine == nil || registry == nil || resolver == nil {
@@ -93,7 +92,7 @@ func New(
 		opts.Logger = slog.Default()
 	}
 
-	serverCA, err := pki.DeriveCAByName(ikm, serverCAName)
+	serverCA, err := pki.DeriveCA(ikm, serverCAName)
 	if err != nil {
 		return nil, fmt.Errorf("derive server CA %q: %w", serverCAName, err)
 	}
@@ -175,7 +174,6 @@ func (s *Server) Register(stream grpc.BidiStreamingServer[enrollv1.RegisterReque
 		if _, err := a.Verify(ctx, ev, params.Subject, ch); err != nil {
 			s.log.Warn("register attestor failed",
 				"identity", params.Identity,
-				"subject", params.Subject,
 				"attestor", a.Kind(),
 				"error", err,
 			)
@@ -240,7 +238,7 @@ func (s *Server) Renew(ctx context.Context, req *enrollv1.RenewRequest) (*enroll
 // generated and returned alongside the cert. Subject (CN/O/OU), SANs, EKU
 // and TTL are always server-controlled.
 func (s *Server) issueIdentity(id *identity.Identity, subject string, csrDER []byte) (certPEM, keyPEM, caCertPEM []byte, err error) {
-	ca, err := pki.DeriveCAByName(s.ikm, id.PKI.CARef)
+	ca, err := pki.DeriveCA(s.ikm, id.PKI.CARef)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("derive CA: %w", err)
 	}
@@ -296,7 +294,7 @@ func (s *Server) Read(ctx context.Context, req *enrollv1.Request) (*enrollv1.Res
 		Subject:  caller.Subject,
 	}, req.Path)
 	if err != nil {
-		return nil, mapResolveError(err)
+		return nil, s.mapResolveError(err)
 	}
 	return &enrollv1.Response{
 		Content:     resp.Content,
@@ -322,7 +320,7 @@ func (s *Server) Write(ctx context.Context, req *enrollv1.Request) (*enrollv1.Re
 		Subject:  caller.Subject,
 	}, req.Path, req.Data)
 	if err != nil {
-		return nil, mapResolveError(err)
+		return nil, s.mapResolveError(err)
 	}
 	return &enrollv1.Response{
 		Content:     resp.Content,
@@ -403,16 +401,19 @@ func parseIPs(raw []string) ([]net.IP, error) {
 	return out, nil
 }
 
-// mapResolveError turns a resource.Resolve error into a gRPC status.
-func mapResolveError(err error) error {
-	msg := err.Error()
+// mapResolveError turns a resource.Resolve error into a gRPC status. Denial
+// and not-found outcomes are collapsed to generic messages (detail stays in
+// the server log) so callers can't enumerate config shape by probing.
+func (s *Server) mapResolveError(err error) error {
 	switch {
-	case strings.Contains(msg, "permission denied"):
-		return status.Error(codes.PermissionDenied, msg)
-	case strings.Contains(msg, "not found"):
-		return status.Error(codes.NotFound, msg)
+	case errors.Is(err, resource.ErrPermissionDenied):
+		s.log.Debug("resolve denied", "error", err)
+		return status.Error(codes.PermissionDenied, "permission denied")
+	case errors.Is(err, resource.ErrNotFound):
+		s.log.Debug("resolve not found", "error", err)
+		return status.Error(codes.NotFound, "not found")
 	default:
-		return status.Error(codes.InvalidArgument, msg)
+		return status.Error(codes.InvalidArgument, err.Error())
 	}
 }
 

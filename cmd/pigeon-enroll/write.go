@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 	enrollv1 "github.com/pigeon-as/pigeon-enroll/proto/enroll/v1"
 )
 
@@ -98,7 +99,7 @@ func dispatchScalar(cf *clientFlags, outPath string, timeout time.Duration, path
 		}
 		return 0
 	}
-	if err := writeFileAtomic(outPath, resp.Content, 0o644); err != nil {
+	if err := atomicfile.Write(outPath, resp.Content, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "write %s: %v\n", outPath, err)
 		return 1
 	}

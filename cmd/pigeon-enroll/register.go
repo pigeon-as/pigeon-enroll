@@ -12,11 +12,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/go-attestation/attest"
+	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 	"github.com/pigeon-as/pigeon-enroll/internal/tpm"
 	enrollv1 "github.com/pigeon-as/pigeon-enroll/proto/enroll/v1"
 )
@@ -202,49 +202,28 @@ func mustMarshalPKCS8(priv ed25519.PrivateKey) []byte {
 	return der
 }
 
+// writeIdentityBundle writes the four identity files atomically. cert.pem is
+// written last so downstream path watchers (pigeon-template-bootstrap.path)
+// only fire once the full bundle is on disk.
 func writeIdentityBundle(dir string, certPEM, keyPEM, caPEM []byte) error {
 	if dir == "" {
 		return errors.New("output dir is empty")
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
+	bundle := append(append([]byte{}, certPEM...), keyPEM...)
 	files := []struct {
 		path    string
 		content []byte
 		mode    os.FileMode
 	}{
-		{identityCertPath(dir), certPEM, 0o644},
 		{identityKeyPath(dir), keyPEM, 0o600},
 		{identityCAPath(dir), caPEM, 0o644},
-		{identityBundlePath(dir), append(append([]byte{}, certPEM...), keyPEM...), 0o600},
+		{identityBundlePath(dir), bundle, 0o600},
+		{identityCertPath(dir), certPEM, 0o644},
 	}
 	for _, f := range files {
-		if err := writeFileAtomic(f.path, f.content, f.mode); err != nil {
+		if err := atomicfile.Write(f.path, f.content, f.mode); err != nil {
 			return fmt.Errorf("%s: %w", f.path, err)
 		}
 	}
 	return nil
-}
-
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
 }

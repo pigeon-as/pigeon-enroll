@@ -32,6 +32,8 @@ func main() {
 		os.Exit(cmdWrite(os.Args[2:]))
 	case "issue":
 		os.Exit(cmdIssue(os.Args[2:]))
+	case "generate-token":
+		os.Exit(cmdGenerateToken(os.Args[2:]))
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1])
 		printUsage()
@@ -49,6 +51,7 @@ Commands:
   read       Read a scalar resource (var, secret, ca, jwt_key, template)
   write      Write against a mutating path (pki, jwt)
   issue      Generate a keypair, CSR, and write pki/<role> in one step
+  generate-token  Mint an HMAC bootstrap token locally from the enrollment key
   ek-hash    Print local TPM EK public key hash
   version    Print version`)
 }

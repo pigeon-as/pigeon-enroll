@@ -1,10 +1,14 @@
 # pigeon-enroll
 
-Stage-0 bootstrap server. Hosts attest with a token, receive an identity
-mTLS cert, then read or write resources by path.
+Bootstrap enrollment server. Not a secrets manager.
+
+Hosts attest with a token,
+receive an identity mTLS cert, then read or write resources by path.
 
 All cryptographic material is HKDF-derived from a single static enrollment
 key. Every server with the same key produces the same outputs.
+
+**Stage 0 bootstrap only:** expects hand-off to long-running secrets manager (Vault) in stage 1 for runtime secrets and cert rotation.
 
 ## RPCs
 
@@ -29,16 +33,11 @@ Every path returns one scalar. `Request` carries `path` and an optional
 | `template/<name>` | read | `read` | HCL-rendered text. The body references other resources via `${kind.name}` (e.g. `${var.domain}`, `${secret.gossip_key}`). Each reference is re-authorized through the caller's policy — the caller must hold `read` on `template/<name>` **and** on every path the body references. Templates have no elevation and no side effects; `pki/` and `jwt/` are intentionally not addressable. |
 | `pki/<role>` | write | `write` | signed certificate PEM (CSR required) |
 | `jwt/<name>` | write | `write` | signed JWT |
-| `token/<identity>` | write | `write` | short-lived HMAC bootstrap token scoped to the target identity (one-time, TTL = `attestor.hmac.window`). Used by an authorized caller (e.g. the autoscaler) to mint a token for a freshly-ordered node. Requires the `hmac` attestor to be configured and the target identity to accept it. Vault analog: `auth/token/create/<role>`. SPIRE analog: `spire-server token generate`. |
-
-Capabilities are `read` and `write` (exact Vault match). `pki/<role>`
-**requires** `data["csr"]` (DER PKCS#10) — the server signs the caller's CSR
-and the private key never leaves the caller. This matches SPIFFE X509-SVID,
-ACME, and step-ca.
+| `token/<identity>` | write | `write` | short-lived HMAC bootstrap token scoped to the target identity (one-time, TTL = `attestor.hmac.window`). Used by an authorized caller (e.g. the autoscaler) to mint a token for a freshly-ordered node. Requires the `hmac` attestor to be configured and the target identity to accept it. |
 
 ## CLI
 
-Env vars override defaults (Vault convention):
+Env vars override defaults:
 
 ```
 ENROLL_ADDR             server address (host:port)
@@ -49,6 +48,11 @@ ENROLL_IDENTITY_DIR     directory with identity cert/key/ca (default /etc/pigeon
 ```bash
 # Run the server
 pigeon-enroll server -config=/etc/pigeon/enroll-server.hcl
+
+# Mint an HMAC bootstrap token locally (no gRPC; needs the enrollment key).
+# Typically piped from `systemd-creds decrypt` so the key never hits disk.
+systemd-creds decrypt /etc/credstore.encrypted/pigeon-enroll.enrollment-key - \
+  | pigeon-enroll generate-token -identity=worker -key-path=-
 
 # First contact
 pigeon-enroll register \
@@ -62,9 +66,9 @@ pigeon-enroll renew
 # Read a scalar
 pigeon-enroll read var/datacenter
 pigeon-enroll read ca/mesh > mesh-ca.pem
-pigeon-enroll read template/setup-worker | sh
+pigeon-enroll read template/enroll-worker > enroll.json
 
-# Sign a CSR (client owns the key — SPIFFE/ACME pattern)
+# Sign a CSR
 pigeon-enroll write pki/mesh_worker csr=@csr.der > cert.pem
 
 # Convenience: generate keypair locally, build CSR, write pki/<role>, save both
@@ -159,8 +163,29 @@ CA; the server verifies clients on Renew/Read/Write using the same CA.
   Dedicated HKDF-derived signing key, persistent nonce store, current +
   previous window coverage. One-time use.
 - `tpm` — TPM 2.0 credential activation. EK identity validated against a CA
-  chain or hash allowlist (SPIRE pattern).
+  chain or hash allowlist.
 - `bootstrap_cert` — mTLS with a caller cert signed by a trusted bootstrap CA.
+
+## systemd
+
+pigeon-enroll expects its enrollment key as a systemd encrypted credential.
+Seal the key once during provisioning:
+
+```bash
+systemd-creds encrypt --with-key=tpm2 /run/enrollment-key /etc/credstore.encrypted/pigeon-enroll.enrollment-key
+```
+
+Then reference it in the unit file:
+
+```ini
+[Service]
+ExecStart=/opt/pigeon/bin/pigeon-enroll server -config=/etc/pigeon/enroll-server.hcl -key-path=%d/enrollment-key
+LoadCredentialEncrypted=enrollment-key:/etc/credstore.encrypted/pigeon-enroll.enrollment-key
+```
+
+systemd decrypts the credential at service start into `$CREDENTIALS_DIRECTORY`
+(RAM-backed, isolated per-service, never hits disk). The `-key-path=%d/enrollment-key`
+flag points pigeon-enroll at the decrypted file.
 
 ## Build & Test
 
