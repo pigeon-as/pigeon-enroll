@@ -8,7 +8,6 @@ import (
 type rawConfig struct {
 	TrustDomain   string  `hcl:"trust_domain,optional"`
 	Listen        string  `hcl:"listen,optional"`
-	IdentityTTL   string  `hcl:"identity_ttl,optional"`
 	RenewFraction float64 `hcl:"renew_fraction,optional"`
 
 	Attestors  []rawAttestor  `hcl:"attestor,block"`
@@ -33,8 +32,7 @@ type tpmAttestorBody struct {
 }
 
 type hmacAttestorBody struct {
-	KeyPath string `hcl:"key_path"`
-	Window  string `hcl:"window,optional"`
+	Window string `hcl:"window,optional"`
 }
 
 type rawCA struct {

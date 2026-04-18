@@ -74,7 +74,12 @@ Flags:`)
 		fmt.Fprintf(os.Stderr, "key: %v\n", err)
 		return 1
 	}
+	hmacKey, err := token.DeriveHMACKey(ikm)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "derive hmac key: %v\n", err)
+		return 1
+	}
 
-	fmt.Println(token.Generate(ikm, time.Now(), hmacAt.Window, *identityName))
+	fmt.Println(token.Generate(hmacKey, time.Now(), hmacAt.Window, *identityName))
 	return 0
 }

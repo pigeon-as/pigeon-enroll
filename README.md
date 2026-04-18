@@ -89,9 +89,7 @@ pigeon-enroll version
 ```hcl
 trust_domain   = "pigeon.as"
 listen         = ":8443"
-identity_ttl   = "720h"
 renew_fraction = 0.5
-key_path       = "/etc/pigeon/enrollment-key"
 
 attestor "hmac" {
   key_path = "/etc/pigeon/enrollment-key"

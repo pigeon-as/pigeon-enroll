@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -34,6 +35,8 @@ Flags:`)
 	certPath := fs.String("out-cert", "", "certificate output file (required)")
 	keyPath := fs.String("out-key", "", "private key output file (required)")
 	cn := fs.String("cn", "", "CSR CommonName (default: empty, server selects from spec)")
+	renewBefore := fs.Duration("renew-before", 0,
+		"skip issuance if out-cert exists and expires more than this duration in the future (cert-manager renewBefore / step-ca needs-renewal semantics)")
 	timeout := fs.Duration("timeout", 30*time.Second, "issue timeout")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -44,6 +47,17 @@ Flags:`)
 		return 2
 	}
 	path := rest[0]
+
+	if *renewBefore > 0 {
+		ok, err := certValidBeyond(*certPath, *keyPath, *renewBefore)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "check existing cert: %v\n", err)
+			return 1
+		}
+		if ok {
+			return 0
+		}
+	}
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -95,4 +109,32 @@ Flags:`)
 		return 1
 	}
 	return 0
+}
+
+// certValidBeyond returns true if certPath and keyPath both exist and the
+// cert's NotAfter is further than renewBefore in the future. Any read,
+// decode or pair-mismatch error returns false (and a nil error for expected
+// cases like "file missing") so the caller re-issues.
+func certValidBeyond(certPath, keyPath string, renewBefore time.Duration) (bool, error) {
+	certPEM, err := os.ReadFile(certPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Stat(keyPath); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return false, nil
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return false, nil
+	}
+	return time.Until(cert.NotAfter) > renewBefore, nil
 }

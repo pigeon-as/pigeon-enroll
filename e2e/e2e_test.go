@@ -12,11 +12,13 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,7 +77,7 @@ func randomIKM(t *testing.T) ([]byte, string) {
 	_, err := rand.Read(ikm)
 	must.NoError(t, err)
 	keyPath := filepath.Join(t.TempDir(), "enrollment-key")
-	must.NoError(t, os.WriteFile(keyPath, ikm, 0o600))
+	must.NoError(t, os.WriteFile(keyPath, []byte(hex.EncodeToString(ikm)), 0o600))
 	return ikm, keyPath
 }
 
@@ -89,10 +91,12 @@ func deriveCAPEM(t *testing.T, ikm []byte, name string) []byte {
 	must.NoError(t, err)
 	key := ed25519.NewKeyFromSeed(seed)
 
+	td := &url.URL{Scheme: "spiffe", Host: "pigeon.test"}
 	h := sha256.Sum256(seed)
 	tmpl := &x509.Certificate{
 		SerialNumber:          new(big.Int).SetBytes(h[:16]),
 		Subject:               pkix.Name{CommonName: name},
+		URIs:                  []*url.URL{td},
 		NotBefore:             time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
 		NotAfter:              time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
@@ -113,17 +117,15 @@ func writeIdentityCA(t *testing.T, ikm []byte) string {
 	return path
 }
 
-func writeConfig(t *testing.T, listen, keyPath string) string {
+func writeConfig(t *testing.T, listen string) string {
 	t.Helper()
 	cfg := fmt.Sprintf(`
 trust_domain   = "pigeon.test"
 listen         = "%s"
-identity_ttl   = "1h"
 renew_fraction = 0.5
 
 attestor "hmac" {
-  key_path = "%s"
-  window   = "30m"
+  window = "30m"
 }
 
 ca "identity" { cn = "pigeon identity CA" }
@@ -173,7 +175,7 @@ identity "control_plane" {
   pki       = pki.identity_worker
   policy    = policy.worker
 }
-`, listen, filepath.ToSlash(keyPath))
+`, listen)
 	path := filepath.Join(t.TempDir(), "enroll.hcl")
 	must.NoError(t, os.WriteFile(path, []byte(cfg), 0o644))
 	return path
@@ -182,12 +184,13 @@ identity "control_plane" {
 func startServer(t *testing.T, cfgPath, keyPath, addr string) {
 	t.Helper()
 	noncePath := filepath.Join(t.TempDir(), "nonces")
+	bindingsPath := filepath.Join(t.TempDir(), "bindings")
 	cmd := exec.Command(binary,
 		"server",
 		"-config="+cfgPath,
 		"-key-path="+keyPath,
 		"-nonce-store="+noncePath,
-		"-hosts=127.0.0.1",
+		"-bindings-store="+bindingsPath,
 		"-log-level=debug",
 	)
 	cmd.Stdout = os.Stdout
@@ -285,7 +288,7 @@ func TestVersion(t *testing.T) {
 func TestRegister_IssuesIdentityCert(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
@@ -306,7 +309,7 @@ func TestRegister_IssuesIdentityCert(t *testing.T) {
 func TestRead_VarAndSecret(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
@@ -327,7 +330,7 @@ func TestRead_VarAndSecret(t *testing.T) {
 func TestWrite_PKIRole(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
@@ -362,7 +365,7 @@ func TestWrite_PKIRole(t *testing.T) {
 func TestRead_DeniedPath(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
@@ -377,7 +380,7 @@ func TestRead_DeniedPath(t *testing.T) {
 func TestRenew_IssuesLaterExpiry(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
@@ -401,7 +404,7 @@ func TestRenew_IssuesLaterExpiry(t *testing.T) {
 
 func TestGenerateToken_RejectsUnknownIdentity(t *testing.T) {
 	_, keyPath := randomIKM(t)
-	cfgPath := writeConfig(t, "", keyPath)
+	cfgPath := writeConfig(t, "")
 
 	out := runExpectErr(t, "generate-token",
 		"-config="+cfgPath,
@@ -414,7 +417,7 @@ func TestGenerateToken_RejectsUnknownIdentity(t *testing.T) {
 func TestNonceReplay(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	tok := mintToken(t, keyPath, cfgPath, "worker")
@@ -442,7 +445,7 @@ func TestNonceReplay(t *testing.T) {
 func TestScopeBinding(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	workerTok := mintToken(t, keyPath, cfgPath, "worker")
@@ -461,7 +464,7 @@ func TestScopeBinding(t *testing.T) {
 func TestCSR_SubjectOverridden(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")
@@ -486,7 +489,7 @@ func TestCSR_SubjectOverridden(t *testing.T) {
 func TestWrite_DeniedPath(t *testing.T) {
 	ikm, keyPath := randomIKM(t)
 	caPath := writeIdentityCA(t, ikm)
-	cfgPath := writeConfig(t, testAddr, keyPath)
+	cfgPath := writeConfig(t, testAddr)
 	startServer(t, cfgPath, keyPath, testAddr)
 
 	outDir := register(t, keyPath, cfgPath, caPath, "worker", "worker-01")

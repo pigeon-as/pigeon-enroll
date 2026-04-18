@@ -25,6 +25,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/url"
 	"sync"
 	"time"
 
@@ -51,7 +52,14 @@ type CA struct {
 // DeriveCA returns a deterministic, signing-capable CA keyed to `name`.
 // Every server with the same IKM produces byte-identical CA certs (fixed
 // validity window, deterministic serial, Ed25519 deterministic signing).
-func DeriveCA(ikm []byte, name string) (*CA, error) {
+//
+// The CA cert carries a URI SAN `spiffe://<trustDomain>` per the SPIFFE
+// X.509-SVID spec; clients verifying any leaf signed by this CA can read
+// that SAN to learn the trust domain without needing an out-of-band config.
+func DeriveCA(ikm []byte, trustDomain, name string) (*CA, error) {
+	if trustDomain == "" {
+		return nil, fmt.Errorf("trust domain is required")
+	}
 	seed := make([]byte, ed25519.SeedSize)
 	r := hkdf.New(sha256.New, ikm, nil, []byte(hkdfInfoCAPrefix+name+hkdfInfoCASuffix))
 	if _, err := io.ReadFull(r, seed); err != nil {
@@ -59,10 +67,12 @@ func DeriveCA(ikm []byte, name string) (*CA, error) {
 	}
 	key := ed25519.NewKeyFromSeed(seed)
 
+	td := &url.URL{Scheme: "spiffe", Host: trustDomain}
 	h := sha256.Sum256(seed)
 	tmpl := &x509.Certificate{
 		SerialNumber:          new(big.Int).SetBytes(h[:16]),
 		Subject:               pkix.Name{CommonName: name},
+		URIs:                  []*url.URL{td},
 		NotBefore:             time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
 		NotAfter:              time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
@@ -84,6 +94,19 @@ func DeriveCA(ikm []byte, name string) (*CA, error) {
 		CertPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}),
 		Key:     key,
 	}, nil
+}
+
+// TrustDomainFromCA extracts the SPIFFE trust domain from a CA cert's URI
+// SAN (`spiffe://<trust_domain>`). Returns an error if no SPIFFE URI SAN is
+// present. Matches the SPIFFE X.509-SVID convention that any cert in a
+// SPIFFE trust bundle carries the trust domain as a URI SAN.
+func TrustDomainFromCA(cert *x509.Certificate) (string, error) {
+	for _, u := range cert.URIs {
+		if u.Scheme == "spiffe" && u.Host != "" {
+			return u.Host, nil
+		}
+	}
+	return "", fmt.Errorf("ca cert has no spiffe:// URI SAN")
 }
 
 // DeriveJWTKey produces a deterministic Ed25519 key pair from the enrollment
@@ -110,16 +133,25 @@ func IssueIdentityCert(ca *CA, cn, policyName, identityName string, dnsSANs []st
 
 // SignIdentityCSR signs a caller-supplied CSR as the pigeon-enroll identity
 // cert. Only the CSR's public key is used; Subject (CN/O/OU), SANs, EKU, and
-// TTL are all server-controlled (SPIRE pattern).
-func SignIdentityCSR(ca *CA, pub crypto.PublicKey, cn, policyName, identityName string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) ([]byte, error) {
-	return signCSR(ca, pub, identityCertTemplate(cn, policyName, identityName, dnsSANs, ipSANs, ttl, eku))
+// TTL are all server-controlled (SPIRE pattern). The CSR's self-signature
+// is verified inside — callers pass the parsed request, not a bare pubkey,
+// so proof-of-possession is impossible to accidentally skip.
+func SignIdentityCSR(ca *CA, csr *x509.CertificateRequest, cn, policyName, identityName string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) ([]byte, error) {
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("csr signature: %w", err)
+	}
+	return signCSR(ca, csr.PublicKey, identityCertTemplate(cn, policyName, identityName, dnsSANs, ipSANs, ttl, eku))
 }
 
 // SignCSR signs a CSR with a server-controlled template. Only the public
 // key is extracted from the CSR — subject, SANs, EKU, and validity are all
 // set by the server. Same privilege-escalation protection as SignIdentityCSR,
-// without the identity-shape (OU/O) encoding.
-func SignCSR(ca *CA, pubKey crypto.PublicKey, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) ([]byte, error) {
+// without the identity-shape (OU/O) encoding. The CSR's self-signature is
+// verified inside.
+func SignCSR(ca *CA, csr *x509.CertificateRequest, cn string, dnsSANs []string, ipSANs []net.IP, ttl time.Duration, eku []x509.ExtKeyUsage) ([]byte, error) {
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("csr signature: %w", err)
+	}
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		Subject:     pkix.Name{CommonName: cn},
@@ -130,7 +162,7 @@ func SignCSR(ca *CA, pubKey crypto.PublicKey, cn string, dnsSANs []string, ipSAN
 		DNSNames:    dnsSANs,
 		IPAddresses: ipSANs,
 	}
-	return signCSR(ca, pubKey, tmpl)
+	return signCSR(ca, csr.PublicKey, tmpl)
 }
 
 // ParseExtKeyUsage converts a list of EKU name strings ("client_auth",
@@ -152,19 +184,25 @@ func ParseExtKeyUsage(names []string) ([]x509.ExtKeyUsage, error) {
 
 // CertRotator lazily generates and caches a server TLS certificate,
 // regenerating it at 50% of its lifetime. Implements tls.Config.GetCertificate.
+//
+// The leaf carries a single URI SAN `spiffe://<trustDomain>/<spiffePath>`
+// (SPIFFE X.509-SVID). No DNS/IP SANs — clients verify by SPIFFE ID, not by
+// hostname, so the server doesn't need to know how it's addressed.
 type CertRotator struct {
-	ca    *CA
-	hosts []string
-	ttl   time.Duration
+	ca          *CA
+	trustDomain string
+	spiffePath  string
+	ttl         time.Duration
 
 	mu      sync.Mutex
 	cached  *tls.Certificate
 	expires time.Time
 }
 
-// NewCertRotator returns a rotator that issues server certs with the given TTL.
-func NewCertRotator(ca *CA, hosts []string, ttl time.Duration) *CertRotator {
-	return &CertRotator{ca: ca, hosts: hosts, ttl: ttl}
+// NewCertRotator returns a rotator that issues server certs with the given
+// TTL, carrying `spiffe://<trustDomain>/<spiffePath>` as URI SAN.
+func NewCertRotator(ca *CA, trustDomain, spiffePath string, ttl time.Duration) *CertRotator {
+	return &CertRotator{ca: ca, trustDomain: trustDomain, spiffePath: spiffePath, ttl: ttl}
 }
 
 // GetCertificate returns a cached server cert, regenerating when past 50% lifetime.
@@ -176,25 +214,15 @@ func (r *CertRotator) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, er
 		return r.cached, nil
 	}
 
-	eku := []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
-	var ipSANs []net.IP
-	var dnsSANs []string
-	for _, h := range r.hosts {
-		if ip := net.ParseIP(h); ip != nil {
-			ipSANs = append(ipSANs, ip)
-		} else {
-			dnsSANs = append(dnsSANs, h)
-		}
-	}
+	id := &url.URL{Scheme: "spiffe", Host: r.trustDomain, Path: "/" + r.spiffePath}
 	now := time.Now()
 	tmpl := &x509.Certificate{
-		Subject:     pkix.Name{CommonName: "pigeon-enroll"},
+		Subject:     pkix.Name{CommonName: r.spiffePath},
+		URIs:        []*url.URL{id},
 		NotBefore:   now.Add(-5 * time.Minute),
 		NotAfter:    now.Add(r.ttl),
 		KeyUsage:    x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: eku,
-		DNSNames:    dnsSANs,
-		IPAddresses: ipSANs,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 	}
 	certPEM, keyPEM, err := signLeaf(r.ca, tmpl)
 	if err != nil {

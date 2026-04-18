@@ -20,19 +20,28 @@ var testIKM = []byte{
 	0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
 }
 
-func TestDeriveCA_Deterministic(t *testing.T) {
-	ca1, err := DeriveCA(testIKM, "identity")
+func buildCSR(t *testing.T, priv ed25519.PrivateKey) *x509.CertificateRequest {
+	t.Helper()
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, priv)
 	must.NoError(t, err)
-	ca2, err := DeriveCA(testIKM, "identity")
+	csr, err := x509.ParseCertificateRequest(der)
+	must.NoError(t, err)
+	return csr
+}
+
+func TestDeriveCA_Deterministic(t *testing.T) {
+	ca1, err := DeriveCA(testIKM, "example.test", "identity")
+	must.NoError(t, err)
+	ca2, err := DeriveCA(testIKM, "example.test", "identity")
 	must.NoError(t, err)
 	must.EqOp(t, string(ca1.CertPEM), string(ca2.CertPEM))
 	must.True(t, ca1.Key.Equal(ca2.Key))
 }
 
 func TestDeriveCA_DifferentNames(t *testing.T) {
-	ca1, err := DeriveCA(testIKM, "identity")
+	ca1, err := DeriveCA(testIKM, "example.test", "identity")
 	must.NoError(t, err)
-	ca2, err := DeriveCA(testIKM, "mesh")
+	ca2, err := DeriveCA(testIKM, "example.test", "mesh")
 	must.NoError(t, err)
 	must.NotEq(t, string(ca1.CertPEM), string(ca2.CertPEM))
 	must.False(t, ca1.Key.Equal(ca2.Key))
@@ -43,15 +52,15 @@ func TestDeriveCA_DifferentIKM(t *testing.T) {
 	copy(otherIKM, testIKM)
 	otherIKM[0] ^= 0xff
 
-	ca1, err := DeriveCA(testIKM, "identity")
+	ca1, err := DeriveCA(testIKM, "example.test", "identity")
 	must.NoError(t, err)
-	ca2, err := DeriveCA(otherIKM, "identity")
+	ca2, err := DeriveCA(otherIKM, "example.test", "identity")
 	must.NoError(t, err)
 	must.NotEq(t, string(ca1.CertPEM), string(ca2.CertPEM))
 }
 
 func TestDeriveCA_IsCA(t *testing.T) {
-	ca, err := DeriveCA(testIKM, "mesh")
+	ca, err := DeriveCA(testIKM, "example.test", "mesh")
 	must.NoError(t, err)
 	must.True(t, ca.Cert.IsCA)
 	must.EqOp(t, "mesh", ca.Cert.Subject.CommonName)
@@ -85,7 +94,7 @@ func TestDeriveJWTKey_SignVerify(t *testing.T) {
 }
 
 func TestIssueIdentityCert_SubjectShape(t *testing.T) {
-	ca, err := DeriveCA(testIKM, "identity")
+	ca, err := DeriveCA(testIKM, "example.test", "identity")
 	must.NoError(t, err)
 
 	certPEM, _, err := IssueIdentityCert(
@@ -111,13 +120,14 @@ func TestIssueIdentityCert_SubjectShape(t *testing.T) {
 }
 
 func TestSignIdentityCSR_UsesCallerPublicKey(t *testing.T) {
-	ca, err := DeriveCA(testIKM, "identity")
+	ca, err := DeriveCA(testIKM, "example.test", "identity")
 	must.NoError(t, err)
-	callerPub, _, err := ed25519.GenerateKey(rand.Reader)
+	callerPub, callerPriv, err := ed25519.GenerateKey(rand.Reader)
 	must.NoError(t, err)
+	csr := buildCSR(t, callerPriv)
 
 	certPEM, err := SignIdentityCSR(
-		ca, callerPub, "worker-01", "worker", "worker",
+		ca, csr, "worker-01", "worker", "worker",
 		nil, nil,
 		time.Hour, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	)
@@ -131,13 +141,14 @@ func TestSignIdentityCSR_UsesCallerPublicKey(t *testing.T) {
 }
 
 func TestSignCSR_SubjectAndSANs(t *testing.T) {
-	ca, err := DeriveCA(testIKM, "mesh")
+	ca, err := DeriveCA(testIKM, "example.test", "mesh")
 	must.NoError(t, err)
-	callerPub, _, err := ed25519.GenerateKey(rand.Reader)
+	callerPub, callerPriv, err := ed25519.GenerateKey(rand.Reader)
 	must.NoError(t, err)
+	csr := buildCSR(t, callerPriv)
 
 	certPEM, err := SignCSR(
-		ca, callerPub,
+		ca, csr,
 		"worker-01",
 		[]string{"mesh.internal"}, []net.IP{net.ParseIP("10.0.0.1")},
 		time.Hour, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
@@ -173,10 +184,10 @@ func TestParseExtKeyUsage(t *testing.T) {
 }
 
 func TestCertRotator_CachesUntilExpiry(t *testing.T) {
-	ca, err := DeriveCA(testIKM, "identity")
+	ca, err := DeriveCA(testIKM, "example.test", "identity")
 	must.NoError(t, err)
 
-	r := NewCertRotator(ca, []string{"127.0.0.1", "enroll.internal"}, time.Hour)
+	r := NewCertRotator(ca, "example.test", "pigeon-enroll/server", time.Hour)
 	cert1, err := r.GetCertificate(nil)
 	must.NoError(t, err)
 	cert2, err := r.GetCertificate(nil)
@@ -186,9 +197,11 @@ func TestCertRotator_CachesUntilExpiry(t *testing.T) {
 
 	leaf, err := x509.ParseCertificate(cert1.Certificate[0])
 	must.NoError(t, err)
-	must.EqOp(t, "pigeon-enroll", leaf.Subject.CommonName)
-	must.SliceContains(t, leaf.DNSNames, "enroll.internal")
-	must.SliceContains(t, leafIPStrings(leaf), "127.0.0.1")
+	// No DNS/IP SANs — SPIFFE ID only.
+	must.SliceLen(t, 0, leaf.DNSNames)
+	must.SliceLen(t, 0, leaf.IPAddresses)
+	must.SliceLen(t, 1, leaf.URIs)
+	must.EqOp(t, "spiffe://example.test/pigeon-enroll/server", leaf.URIs[0].String())
 
 	hasServer, hasClient := false, false
 	for _, eku := range leaf.ExtKeyUsage {
@@ -204,19 +217,19 @@ func TestCertRotator_CachesUntilExpiry(t *testing.T) {
 }
 
 func TestCertRotator_IsUsableViaTLS(t *testing.T) {
-	ca, err := DeriveCA(testIKM, "identity")
+	ca, err := DeriveCA(testIKM, "example.test", "identity")
 	must.NoError(t, err)
-	r := NewCertRotator(ca, []string{"127.0.0.1"}, time.Hour)
+	r := NewCertRotator(ca, "example.test", "pigeon-enroll/server", time.Hour)
 	tc := &tls.Config{GetCertificate: r.GetCertificate}
 	cert, err := tc.GetCertificate(nil)
 	must.NoError(t, err)
 	must.NotNil(t, cert)
 }
 
-func leafIPStrings(cert *x509.Certificate) []string {
-	out := make([]string, 0, len(cert.IPAddresses))
-	for _, ip := range cert.IPAddresses {
-		out = append(out, ip.String())
-	}
-	return out
+func TestDeriveCA_CarriesTrustDomainURISAN(t *testing.T) {
+	ca, err := DeriveCA(testIKM, "pigeon.test", "identity")
+	must.NoError(t, err)
+	td, err := TrustDomainFromCA(ca.Cert)
+	must.NoError(t, err)
+	must.EqOp(t, "pigeon.test", td)
 }

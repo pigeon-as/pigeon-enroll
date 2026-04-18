@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -23,14 +22,14 @@ import (
 func newHMACAttestor(t *testing.T) (*hmacAttestor, []byte, *nonce.Store) {
 	t.Helper()
 	dir := t.TempDir()
-	key := []byte("0123456789abcdef0123456789abcdef")
-	keyPath := filepath.Join(dir, "key")
-	must.NoError(t, os.WriteFile(keyPath, key, 0o600))
+	ikm := []byte("0123456789abcdef0123456789abcdef")
 	ns, err := nonce.New(time.Hour, filepath.Join(dir, "nonces"))
 	must.NoError(t, err)
-	at, err := newHMAC(&config.Attestor{KeyPath: keyPath, Window: 30 * time.Minute}, ns)
+	at, err := newHMAC(&config.Attestor{Window: 30 * time.Minute}, ns, ikm)
 	must.NoError(t, err)
-	return at, key, ns
+	hmacKey, err := token.DeriveHMACKey(ikm)
+	must.NoError(t, err)
+	return at, hmacKey, ns
 }
 
 func TestHMACAttestor_Valid(t *testing.T) {

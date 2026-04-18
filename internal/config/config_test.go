@@ -1,25 +1,26 @@
 package config
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/shoenig/test/must"
 )
 
-const validConfig = `
+const validConfigTmpl = `
 trust_domain  = "pigeon.as"
 listen        = ":9443"
-identity_ttl  = "720h"
 renew_fraction = 0.5
 
 attestor "tpm" {
-  ek_ca_path   = "/etc/pigeon/ek-ca"
-  ek_hash_path = "/etc/pigeon/ek-hashes"
+  ek_ca_path   = "%s"
+  ek_hash_path = "%s"
 }
 attestor "hmac" {
-  key_path = "/etc/pigeon/enrollment-key"
-  window   = "30m"
+  window = "30m"
 }
 attestor "bootstrap_cert" {}
 
@@ -81,11 +82,16 @@ identity "worker" {
 `
 
 func TestLoadValid(t *testing.T) {
-	cfg, err := Parse([]byte(validConfig), "test.hcl")
+	dir := t.TempDir()
+	caDir := filepath.Join(dir, "ek-ca")
+	must.NoError(t, os.Mkdir(caDir, 0o755))
+	hashFile := filepath.Join(dir, "ek-hashes")
+	must.NoError(t, os.WriteFile(hashFile, []byte(""), 0o644))
+	src := fmt.Sprintf(validConfigTmpl, filepath.ToSlash(caDir), filepath.ToSlash(hashFile))
+	cfg, err := Parse([]byte(src), "test.hcl")
 	must.NoError(t, err)
 	must.Eq(t, "pigeon.as", cfg.TrustDomain)
 	must.Eq(t, ":9443", cfg.Listen)
-	must.EqOp(t, 720*time.Hour, cfg.IdentityTTL)
 	must.MapLen(t, 3, cfg.Attestors)
 	must.EqOp(t, 30*time.Minute, cfg.Attestors["hmac"].Window)
 	must.MapLen(t, 3, cfg.CAs)

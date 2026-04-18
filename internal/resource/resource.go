@@ -177,7 +177,7 @@ func (r *Resolver) readCA(name string) (*Response, error) {
 	if _, ok := r.cfg.CAs[name]; !ok {
 		return nil, fmt.Errorf("ca %q: %w", name, ErrNotFound)
 	}
-	ca, err := pki.DeriveCA(r.ikm, name)
+	ca, err := pki.DeriveCA(r.ikm, r.cfg.TrustDomain, name)
 	if err != nil {
 		return nil, err
 	}
@@ -283,9 +283,6 @@ func (r *Resolver) writePKI(caller *Caller, role string, data map[string][]byte)
 	if err != nil {
 		return nil, fmt.Errorf("parse csr: %w", err)
 	}
-	if err := csr.CheckSignature(); err != nil {
-		return nil, fmt.Errorf("csr signature: %w", err)
-	}
 	cn, dnsSANs, ipSANsRaw, err := spec.Resolve(caller.Subject)
 	if err != nil {
 		return nil, err
@@ -298,11 +295,11 @@ func (r *Resolver) writePKI(caller *Caller, role string, data map[string][]byte)
 	if err != nil {
 		return nil, fmt.Errorf("pki %q ext_key_usage: %w", role, err)
 	}
-	ca, err := pki.DeriveCA(r.ikm, spec.CARef)
+	ca, err := pki.DeriveCA(r.ikm, r.cfg.TrustDomain, spec.CARef)
 	if err != nil {
 		return nil, err
 	}
-	certPEM, err := pki.SignCSR(ca, csr.PublicKey, cn, dnsSANs, ipSANs, spec.TTL, eku)
+	certPEM, err := pki.SignCSR(ca, csr, cn, dnsSANs, ipSANs, spec.TTL, eku)
 	if err != nil {
 		return nil, fmt.Errorf("sign csr: %w", err)
 	}
@@ -359,7 +356,14 @@ func (r *Resolver) writeToken(identity string) (*Response, error) {
 	if !accepted {
 		return nil, fmt.Errorf("identity %q does not accept the hmac attestor: %w", identity, ErrPermissionDenied)
 	}
-	tok := token.Generate(r.ikm, time.Now(), hmacAt.Window, identity)
+	// Must derive the HMAC attestor key — same derivation the server uses on
+	// Verify (internal/attestor.newHMAC). Signing with the raw IKM here
+	// would silently break the token against the verifier.
+	hmacKey, err := token.DeriveHMACKey(r.ikm)
+	if err != nil {
+		return nil, fmt.Errorf("derive hmac key: %w", err)
+	}
+	tok := token.Generate(hmacKey, time.Now(), hmacAt.Window, identity)
 	return &Response{
 		Content:     []byte(tok),
 		ContentType: "text/plain",

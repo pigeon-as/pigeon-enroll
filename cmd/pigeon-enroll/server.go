@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/attestor"
+	"github.com/pigeon-as/pigeon-enroll/internal/bindings"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/grpcserver"
 	"github.com/pigeon-as/pigeon-enroll/internal/identity"
@@ -28,8 +29,8 @@ func cmdServer(args []string) int {
 	configPath := fs.String("config", "/etc/pigeon/enroll-server.hcl", "path to HCL config")
 	keyPath := fs.String("key-path", "/etc/pigeon/enrollment-key", "path to 32-byte enrollment key (HKDF IKM)")
 	noncePath := fs.String("nonce-store", "/var/lib/pigeon/enroll-nonces", "path to nonce store file")
+	bindingsPath := fs.String("bindings-store", "/var/lib/pigeon/enroll-bindings", "path to EK→identity binding store")
 	bootstrapCAPath := fs.String("bootstrap-ca", "", "optional PEM bundle of CAs for bootstrap_cert attestor")
-	hosts := fs.String("hosts", "", "comma-separated hostnames/IPs for server TLS cert SANs")
 	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -55,9 +56,23 @@ func cmdServer(args []string) int {
 		return 1
 	}
 
-	nonces, err := nonce.New(2*time.Hour, *noncePath)
+	// Nonces must outlive any token that could still be accepted. The hmac
+	// attestor accepts the current and previous window (so 2x window), and
+	// we keep nonces for at least that long — otherwise a purged nonce
+	// could be replayed against a still-valid token.
+	nonceMax := 2 * time.Hour
+	if a, ok := cfg.Attestors["hmac"]; ok && a.Window > 0 {
+		nonceMax = 2 * a.Window
+	}
+	nonces, err := nonce.New(nonceMax, *noncePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nonce store: %v\n", err)
+		return 1
+	}
+
+	binds, err := bindings.New(*bindingsPath, ikm, log)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bindings store: %v\n", err)
 		return 1
 	}
 
@@ -71,7 +86,7 @@ func cmdServer(args []string) int {
 		bootstrapPool = pool
 	}
 
-	attestors, err := attestor.Build(cfg, nonces, bootstrapPool)
+	attestors, err := attestor.Build(cfg, nonces, bootstrapPool, ikm)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "attestors: %v\n", err)
 		return 1
@@ -89,8 +104,7 @@ func cmdServer(args []string) int {
 		return 1
 	}
 
-	srv, err := grpcserver.New(cfg, engine, registry, resolver, ikm, grpcserver.Options{
-		Hosts:  splitCSV(*hosts),
+	srv, err := grpcserver.New(cfg, engine, registry, resolver, binds, ikm, grpcserver.Options{
 		Logger: log,
 	})
 	if err != nil {
@@ -138,21 +152,6 @@ func loadCAPool(path string) (*x509.CertPool, error) {
 		return nil, errors.New("no PEM certs found")
 	}
 	return pool, nil
-}
-
-func splitCSV(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func newLogger(level string) *slog.Logger {
