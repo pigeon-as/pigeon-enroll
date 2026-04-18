@@ -156,7 +156,7 @@ func startServer(t *testing.T, cfgPath, keyPath, addr string) {
 	cmd := exec.Command(binary,
 		"server",
 		"-config="+cfgPath,
-		"-key="+keyPath,
+		"-key-path="+keyPath,
 		"-nonce-store="+noncePath,
 		"-hosts=127.0.0.1",
 		"-log-level=debug",
