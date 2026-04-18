@@ -39,7 +39,7 @@ func newTestResolver(t *testing.T, cfg *config.Config, paths map[string][]string
 }
 
 func TestReadCA(t *testing.T) {
-	cfg := &config.Config{CAs: map[string]*config.CA{"identity": {Name: "identity"}}}
+	cfg := &config.Config{TrustDomain: "example.test", CAs: map[string]*config.CA{"identity": {Name: "identity"}}}
 	r, caller := newTestResolver(t, cfg, map[string][]string{
 		"ca/identity": {"read"},
 	})
@@ -114,7 +114,8 @@ func TestWriteJWT(t *testing.T) {
 
 func TestWritePKI(t *testing.T) {
 	cfg := &config.Config{
-		CAs: map[string]*config.CA{"identity": {Name: "identity"}},
+		TrustDomain: "example.test",
+		CAs:         map[string]*config.CA{"identity": {Name: "identity"}},
 		PKIs: map[string]*config.PKI{
 			"worker": {
 				Name:        "worker",
@@ -252,9 +253,14 @@ func TestWriteToken(t *testing.T) {
 	must.EqOp(t, "text/plain", resp.ContentType)
 	must.EqOp(t, uint32((30 * time.Minute).Seconds()), resp.TTLSeconds)
 
-	// The minted token must verify against the same ikm/window/scope.
+	// The minted token must verify against the HMAC-attestor key derived
+	// from the same IKM — the verifier (internal/attestor.newHMAC) does
+	// the same derivation, so signing with raw IKM here would yield tokens
+	// the verifier rejects.
 	ikm := bytes.Repeat([]byte{0x42}, 32)
-	must.True(t, token.Verify(ikm, string(resp.Content), time.Now(), 30*time.Minute, "worker"))
+	hmacKey, err := token.DeriveHMACKey(ikm)
+	must.NoError(t, err)
+	must.True(t, token.Verify(hmacKey, string(resp.Content), time.Now(), 30*time.Minute, "worker"))
 }
 
 func TestWriteTokenPolicyDenied(t *testing.T) {

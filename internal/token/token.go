@@ -12,8 +12,33 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
+	"io"
 	"time"
+
+	"golang.org/x/crypto/hkdf"
 )
+
+// HKDFInfoHMACAttestor namespaces the HMAC-attestor signing key derived from
+// the enrollment key IKM. Versioned (v1) so future rotation can co-exist.
+const HKDFInfoHMACAttestor = "pigeon-enroll hmac-attestor key v1"
+
+// DeriveHMACKey derives the 32-byte HMAC-attestor signing key from the
+// enrollment key IKM via HKDF-SHA256 with a dedicated info string. Callers
+// must use this key (never the raw IKM) when generating or verifying tokens
+// so the attestor-signing material is namespace-separated from CA /
+// bindings / JWT keys.
+func DeriveHMACKey(ikm []byte) ([]byte, error) {
+	if len(ikm) != 32 {
+		return nil, fmt.Errorf("enrollment key must be 32 bytes, got %d", len(ikm))
+	}
+	r := hkdf.New(sha256.New, ikm, nil, []byte(HKDFInfoHMACAttestor))
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(r, key); err != nil {
+		return nil, fmt.Errorf("derive hmac key: %w", err)
+	}
+	return key, nil
+}
 
 const (
 	// NonceSize is the number of random bytes per token.

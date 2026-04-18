@@ -40,6 +40,22 @@ func TestSign_RoundTrip(t *testing.T) {
 	must.Between(t, 9*time.Minute, delta, 11*time.Minute)
 }
 
+func TestSign_KidHeaderIsDeterministic(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	must.NoError(t, err)
+
+	signed, err := Sign(priv, "iss", "aud", "sub", time.Hour)
+	must.NoError(t, err)
+
+	token, _, err := gojwt.NewParser().ParseUnverified(signed, gojwt.MapClaims{})
+	must.NoError(t, err)
+
+	kid, ok := token.Header["kid"].(string)
+	must.True(t, ok)
+	must.EqOp(t, KeyID(pub), kid)
+	must.EqOp(t, 16, len(kid))
+}
+
 func TestSign_WrongKey(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)

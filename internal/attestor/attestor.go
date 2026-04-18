@@ -7,7 +7,6 @@
 package attestor
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -15,7 +14,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	goattest "github.com/google/go-attestation/attest"
@@ -56,8 +54,11 @@ type Attestor interface {
 }
 
 // Build constructs attestors from config. `nonces` and `bootstrapCAs` may be
-// nil if the corresponding attestors are not configured.
-func Build(cfg *config.Config, nonces *nonce.Store, bootstrapCAs *x509.CertPool) (map[string]Attestor, error) {
+// nil if the corresponding attestors are not configured. `ikm` is the 32-byte
+// enrollment key — the hmac attestor's signing key is HKDF-derived from it
+// (never read from a separate file), so operator access to a key_path file
+// cannot leak the IKM.
+func Build(cfg *config.Config, nonces *nonce.Store, bootstrapCAs *x509.CertPool, ikm []byte) (map[string]Attestor, error) {
 	out := map[string]Attestor{}
 	for kind, a := range cfg.Attestors {
 		switch kind {
@@ -71,7 +72,7 @@ func Build(cfg *config.Config, nonces *nonce.Store, bootstrapCAs *x509.CertPool)
 			if nonces == nil {
 				return nil, errors.New("attestor hmac: nonce store required")
 			}
-			at, err := newHMAC(a, nonces)
+			at, err := newHMAC(a, nonces, ikm)
 			if err != nil {
 				return nil, fmt.Errorf("attestor hmac: %w", err)
 			}
@@ -97,14 +98,10 @@ type hmacAttestor struct {
 	nonces *nonce.Store
 }
 
-func newHMAC(cfg *config.Attestor, nonces *nonce.Store) (*hmacAttestor, error) {
-	data, err := os.ReadFile(cfg.KeyPath)
+func newHMAC(cfg *config.Attestor, nonces *nonce.Store, ikm []byte) (*hmacAttestor, error) {
+	key, err := token.DeriveHMACKey(ikm)
 	if err != nil {
-		return nil, fmt.Errorf("read key: %w", err)
-	}
-	key := bytes.TrimRight(data, "\r\n")
-	if len(key) == 0 {
-		return nil, errors.New("key file is empty")
+		return nil, err
 	}
 	return &hmacAttestor{key: key, window: cfg.Window, nonces: nonces}, nil
 }
@@ -224,25 +221,28 @@ func (t *tpmAttestor) Verify(ctx context.Context, ev Evidence, _ string, ch Chal
 	if !hmac.Equal(secret, activated) {
 		return nil, errors.New("credential activation mismatch")
 	}
-	ekHash, err := ekHashHex(ekPub)
+	ekHash, err := EKHash(ev.TPM.EkPublic)
 	if err != nil {
 		return nil, err
 	}
 	return &Result{Subject: "ek:" + ekHash}, nil
 }
 
-func ekHashHex(ekPub any) (string, error) {
-	der, err := x509.MarshalPKIXPublicKey(ekPub)
+// EKHash returns the hex-encoded SHA-256 of a TPM EK public key after
+// re-marshalling it to canonical PKIX DER. Re-marshalling is essential:
+// clients may submit non-canonical DER, and hashing the raw bytes would
+// produce a different identity than the attestor records — causing silent
+// rebootstrap failures. Always run the caller's bytes through this helper
+// before comparing to a stored binding.
+func EKHash(ekPubDER []byte) (string, error) {
+	pub, err := x509.ParsePKIXPublicKey(ekPubDER)
+	if err != nil {
+		return "", fmt.Errorf("parse EK public key: %w", err)
+	}
+	canonical, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
 		return "", fmt.Errorf("marshal EK public key: %w", err)
 	}
-	return EKHash(der), nil
-}
-
-// EKHash returns the hex-encoded SHA-256 of a PKIX-DER-encoded EK public key.
-// Used by the server to key the EK→identity binding store; stable across
-// reboots since the EK is fixed in TPM hardware.
-func EKHash(ekPubDER []byte) string {
-	h := sha256.Sum256(ekPubDER)
-	return hex.EncodeToString(h[:])
+	h := sha256.Sum256(canonical)
+	return hex.EncodeToString(h[:]), nil
 }

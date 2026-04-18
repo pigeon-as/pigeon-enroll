@@ -12,7 +12,9 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
+	"net/url"
 	"fmt"
 	"io"
 	"math/big"
@@ -75,7 +77,7 @@ func randomIKM(t *testing.T) ([]byte, string) {
 	_, err := rand.Read(ikm)
 	must.NoError(t, err)
 	keyPath := filepath.Join(t.TempDir(), "enrollment-key")
-	must.NoError(t, os.WriteFile(keyPath, ikm, 0o600))
+	must.NoError(t, os.WriteFile(keyPath, []byte(hex.EncodeToString(ikm)), 0o600))
 	return ikm, keyPath
 }
 
@@ -89,10 +91,12 @@ func deriveCAPEM(t *testing.T, ikm []byte, name string) []byte {
 	must.NoError(t, err)
 	key := ed25519.NewKeyFromSeed(seed)
 
+	td := &url.URL{Scheme: "spiffe", Host: "pigeon.test"}
 	h := sha256.Sum256(seed)
 	tmpl := &x509.Certificate{
 		SerialNumber:          new(big.Int).SetBytes(h[:16]),
 		Subject:               pkix.Name{CommonName: name},
+		URIs:                  []*url.URL{td},
 		NotBefore:             time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
 		NotAfter:              time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
@@ -115,15 +119,14 @@ func writeIdentityCA(t *testing.T, ikm []byte) string {
 
 func writeConfig(t *testing.T, listen, keyPath string) string {
 	t.Helper()
+	_ = keyPath // signing key is HKDF-derived from the IKM the server loads
 	cfg := fmt.Sprintf(`
 trust_domain   = "pigeon.test"
 listen         = "%s"
-identity_ttl   = "1h"
 renew_fraction = 0.5
 
 attestor "hmac" {
-  key_path = "%s"
-  window   = "30m"
+  window = "30m"
 }
 
 ca "identity" { cn = "pigeon identity CA" }
@@ -173,7 +176,7 @@ identity "control_plane" {
   pki       = pki.identity_worker
   policy    = policy.worker
 }
-`, listen, filepath.ToSlash(keyPath))
+`, listen)
 	path := filepath.Join(t.TempDir(), "enroll.hcl")
 	must.NoError(t, os.WriteFile(path, []byte(cfg), 0o644))
 	return path

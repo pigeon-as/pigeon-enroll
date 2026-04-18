@@ -14,23 +14,47 @@ func mkEngine(t *testing.T, policies map[string]*config.Policy) *Engine {
 	return e
 }
 
-func TestMatchExact(t *testing.T) {
+func TestMatch(t *testing.T) {
 	cases := []struct {
 		pattern, path string
 		want          bool
 	}{
+		// exact
 		{"ca/mesh/cert", "ca/mesh/cert", true},
 		{"ca/mesh/cert", "ca/mesh/bundle", false},
+		// trailing /* subtree (zero or more)
 		{"var/*", "var/domain", true},
-		{"var/*", "var/nested/thing", true}, // trailing * is greedy
-		{"pki/*/issue", "pki/worker/issue", true},
-		{"pki/*/issue", "pki/worker/sign", false},
-		{"pki/*/issue", "pki/worker", false},
+		{"var/*", "var/nested/thing", true},
+		{"var/*", "var", true},
+		{"var/*", "other", false},
+		// intra-segment glob (Vault-style, does not cross /)
+		{"pki/mesh_*", "pki/mesh_worker", true},
+		{"pki/mesh_*", "pki/mesh_worker/issue", false},
+		{"pki/mesh_*", "pki/other", false},
+		// + = single-segment wildcard (one segment, any non-empty content)
+		{"pki/+/issue", "pki/worker/issue", true},
+		{"pki/+/issue", "pki/worker/sign", false},
+		{"pki/+/issue", "pki/a/b/issue", false},
+		// combinations
 		{"ca/*", "ca/mesh/cert", true},
 	}
 	for _, tc := range cases {
-		must.EqOp(t, tc.want, match(tc.pattern, tc.path))
+		must.EqOp(t, tc.want, match(tc.pattern, tc.path), must.Sprintf("%s vs %s", tc.pattern, tc.path))
 	}
+}
+
+func TestNewRejectsDoubleStar(t *testing.T) {
+	_, err := New(map[string]*config.Policy{
+		"p": {Name: "p", Paths: []config.PathRule{{Pattern: "a/**/b", Capabilities: []string{"read"}}}},
+	})
+	must.ErrorContains(t, err, "**")
+}
+
+func TestNewRejectsUnbalancedBracket(t *testing.T) {
+	_, err := New(map[string]*config.Policy{
+		"p": {Name: "p", Paths: []config.PathRule{{Pattern: "pki/[abc", Capabilities: []string{"read"}}}},
+	})
+	must.ErrorContains(t, err, "malformed glob")
 }
 
 func TestAllows(t *testing.T) {

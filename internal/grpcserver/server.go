@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/attestor"
@@ -35,9 +36,11 @@ import (
 	"github.com/pigeon-as/pigeon-enroll/internal/policy"
 	"github.com/pigeon-as/pigeon-enroll/internal/resource"
 	enrollv1 "github.com/pigeon-as/pigeon-enroll/proto/enroll/v1"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -47,9 +50,23 @@ import (
 // via ConfigDrive so they can verify the server before Register.
 const serverCAName = "identity"
 
+// serverSPIFFEPath is the SPIFFE ID path component carried by the server's
+// own TLS listener cert: `spiffe://<trust_domain>/pigeon-enroll/server`.
+// Clients verify against this URI SAN, not against hostnames (SPIRE pattern).
+const serverSPIFFEPath = "pigeon-enroll/server"
+
+// Default rate limit for the Register RPC (the only unauthenticated endpoint).
+// Conservative — each real worker registers once; a burst absorbs a small
+// concurrent spike; failed attempts (bad token, bad TPM) count toward the
+// budget. Per-peer-IP keyed; Renew/Read/Write are gated by the identity cert
+// and aren't rate-limited at this layer.
+var (
+	defaultRegisterRate  = rate.Every(5 * time.Second)
+	defaultRegisterBurst = 3
+)
+
 // Options configures the server.
 type Options struct {
-	Hosts         []string
 	ServerCertTTL time.Duration
 	Logger        *slog.Logger
 }
@@ -67,6 +84,63 @@ type Server struct {
 	serverCA *pki.CA
 	log      *slog.Logger
 	rotator  *pki.CertRotator
+
+	registerLimiters *ipLimiter
+}
+
+// ipLimiter rate-limits by peer IP, one token bucket per address. Idle
+// entries are purged on a time sweep (matches the nonce.Store pattern) so
+// the per-IP map cannot grow unbounded under source-address cycling.
+type ipLimiter struct {
+	mu        sync.Mutex
+	perIP     map[string]*limiterEntry
+	rate      rate.Limit
+	burst     int
+	lastPurge time.Time
+}
+
+type limiterEntry struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
+// Sweep cadence — every 1 minute drop entries unseen for 3 minutes.
+// Matches Vault's rate-quota defaults (DefaultRateLimitPurgeInterval /
+// DefaultRateLimitStaleAge in vault/quotas/quotas_rate_limit.go) and the
+// effective ~2-min TTL of SPIRE's generational-swap limiter
+// (pkg/server/api/middleware/ratelimit.go). A legitimate idle client just
+// starts fresh with full burst on its next request — same as cold boot.
+const (
+	ipLimiterPurgeInterval = time.Minute
+	ipLimiterIdleTTL       = 3 * time.Minute
+)
+
+func newIPLimiter(r rate.Limit, burst int) *ipLimiter {
+	return &ipLimiter{perIP: map[string]*limiterEntry{}, rate: r, burst: burst}
+}
+
+func (l *ipLimiter) allow(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	if now.Sub(l.lastPurge) > ipLimiterPurgeInterval {
+		cutoff := now.Add(-ipLimiterIdleTTL)
+		for k, e := range l.perIP {
+			if e.lastSeen.Before(cutoff) {
+				delete(l.perIP, k)
+			}
+		}
+		l.lastPurge = now
+	}
+
+	e, ok := l.perIP[ip]
+	if !ok {
+		e = &limiterEntry{limiter: rate.NewLimiter(l.rate, l.burst)}
+		l.perIP[ip] = e
+	}
+	e.lastSeen = now
+	return e.limiter.Allow()
 }
 
 // New constructs a Server. The bootstrap CA pool, if any, flows to the
@@ -97,23 +171,24 @@ func New(
 		opts.Logger = slog.Default()
 	}
 
-	serverCA, err := pki.DeriveCA(ikm, serverCAName)
+	serverCA, err := pki.DeriveCA(ikm, cfg.TrustDomain, serverCAName)
 	if err != nil {
 		return nil, fmt.Errorf("derive server CA %q: %w", serverCAName, err)
 	}
 
-	rotator := pki.NewCertRotator(serverCA, opts.Hosts, opts.ServerCertTTL)
+	rotator := pki.NewCertRotator(serverCA, cfg.TrustDomain, serverSPIFFEPath, opts.ServerCertTTL)
 
 	return &Server{
-		cfg:      cfg,
-		engine:   engine,
-		registry: registry,
-		resolver: resolver,
-		bindings: binds,
-		ikm:      ikm,
-		serverCA: serverCA,
-		log:      opts.Logger,
-		rotator:  rotator,
+		cfg:              cfg,
+		engine:           engine,
+		registry:         registry,
+		resolver:         resolver,
+		bindings:         binds,
+		ikm:              ikm,
+		serverCA:         serverCA,
+		log:              opts.Logger,
+		rotator:          rotator,
+		registerLimiters: newIPLimiter(defaultRegisterRate, defaultRegisterBurst),
 	}, nil
 }
 
@@ -121,19 +196,43 @@ func New(
 // requested but not auto-verified; Register accepts any (bootstrap_cert
 // attestor verifies explicitly), and Renew/Read/Write verify against the
 // identity CA in callerFromPeer.
+//
+// SessionTicketsDisabled forces a fresh handshake on every connection so the
+// per-request identity checks in callerFromPeer can't be short-circuited by
+// a cached TLS session (matches SPIRE pkg/server/endpoints/endpoints.go).
 func (s *Server) TLSConfig() *tls.Config {
 	return &tls.Config{
-		MinVersion:     tls.VersionTLS13,
-		GetCertificate: s.rotator.GetCertificate,
-		ClientAuth:     tls.RequestClientCert,
+		MinVersion:             tls.VersionTLS13,
+		GetCertificate:         s.rotator.GetCertificate,
+		ClientAuth:             tls.RequestClientCert,
+		SessionTicketsDisabled: true,
 	}
 }
 
 // GRPCServer returns a grpc.Server with the service registered and TLS
 // credentials applied. The caller owns Serve/GracefulStop.
+//
+// Hardening mirrors SPIRE:
+//   - MaxConnectionAge caps long-lived connections so clients re-handshake
+//     (and thus re-attest via callerFromPeer) periodically.
+//   - KeepaliveEnforcementPolicy blunts client-side ping floods.
+//   - MaxRecvMsgSize caps inbound payload. The largest legitimate request is
+//     a CSR plus a TPM quote; 1 MiB is well above the expected size and far
+//     below the 4 MiB gRPC default.
 func (s *Server) GRPCServer() *grpc.Server {
 	creds := credentials.NewTLS(s.TLSConfig())
-	gs := grpc.NewServer(grpc.Creds(creds))
+	gs := grpc.NewServer(
+		grpc.Creds(creds),
+		grpc.MaxRecvMsgSize(1<<20),
+		grpc.MaxConcurrentStreams(16),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionAge: 3 * time.Minute,
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             30 * time.Second,
+			PermitWithoutStream: false,
+		}),
+	)
 	enrollv1.RegisterEnrollServer(gs, s)
 	return gs
 }
@@ -143,6 +242,10 @@ func (s *Server) GRPCServer() *grpc.Server {
 
 func (s *Server) Register(stream grpc.BidiStreamingServer[enrollv1.RegisterRequest, enrollv1.RegisterResponse]) error {
 	ctx := stream.Context()
+
+	if ip := peerIP(ctx); ip != "" && !s.registerLimiters.allow(ip) {
+		return status.Error(codes.ResourceExhausted, "rate limit exceeded")
+	}
 
 	first, err := stream.Recv()
 	if err != nil {
@@ -229,7 +332,7 @@ func (s *Server) Register(stream grpc.BidiStreamingServer[enrollv1.RegisterReque
 				CertPem:           certPEM,
 				KeyPem:            keyPEM,
 				CaBundlePem:       caCertPEM,
-				RenewAfterSeconds: uint32(id.PKI.TTL.Seconds()) / 2,
+				RenewAfterSeconds: uint32(id.PKI.TTL.Seconds() * s.cfg.RenewFraction),
 				ExpiresInSeconds:  uint32(id.PKI.TTL.Seconds()),
 			},
 		},
@@ -269,7 +372,7 @@ func (s *Server) Renew(ctx context.Context, req *enrollv1.RenewRequest) (*enroll
 // generated and returned alongside the cert. Subject (CN/O/OU), SANs, EKU
 // and TTL are always server-controlled.
 func (s *Server) issueIdentity(id *identity.Identity, subject string, csrDER []byte) (certPEM, keyPEM, caCertPEM []byte, err error) {
-	ca, err := pki.DeriveCA(s.ikm, id.PKI.CARef)
+	ca, err := pki.DeriveCA(s.ikm, s.cfg.TrustDomain, id.PKI.CARef)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("derive CA: %w", err)
 	}
@@ -402,6 +505,20 @@ func (s *Server) callerFromPeer(ctx context.Context) (*callerContext, error) {
 	}, nil
 }
 
+// peerIP returns the peer's IP (without port) from the gRPC peer info, or
+// "" if unavailable. Used for rate-limit keying on Register.
+func peerIP(ctx context.Context) string {
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(p.Addr.String())
+	if err != nil {
+		return p.Addr.String()
+	}
+	return host
+}
+
 func peerCerts(ctx context.Context) []*x509.Certificate {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
@@ -451,7 +568,12 @@ func (s *Server) recogniseEK(tpm *enrollv1.TPMEvidence, identityName string) (st
 	if tpm == nil || len(tpm.EkPublic) == 0 {
 		return "", 0
 	}
-	ekHash := attestor.EKHash(tpm.EkPublic)
+	ekHash, err := attestor.EKHash(tpm.EkPublic)
+	if err != nil {
+		// Malformed EK — let the normal attestor chain reject it (same
+		// generic "permission denied" message as any other failure).
+		return "", 0
+	}
 	if s.bindings == nil {
 		return ekHash, 0
 	}

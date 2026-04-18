@@ -13,42 +13,73 @@ package bindings
 
 import (
 	"bufio"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/hkdf"
+
 	"github.com/pigeon-as/pigeon-enroll/internal/atomicfile"
 )
+
+// HKDFInfoBindingsMAC namespaces the HMAC key that authenticates each
+// binding record on disk. Versioned (v1) to allow future rotation.
+const HKDFInfoBindingsMAC = "pigeon-enroll bindings hmac key v1"
 
 // ErrIdentityMismatch is returned when a TPM that is already bound to one
 // identity attempts to register as a different identity.
 var ErrIdentityMismatch = errors.New("ek already bound to a different identity")
 
-// Record is one EK→identity binding.
+// Record is one EK→identity binding. Persisted as JSONL on disk.
 type Record struct {
 	EKHash    string    `json:"ek_hash"`
 	Identity  string    `json:"identity"`
 	FirstSeen time.Time `json:"first_seen"`
 	LastSeen  time.Time `json:"last_seen"`
+	MAC       string    `json:"mac"` // hex HMAC-SHA256 over canonical PAE of the other fields
 }
 
 // Store holds the EK→identity bindings. Safe for concurrent use.
+//
+// Each record carries an HMAC-SHA256 keyed from the enrollment key IKM via
+// HKDF (info = HKDFInfoBindingsMAC). Records that fail MAC verification on
+// load are skipped with a WARN — this detects out-of-band tampering of the
+// JSONL file by anyone who gains write access to /var/lib/pigeon. The MAC
+// does not defend against an attacker who already holds the IKM.
 type Store struct {
-	mu   sync.Mutex
-	recs map[string]Record
-	path string // empty = in-memory only
+	mu     sync.Mutex
+	recs   map[string]Record
+	path   string // empty = in-memory only
+	macKey []byte
+	logger *slog.Logger
 }
 
-// New loads (or creates) a bindings store at path. If path is empty the
-// store is memory-only.
-func New(path string) (*Store, error) {
+// New loads (or creates) a bindings store at path. ikm is the enrollment
+// key; the per-record MAC key is HKDF-derived from it. If path is empty
+// the store is memory-only. If logger is nil, slog.Default() is used.
+func New(path string, ikm []byte, logger *slog.Logger) (*Store, error) {
+	macKey, err := deriveMACKey(ikm)
+	if err != nil {
+		return nil, err
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	s := &Store{
-		recs: make(map[string]Record),
-		path: path,
+		recs:   make(map[string]Record),
+		path:   path,
+		macKey: macKey,
+		logger: logger,
 	}
 	if path != "" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -59,6 +90,58 @@ func New(path string) (*Store, error) {
 		}
 	}
 	return s, nil
+}
+
+func deriveMACKey(ikm []byte) ([]byte, error) {
+	if len(ikm) != 32 {
+		return nil, fmt.Errorf("enrollment key must be 32 bytes, got %d", len(ikm))
+	}
+	r := hkdf.New(sha256.New, ikm, nil, []byte(HKDFInfoBindingsMAC))
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(r, key); err != nil {
+		return nil, fmt.Errorf("derive bindings mac key: %w", err)
+	}
+	return key, nil
+}
+
+// macInput assembles the HMAC input using PAE-style length-prefixing (same
+// pattern as internal/token) so no field can be manipulated via
+// canonicalization. Fields are ordered ek_hash, identity, first_seen,
+// last_seen; timestamps use RFC3339 nano for stability across round-trips.
+func macInput(ekHash, identity string, firstSeen, lastSeen time.Time) []byte {
+	parts := []string{
+		ekHash,
+		identity,
+		firstSeen.UTC().Format(time.RFC3339Nano),
+		lastSeen.UTC().Format(time.RFC3339Nano),
+	}
+	var buf []byte
+	var count [4]byte
+	binary.BigEndian.PutUint32(count[:], uint32(len(parts)))
+	buf = append(buf, count[:]...)
+	var lenBuf [4]byte
+	for _, p := range parts {
+		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(p)))
+		buf = append(buf, lenBuf[:]...)
+		buf = append(buf, []byte(p)...)
+	}
+	return buf
+}
+
+func (s *Store) computeMAC(r Record) string {
+	m := hmac.New(sha256.New, s.macKey)
+	m.Write(macInput(r.EKHash, r.Identity, r.FirstSeen, r.LastSeen))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+func (s *Store) verifyMAC(r Record) bool {
+	got, err := hex.DecodeString(r.MAC)
+	if err != nil {
+		return false
+	}
+	m := hmac.New(sha256.New, s.macKey)
+	m.Write(macInput(r.EKHash, r.Identity, r.FirstSeen, r.LastSeen))
+	return hmac.Equal(got, m.Sum(nil))
 }
 
 // Lookup returns the current binding for ekHash, or ok=false if none.
@@ -93,6 +176,7 @@ func (s *Store) Bind(ekHash, identity string) error {
 		FirstSeen: now,
 		LastSeen:  now,
 	}
+	rec.MAC = s.computeMAC(rec)
 	if err := s.appendLocked(rec); err != nil {
 		return err
 	}
@@ -140,6 +224,7 @@ func (s *Store) List() []Record {
 func (s *Store) touchLocked(ekHash string) error {
 	rec := s.recs[ekHash]
 	rec.LastSeen = time.Now().UTC()
+	rec.MAC = s.computeMAC(rec)
 	if err := s.appendLocked(rec); err != nil {
 		return err
 	}
@@ -157,6 +242,10 @@ func (s *Store) loadFile() error {
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
+	// Bindings records are tiny but future-proof against large timestamps
+	// and operator-appended comments by bumping the default 64KiB line cap.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var loaded, skippedMalformed, skippedMAC int
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -164,12 +253,32 @@ func (s *Store) loadFile() error {
 		}
 		var rec Record
 		if err := json.Unmarshal(line, &rec); err != nil {
+			s.logger.Warn("bindings: skip malformed record", "error", err)
+			skippedMalformed++
 			continue
 		}
-		// Later entries overwrite earlier ones (append-only semantics).
+		if !s.verifyMAC(rec) {
+			s.logger.Warn("bindings: skip record with bad mac (tampering suspected)",
+				"ek_hash", rec.EKHash)
+			skippedMAC++
+			continue
+		}
+		// Later entries overwrite earlier ones (last-write-wins replay).
 		s.recs[rec.EKHash] = rec
+		loaded++
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	// Aggregated summary: quick operator signal, especially after IKM
+	// rotation (every prior record's MAC fails in one batch).
+	if skippedMalformed+skippedMAC > 0 {
+		s.logger.Warn("bindings: load summary",
+			"loaded", loaded,
+			"skipped_malformed", skippedMalformed,
+			"skipped_bad_mac", skippedMAC)
+	}
+	return nil
 }
 
 func (s *Store) appendLocked(rec Record) (err error) {

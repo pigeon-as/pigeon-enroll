@@ -44,9 +44,8 @@ type Attestor struct {
 	EKCAPath   string
 	EKHashPath string
 
-	// HMAC
-	KeyPath string
-	Window  time.Duration
+	// HMAC (signing key is HKDF-derived from IKM — no configurable path).
+	Window time.Duration
 }
 
 // CA is an HKDF-derived certificate authority (deterministic, never rotates).
@@ -190,6 +189,29 @@ func Load(path string) (*Config, error) {
 	return Parse(data, path)
 }
 
+// Validation floors and ceilings. These restore pre-rewrite invariants that
+// guarded against malformed configs: HKDF-SHA256 can emit at most 255×32 =
+// 8160 bytes per derivation; TTLs shorter than a minute produce
+// immediately-invalid certs / tokens.
+const (
+	maxSecretLength = 8160
+	minTTL          = time.Minute
+)
+
+// validateName rejects block-label names that would produce ambiguous HCL
+// references or collide with HKDF info-string composition. Whitespace in
+// particular could make info strings like "pigeon-enroll derive X Y" parse
+// as prefixes of unrelated derivations by unrelated operators.
+func validateName(kind, name string) error {
+	if name == "" {
+		return fmt.Errorf("%s: name is required", kind)
+	}
+	if strings.ContainsAny(name, " \t\n\r\x00/") {
+		return fmt.Errorf("%s %q: name must not contain whitespace, NUL, or `/`", kind, name)
+	}
+	return nil
+}
+
 // Parse parses HCL source bytes. `filename` is used only for diagnostics.
 func Parse(data []byte, filename string) (*Config, error) {
 	parser := hclparse.NewParser()
@@ -240,6 +262,9 @@ func Parse(data []byte, filename string) (*Config, error) {
 
 	// CAs
 	for _, c := range raw.CAs {
+		if err := validateName("ca", c.Name); err != nil {
+			return nil, err
+		}
 		if _, dup := cfg.CAs[c.Name]; dup {
 			return nil, fmt.Errorf("duplicate ca %q", c.Name)
 		}
@@ -252,6 +277,9 @@ func Parse(data []byte, filename string) (*Config, error) {
 
 	// Secrets
 	for _, s := range raw.Secrets {
+		if err := validateName("secret", s.Name); err != nil {
+			return nil, err
+		}
 		if _, dup := cfg.Secrets[s.Name]; dup {
 			return nil, fmt.Errorf("duplicate secret %q", s.Name)
 		}
@@ -268,11 +296,17 @@ func Parse(data []byte, filename string) (*Config, error) {
 		if length == 0 {
 			length = 32
 		}
+		if length < 0 || length > maxSecretLength {
+			return nil, fmt.Errorf("secret %q: length %d out of range (1..%d)", s.Name, length, maxSecretLength)
+		}
 		cfg.Secrets[s.Name] = &Secret{Name: s.Name, Length: length, Encoding: enc}
 	}
 
 	// Vars
 	for _, v := range raw.Vars {
+		if err := validateName("var", v.Name); err != nil {
+			return nil, err
+		}
 		if _, dup := cfg.Vars[v.Name]; dup {
 			return nil, fmt.Errorf("duplicate var %q", v.Name)
 		}
@@ -281,6 +315,9 @@ func Parse(data []byte, filename string) (*Config, error) {
 
 	// JWT keys
 	for _, j := range raw.JWTKeys {
+		if err := validateName("jwt_key", j.Name); err != nil {
+			return nil, err
+		}
 		if _, dup := cfg.JWTKeys[j.Name]; dup {
 			return nil, fmt.Errorf("duplicate jwt_key %q", j.Name)
 		}
@@ -295,6 +332,9 @@ func Parse(data []byte, filename string) (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("jwt_key %q ttl: %w", j.Name, err)
 		}
+		if ttl < minTTL {
+			return nil, fmt.Errorf("jwt_key %q: ttl %s below minimum %s", j.Name, ttl, minTTL)
+		}
 		cfg.JWTKeys[j.Name] = &JWTKey{
 			Name:     j.Name,
 			Alg:      alg,
@@ -306,6 +346,9 @@ func Parse(data []byte, filename string) (*Config, error) {
 
 	// Templates
 	for _, t := range raw.Templates {
+		if err := validateName("template", t.Name); err != nil {
+			return nil, err
+		}
 		if _, dup := cfg.Templates[t.Name]; dup {
 			return nil, fmt.Errorf("duplicate template %q", t.Name)
 		}
@@ -317,6 +360,9 @@ func Parse(data []byte, filename string) (*Config, error) {
 
 	// Policies
 	for _, p := range raw.Policies {
+		if err := validateName("policy", p.Name); err != nil {
+			return nil, err
+		}
 		if _, dup := cfg.Policies[p.Name]; dup {
 			return nil, fmt.Errorf("duplicate policy %q", p.Name)
 		}
@@ -342,6 +388,9 @@ func Parse(data []byte, filename string) (*Config, error) {
 
 	// PKIs (ca = ca.X)
 	for _, p := range raw.PKIs {
+		if err := validateName("pki", p.Name); err != nil {
+			return nil, err
+		}
 		if _, dup := cfg.PKIs[p.Name]; dup {
 			return nil, fmt.Errorf("duplicate pki %q", p.Name)
 		}
@@ -355,6 +404,9 @@ func Parse(data []byte, filename string) (*Config, error) {
 		ttl, err := parseDuration(p.TTL, "168h")
 		if err != nil {
 			return nil, fmt.Errorf("pki %q ttl: %w", p.Name, err)
+		}
+		if ttl < minTTL {
+			return nil, fmt.Errorf("pki %q: ttl %s below minimum %s", p.Name, ttl, minTTL)
 		}
 		eku := p.ExtKeyUsage
 		if len(eku) == 0 {
@@ -376,6 +428,9 @@ func Parse(data []byte, filename string) (*Config, error) {
 
 	// Identities
 	for _, id := range raw.Identities {
+		if err := validateName("identity", id.Name); err != nil {
+			return nil, err
+		}
 		if _, dup := cfg.Identities[id.Name]; dup {
 			return nil, fmt.Errorf("duplicate identity %q", id.Name)
 		}
@@ -434,6 +489,27 @@ func decodeAttestor(r rawAttestor) (*Attestor, error) {
 		if diags := gohcl.DecodeBody(r.Body, nil, &body); diags.HasErrors() {
 			return nil, fmt.Errorf("attestor tpm: %s", diags.Error())
 		}
+		if body.EKCAPath == "" && body.EKHashPath == "" {
+			return nil, fmt.Errorf("attestor tpm: set ek_ca_path and/or ek_hash_path")
+		}
+		if body.EKCAPath != "" {
+			info, err := os.Stat(body.EKCAPath)
+			if err != nil {
+				return nil, fmt.Errorf("attestor tpm ek_ca_path: %w", err)
+			}
+			if !info.IsDir() {
+				return nil, fmt.Errorf("attestor tpm ek_ca_path %q: must be a directory", body.EKCAPath)
+			}
+		}
+		if body.EKHashPath != "" {
+			info, err := os.Stat(body.EKHashPath)
+			if err != nil {
+				return nil, fmt.Errorf("attestor tpm ek_hash_path: %w", err)
+			}
+			if !info.Mode().IsRegular() {
+				return nil, fmt.Errorf("attestor tpm ek_hash_path %q: must be a regular file", body.EKHashPath)
+			}
+		}
 		a.EKCAPath = body.EKCAPath
 		a.EKHashPath = body.EKHashPath
 	case "hmac":
@@ -441,10 +517,6 @@ func decodeAttestor(r rawAttestor) (*Attestor, error) {
 		if diags := gohcl.DecodeBody(r.Body, nil, &body); diags.HasErrors() {
 			return nil, fmt.Errorf("attestor hmac: %s", diags.Error())
 		}
-		if body.KeyPath == "" {
-			return nil, fmt.Errorf("attestor hmac: key_path is required")
-		}
-		a.KeyPath = body.KeyPath
 		win, err := parseDuration(body.Window, "30m")
 		if err != nil {
 			return nil, fmt.Errorf("attestor hmac window: %w", err)

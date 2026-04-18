@@ -5,14 +5,21 @@
 // a request for path P with capability C is allowed iff some rule's pattern
 // matches P and includes C.
 //
-// Path glob: Vault-style. '*' matches a single path segment (bounded by '/');
-// '**' (or a trailing '*') matches any number of segments. For v1 we support
-// '*' as a single-segment wildcard and '*' as a greedy tail wildcard when it
-// appears as the last segment (matches "foo/*" → any subtree).
+// Path glob syntax (Vault-compatible subset):
+//
+//   - exact: "ca/mesh" matches only that path.
+//   - '*' inside a segment is a glob (Go path.Match semantics; no '/' crossing):
+//     "pki/mesh_*" matches "pki/mesh_worker", not "pki/other".
+//   - '+' as a whole segment is a single-segment wildcard: "pki/+/issue" matches
+//     "pki/mesh/issue" but not "pki/a/b/issue".
+//   - trailing "/*" is a subtree match: "secret/*" matches "secret", "secret/a",
+//     "secret/a/b/c", etc.
+//   - '**' is rejected at construction — use trailing "/*" for subtrees.
 package policy
 
 import (
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
@@ -39,8 +46,17 @@ type rule struct {
 }
 
 // New builds an engine from config policies. Inheritance is flattened once
-// at construction time; cycles are detected.
+// at construction time; cycles are detected. Pattern syntax is validated:
+// '**' is rejected (use trailing '/*' for subtree match) and malformed globs
+// fail fast.
 func New(policies map[string]*config.Policy) (*Engine, error) {
+	for name, p := range policies {
+		for _, pr := range p.Paths {
+			if err := validatePattern(pr.Pattern); err != nil {
+				return nil, fmt.Errorf("policy %q path %q: %w", name, pr.Pattern, err)
+			}
+		}
+	}
 	e := &Engine{policies: policies, resolved: map[string][]rule{}}
 	for name := range policies {
 		if _, err := e.resolve(name, nil); err != nil {
@@ -48,6 +64,21 @@ func New(policies map[string]*config.Policy) (*Engine, error) {
 		}
 	}
 	return e, nil
+}
+
+func validatePattern(pattern string) error {
+	if strings.Contains(pattern, "**") {
+		return fmt.Errorf(`"**" not supported; use trailing "/*" for subtree match`)
+	}
+	for _, seg := range strings.Split(pattern, "/") {
+		// Feed the pattern itself as the name so path.Match has to parse
+		// every token — path.Match returns ErrBadPattern early on mismatch
+		// with a short name, which would hide malformed tails like "foo[".
+		if _, err := path.Match(seg, seg); err != nil {
+			return fmt.Errorf("malformed glob %q: %w", seg, err)
+		}
+	}
+	return nil
 }
 
 // Allows reports whether `policy` grants `cap` on `path`.
@@ -107,31 +138,47 @@ func (e *Engine) resolve(name string, visiting []string) ([]rule, error) {
 	return rules, nil
 }
 
-// match reports whether path matches the Vault-style glob pattern.
+// match reports whether reqPath matches the Vault-style glob pattern.
+// Segment rules:
 //
-//	"ca/mesh/cert"      — exact
-//	"var/*"             — one segment in that position (greedy when last)
-//	"pki/*/issue"       — single-segment wildcard in middle
-//
-// A trailing '*' segment matches one or more remaining segments (subtree).
-// A non-trailing '*' matches exactly one segment.
-func match(pattern, path string) bool {
+//   - trailing "/*" is a subtree wildcard (matches zero or more remaining
+//     segments of any content).
+//   - '+' as a whole segment matches exactly one segment of any content.
+//   - otherwise the pattern segment is Go path.Match'd against the request
+//     segment — '*' inside a segment is a character glob that does not cross '/'.
+func match(pattern, reqPath string) bool {
 	pp := strings.Split(pattern, "/")
-	sp := strings.Split(path, "/")
-	for i, seg := range pp {
-		if seg == "*" {
-			if i == len(pp)-1 {
-				// trailing wildcard: must be at least one remaining segment
-				return len(sp) > i
-			}
-			if i >= len(sp) {
+	sp := strings.Split(reqPath, "/")
+
+	// Trailing "/*" is a subtree match: the leading segments must match
+	// exactly, and everything after is accepted.
+	if n := len(pp); n > 0 && pp[n-1] == "*" {
+		if len(sp) < n-1 {
+			return false
+		}
+		for i := 0; i < n-1; i++ {
+			if !segMatch(pp[i], sp[i]) {
 				return false
 			}
-			continue
 		}
-		if i >= len(sp) || sp[i] != seg {
+		return true
+	}
+
+	if len(pp) != len(sp) {
+		return false
+	}
+	for i, pseg := range pp {
+		if !segMatch(pseg, sp[i]) {
 			return false
 		}
 	}
-	return len(sp) == len(pp)
+	return true
+}
+
+func segMatch(pattern, seg string) bool {
+	if pattern == "+" {
+		return seg != ""
+	}
+	ok, err := path.Match(pattern, seg)
+	return err == nil && ok
 }

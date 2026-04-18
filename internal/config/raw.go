@@ -32,8 +32,7 @@ type tpmAttestorBody struct {
 }
 
 type hmacAttestorBody struct {
-	KeyPath string `hcl:"key_path"`
-	Window  string `hcl:"window,optional"`
+	Window string `hcl:"window,optional"`
 }
 
 type rawCA struct {
