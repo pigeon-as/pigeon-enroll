@@ -236,6 +236,13 @@ func ekHashHex(ekPub any) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshal EK public key: %w", err)
 	}
-	h := sha256.Sum256(der)
-	return hex.EncodeToString(h[:]), nil
+	return EKHash(der), nil
+}
+
+// EKHash returns the hex-encoded SHA-256 of a PKIX-DER-encoded EK public key.
+// Used by the server to key the EK→identity binding store; stable across
+// reboots since the EK is fixed in TPM hardware.
+func EKHash(ekPubDER []byte) string {
+	h := sha256.Sum256(ekPubDER)
+	return hex.EncodeToString(h[:])
 }

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/attestor"
+	"github.com/pigeon-as/pigeon-enroll/internal/bindings"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/identity"
 	"github.com/pigeon-as/pigeon-enroll/internal/pki"
@@ -61,6 +62,7 @@ type Server struct {
 	engine   *policy.Engine
 	registry *identity.Registry
 	resolver *resource.Resolver
+	bindings *bindings.Store
 	ikm      []byte
 	serverCA *pki.CA
 	log      *slog.Logger
@@ -70,12 +72,15 @@ type Server struct {
 // New constructs a Server. The bootstrap CA pool, if any, flows to the
 // bootstrap_cert attestor (see attestor.Build) — the server itself never
 // needs it directly. Renew/Read/Write require a cert signed by the identity
-// CA (enforced in callerFromPeer).
+// CA (enforced in callerFromPeer). The bindings store records EK→identity
+// pairings for SPIRE-style rebootstrap; may be nil for in-memory-only
+// operation (tests).
 func New(
 	cfg *config.Config,
 	engine *policy.Engine,
 	registry *identity.Registry,
 	resolver *resource.Resolver,
+	binds *bindings.Store,
 	ikm []byte,
 	opts Options,
 ) (*Server, error) {
@@ -104,6 +109,7 @@ func New(
 		engine:   engine,
 		registry: registry,
 		resolver: resolver,
+		bindings: binds,
 		ikm:      ikm,
 		serverCA: serverCA,
 		log:      opts.Logger,
@@ -170,7 +176,21 @@ func (s *Server) Register(stream grpc.BidiStreamingServer[enrollv1.RegisterReque
 	}
 	ch := &streamChallenger{stream: stream}
 
+	// SPIRE-style rebootstrap: if this EK has already been bound to the
+	// requested identity, TPM credential activation alone is sufficient —
+	// no fresh HMAC token or bootstrap cert needed. A different-identity
+	// binding is refused unconditionally, blocking identity-hopping even if
+	// an operator accidentally mints a token for the wrong identity.
+	ekHash, known := s.recogniseEK(params.Tpm, params.Identity)
+	if known < 0 {
+		return status.Error(codes.PermissionDenied, "ek bound to a different identity")
+	}
+	tpmBound := known == 1
+
 	for _, a := range id.Attestors {
+		if tpmBound && a.Kind() != "tpm" {
+			continue
+		}
 		if _, err := a.Verify(ctx, ev, params.Subject, ch); err != nil {
 			s.log.Warn("register attestor failed",
 				"identity", params.Identity,
@@ -178,6 +198,13 @@ func (s *Server) Register(stream grpc.BidiStreamingServer[enrollv1.RegisterReque
 				"error", err,
 			)
 			return status.Errorf(codes.PermissionDenied, "%s: %v", a.Kind(), err)
+		}
+	}
+
+	if s.bindings != nil && ekHash != "" {
+		if err := s.bindings.Bind(ekHash, params.Identity); err != nil {
+			s.log.Warn("bind ek", "identity", params.Identity, "error", err)
+			return status.Errorf(codes.PermissionDenied, "%v", err)
 		}
 	}
 
@@ -190,6 +217,7 @@ func (s *Server) Register(stream grpc.BidiStreamingServer[enrollv1.RegisterReque
 		"identity", id.Name,
 		"subject", params.Subject,
 		"policy", id.Policy,
+		"tpm_bound", tpmBound,
 	)
 
 	return stream.Send(&enrollv1.RegisterResponse{
@@ -399,6 +427,31 @@ func parseIPs(raw []string) ([]net.IP, error) {
 		out = append(out, ip)
 	}
 	return out, nil
+}
+
+// recogniseEK computes the EK hash (if TPM evidence is present) and checks
+// it against the binding store. Return values:
+//
+//	ekHash: hex EK hash, or "" if no TPM evidence / not hashable
+//	known:  -1 bound to a different identity (reject)
+//	         0 unbound or no TPM evidence (normal attestor chain)
+//	         1 bound to the requested identity (rebootstrap path)
+func (s *Server) recogniseEK(tpm *enrollv1.TPMEvidence, identityName string) (string, int) {
+	if tpm == nil || len(tpm.EkPublic) == 0 {
+		return "", 0
+	}
+	ekHash := attestor.EKHash(tpm.EkPublic)
+	if s.bindings == nil {
+		return ekHash, 0
+	}
+	rec, ok := s.bindings.Lookup(ekHash)
+	if !ok {
+		return ekHash, 0
+	}
+	if rec.Identity != identityName {
+		return ekHash, -1
+	}
+	return ekHash, 1
 }
 
 // mapResolveError turns a resource.Resolve error into a gRPC status. Denial

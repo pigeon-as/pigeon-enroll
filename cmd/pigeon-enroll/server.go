@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pigeon-as/pigeon-enroll/internal/attestor"
+	"github.com/pigeon-as/pigeon-enroll/internal/bindings"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
 	"github.com/pigeon-as/pigeon-enroll/internal/grpcserver"
 	"github.com/pigeon-as/pigeon-enroll/internal/identity"
@@ -28,6 +29,7 @@ func cmdServer(args []string) int {
 	configPath := fs.String("config", "/etc/pigeon/enroll-server.hcl", "path to HCL config")
 	keyPath := fs.String("key-path", "/etc/pigeon/enrollment-key", "path to 32-byte enrollment key (HKDF IKM)")
 	noncePath := fs.String("nonce-store", "/var/lib/pigeon/enroll-nonces", "path to nonce store file")
+	bindingsPath := fs.String("bindings-store", "/var/lib/pigeon/enroll-bindings", "path to EK→identity binding store")
 	bootstrapCAPath := fs.String("bootstrap-ca", "", "optional PEM bundle of CAs for bootstrap_cert attestor")
 	hosts := fs.String("hosts", "", "comma-separated hostnames/IPs for server TLS cert SANs")
 	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
@@ -61,6 +63,12 @@ func cmdServer(args []string) int {
 		return 1
 	}
 
+	binds, err := bindings.New(*bindingsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bindings store: %v\n", err)
+		return 1
+	}
+
 	var bootstrapPool *x509.CertPool
 	if *bootstrapCAPath != "" {
 		pool, err := loadCAPool(*bootstrapCAPath)
@@ -89,7 +97,7 @@ func cmdServer(args []string) int {
 		return 1
 	}
 
-	srv, err := grpcserver.New(cfg, engine, registry, resolver, ikm, grpcserver.Options{
+	srv, err := grpcserver.New(cfg, engine, registry, resolver, binds, ikm, grpcserver.Options{
 		Hosts:  splitCSV(*hosts),
 		Logger: log,
 	})

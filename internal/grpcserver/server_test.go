@@ -21,7 +21,7 @@ func TestNew_RejectsEmptyIKM(t *testing.T) {
 	eng := &policy.Engine{}
 	reg := &identity.Registry{}
 	res := &resource.Resolver{}
-	_, err := New(cfg, eng, reg, res, nil, Options{Hosts: []string{"localhost"}})
+	_, err := New(cfg, eng, reg, res, nil, nil, Options{Hosts: []string{"localhost"}})
 	must.ErrorContains(t, err, "empty ikm")
 }
 
@@ -34,7 +34,7 @@ func TestNew_BuildsServerCAAndTLS(t *testing.T) {
 	for i := range ikm {
 		ikm[i] = byte(i)
 	}
-	s, err := New(cfg, eng, reg, res, ikm, Options{Hosts: []string{"localhost"}})
+	s, err := New(cfg, eng, reg, res, nil, ikm, Options{Hosts: []string{"localhost"}})
 	must.NoError(t, err)
 	tc := s.TLSConfig()
 	must.EqOp(t, uint16(tls.VersionTLS13), tc.MinVersion)
