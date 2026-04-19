@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coreos/go-systemd/v22/daemon"
+
 	"github.com/pigeon-as/pigeon-enroll/internal/attestor"
 	"github.com/pigeon-as/pigeon-enroll/internal/bindings"
 	"github.com/pigeon-as/pigeon-enroll/internal/config"
@@ -129,6 +131,20 @@ func cmdServer(args []string) int {
 		errCh <- gs.Serve(lis)
 	}()
 
+	// Notify systemd we're ready. No-op when not run under systemd
+	// (NOTIFY_SOCKET unset — SdNotify returns false, nil).
+	if _, err := daemon.SdNotify(false, daemon.SdNotifyReady); err != nil {
+		log.Warn("sd_notify ready", "err", err)
+	}
+
+	// If WatchdogSec= is set on the unit, heartbeat at 1/3 the interval so
+	// systemd restarts us if the main goroutine stalls. Detects kernel I/O
+	// hangs, scheduler stalls, and process-level wedges — not per-request
+	// handler deadlocks.
+	if interval, err := daemon.SdWatchdogEnabled(false); err == nil && interval > 0 {
+		go heartbeat(ctx, interval/3, log)
+	}
+
 	select {
 	case <-ctx.Done():
 		log.Info("shutdown requested")
@@ -140,6 +156,23 @@ func cmdServer(args []string) int {
 		}
 	}
 	return 0
+}
+
+// heartbeat pings systemd's watchdog on a fixed interval. Exits when ctx
+// is cancelled. Errors are logged but not fatal.
+func heartbeat(ctx context.Context, period time.Duration, log *slog.Logger) {
+	tick := time.NewTicker(period)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			if _, err := daemon.SdNotify(false, daemon.SdNotifyWatchdog); err != nil {
+				log.Warn("sd_notify watchdog", "err", err)
+			}
+		}
+	}
 }
 
 func loadCAPool(path string) (*x509.CertPool, error) {
